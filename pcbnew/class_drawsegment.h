@@ -1,8 +1,8 @@
 /*
  * This program source code file is part of KiCad, a free EDA CAD application.
  *
- * Copyright (C) 2004 Jean-Pierre Charras, jaen-pierre.charras@gipsa-lab.inpg.com
- * Copyright (C) 1992-2017 KiCad Developers, see AUTHORS.txt for contributors.
+ * Copyright (C) 2018 Jean-Pierre Charras jp.charras at wanadoo.fr
+ * Copyright (C) 1992-2018 KiCad Developers, see AUTHORS.txt for contributors.
  *
  * This program is free software; you can redistribute it and/or
  * modify it under the terms of the GNU General Public License
@@ -31,10 +31,11 @@
 #define CLASS_DRAWSEGMENT_H_
 
 #include <class_board_item.h>
-#include <PolyLine.h>
+#include <common.h>
+#include <convert_to_biu.h>
+#include <math/util.h>      // for KiROUND
 #include <math_for_graphics.h>
 #include <trigo.h>
-#include <common.h>
 
 #include <geometry/shape_poly_set.h>
 
@@ -57,8 +58,8 @@ protected:
     wxPoint     m_BezierC1;     ///< Bezier Control Point 1
     wxPoint     m_BezierC2;     ///< Bezier Control Point 2
 
-    std::vector<wxPoint>    m_BezierPoints;
-    SHAPE_POLY_SET    m_Poly;
+    std::vector<wxPoint> m_BezierPoints;
+    SHAPE_POLY_SET m_Poly;      ///< Stores the S_POLYGON shape
 
     // Computes the bounding box for an arc
     void computeArcBBox( EDA_RECT& aBBox ) const;
@@ -75,6 +76,11 @@ public:
     {
         return aItem && PCB_LINE_T == aItem->Type();
     }
+
+    /** Polygonal shape is not always filled.
+     * For now it is filled on all layers but Edge_Cut layer
+     */
+    bool IsPolygonFilled() const { return m_Layer != Edge_Cuts; }
 
     void SetWidth( int aWidth )             { m_Width = aWidth; }
     int GetWidth() const                    { return m_Width; }
@@ -99,8 +105,8 @@ public:
     void SetBezControl2( const wxPoint& aPoint )    { m_BezierC2 = aPoint; }
     const wxPoint& GetBezControl2() const           { return m_BezierC2; }
 
-    void SetPosition( const wxPoint& aPos ) override { m_Start = aPos; }
-    const wxPoint& GetPosition() const override     { return m_Start; }
+    void SetPosition( const wxPoint& aPos ) override;
+    const wxPoint GetPosition() const override;
 
     /**
      * Function GetStart
@@ -127,6 +133,7 @@ public:
     const wxPoint GetCenter() const override;
     const wxPoint& GetArcStart() const      { return m_End; }
     const wxPoint GetArcEnd() const;
+    const wxPoint GetArcMid() const;
 
     /**
      * function GetArcAngleStart()
@@ -142,7 +149,9 @@ public:
     int GetRadius() const
     {
         double radius = GetLineLength( m_Start, m_End );
-        return KiROUND( radius );
+
+        // don't allow degenerate arcs
+        return std::max( 1, KiROUND( radius ) );
     }
 
     /**
@@ -167,9 +176,26 @@ public:
     // Accessors:
     const std::vector<wxPoint>& GetBezierPoints() const { return m_BezierPoints; }
 
-    const std::vector<wxPoint> GetPolyPoints() const;
+    /** Build and return the list of corners in a std::vector<wxPoint>
+     * It must be used only to convert the SHAPE_POLY_SET internal corner buffer
+     * to a list of wxPoints, and nothing else, because it duplicates the buffer,
+     * that is inefficient to know for instance the corner count
+     */
+    const std::vector<wxPoint> BuildPolyPointsList() const;
+
+    /** @return the number of corners of the polygonal shape
+     */
+    int GetPointCount() const;
+
+    // Accessors to the polygonal shape
     SHAPE_POLY_SET& GetPolyShape() { return m_Poly; }
     const SHAPE_POLY_SET& GetPolyShape() const { return m_Poly; }
+
+    /**
+     * @return true if the polygonal shape is valid (has more than 2 points)
+     */
+    bool IsPolyShapeValid() const;
+
     void SetPolyShape( const SHAPE_POLY_SET& aShape ) { m_Poly = aShape; }
 
     void SetBezierPoints( const std::vector<wxPoint>& aPoints )
@@ -177,18 +203,26 @@ public:
         m_BezierPoints = aPoints;
     }
 
+    /** Rebuild the m_BezierPoints vertex list that approximate the Bezier curve
+     * by a list of segments
+     * Has meaning only for S_CURVE DRAW_SEGMENT shape
+     * @param aMinSegLen is the min length of segments approximating the shape.
+     * the last segment can be shorter
+     * This param avoid having too many very short segment in list.
+     * a good value is m_Width/2 to m_Width
+     */
+    void RebuildBezierToSegmentsPointsList( int aMinSegLen );
+
     void SetPolyPoints( const std::vector<wxPoint>& aPoints );
 
-    void Draw( EDA_DRAW_PANEL* panel, wxDC* DC,
-               GR_DRAWMODE aDrawMode, const wxPoint& aOffset = ZeroOffset ) override;
+    void Print( PCB_BASE_FRAME* aFrame, wxDC* DC, const wxPoint& aOffset = ZeroOffset ) override;
 
-    virtual void GetMsgPanelInfo( std::vector< MSG_PANEL_ITEM >& aList ) override;
+    void GetMsgPanelInfo( EDA_UNITS aUnits, std::vector<MSG_PANEL_ITEM>& aList ) override;
 
-    virtual const EDA_RECT GetBoundingBox() const override;
+    const EDA_RECT GetBoundingBox() const override;
 
-    virtual bool HitTest( const wxPoint& aPosition ) const override;
-
-    bool HitTest( const EDA_RECT& aRect, bool aContained = true, int aAccuracy = 0 ) const override;
+    bool HitTest( const wxPoint& aPosition, int aAccuracy = 0 ) const override;
+    bool HitTest( const EDA_RECT& aRect, bool aContained, int aAccuracy = 0 ) const override;
 
     wxString GetClass() const override
     {
@@ -200,45 +234,37 @@ public:
      * returns the length of the track using the hypotenuse calculation.
      * @return double - the length of the track
      */
-    double  GetLength() const
-    {
-        return GetLineLength( GetStart(), GetEnd() );
-    }
+    double  GetLength() const;
 
-    virtual void Move( const wxPoint& aMoveVector ) override
-    {
-        m_Start += aMoveVector;
-        m_End   += aMoveVector;
-    }
+    virtual void Move( const wxPoint& aMoveVector ) override;
 
     virtual void Rotate( const wxPoint& aRotCentre, double aAngle ) override;
 
-    virtual void Flip( const wxPoint& aCentre ) override;
+    virtual void Flip( const wxPoint& aCentre, bool aFlipLeftRight ) override;
 
     /**
      * Function TransformShapeWithClearanceToPolygon
-     * Convert the track shape to a closed polygon
+     * Convert the draw segment to a closed polygon
      * Used in filling zones calculations
      * Circles and arcs are approximated by segments
      * @param aCornerBuffer = a buffer to store the polygon
      * @param aClearanceValue = the clearance around the pad
-     * @param aCircleToSegmentsCount = the number of segments to approximate a circle
-     * @param aCorrectionFactor = the correction to apply to circles radius to keep
-     * clearance when the circle is approximated by segment bigger or equal
-     * to the real clearance value (usually near from 1.0)
+     * @param aError = the maximum deviation from a true arc
+     * @param ignoreLineWidth = used for edge cut items where the line width is only
+     * for visualization
      */
-    void TransformShapeWithClearanceToPolygon( SHAPE_POLY_SET& aCornerBuffer,
-                                               int             aClearanceValue,
-                                               int             aCircleToSegmentsCount,
-                                               double          aCorrectionFactor ) const;
+    void TransformShapeWithClearanceToPolygon( SHAPE_POLY_SET& aCornerBuffer, int aClearanceValue,
+            int aError = ARC_HIGH_DEF, bool ignoreLineWidth = false ) const override;
 
-    virtual wxString GetSelectMenuText() const override;
+    virtual wxString GetSelectMenuText( EDA_UNITS aUnits ) const override;
 
     virtual BITMAP_DEF GetMenuImage() const override;
 
     virtual EDA_ITEM* Clone() const override;
 
     virtual const BOX2I ViewBBox() const override;
+
+    virtual void SwapData( BOARD_ITEM* aImage ) override;
 
 #if defined(DEBUG)
     void Show( int nestLevel, std::ostream& os ) const override { ShowDummy( os ); }

@@ -25,6 +25,7 @@
 #include <iomanip>
 #include <sstream>
 #include <cmath>
+#include <utility>
 
 #include <idf_helpers.h>
 #include <idf_outlines.h>
@@ -127,7 +128,7 @@ static bool CheckOwnership( int aSourceLine, const char* aSourceFunc,
 
 
 /*
- * CLASS: BOARD OUTLINE
+ * BOARD OUTLINE
  */
 BOARD_OUTLINE::BOARD_OUTLINE()
 {
@@ -1544,7 +1545,7 @@ void  BOARD_OUTLINE::ClearComments( void )
 
 
 /*
- * CLASS: OTHER_OUTLINE
+ * OTHER_OUTLINE
  */
 OTHER_OUTLINE::OTHER_OUTLINE( IDF3_BOARD* aParent )
 {
@@ -1556,7 +1557,7 @@ OTHER_OUTLINE::OTHER_OUTLINE( IDF3_BOARD* aParent )
     return;
 }
 
-bool OTHER_OUTLINE::SetOutlineIdentifier( const std::string aUniqueID )
+bool OTHER_OUTLINE::SetOutlineIdentifier( const std::string& aUniqueID )
 {
 #ifndef DISABLE_IDF_OWNERSHIP
     if( !CheckOwnership( __LINE__, __FUNCTION__, parent, owner, outlineType, errormsg ) )
@@ -1943,7 +1944,7 @@ bool OTHER_OUTLINE::Clear( void )
 
 
 /*
- * CLASS: ROUTE_OUTLINE
+ * ROUTE_OUTLINE
  */
 ROUTE_OUTLINE::ROUTE_OUTLINE( IDF3_BOARD* aParent )
 {
@@ -2235,7 +2236,7 @@ bool ROUTE_OUTLINE::Clear( void )
 
 
 /*
- * CLASS: PLACE_OUTLINE
+ * PLACE_OUTLINE
  */
 PLACE_OUTLINE::PLACE_OUTLINE( IDF3_BOARD* aParent )
 {
@@ -2639,7 +2640,7 @@ bool PLACE_OUTLINE::Clear( void )
 
 
 /*
- * CLASS: ROUTE_KEEPOUT
+ * ROUTE_KEEPOUT
  */
 ROUTE_KO_OUTLINE::ROUTE_KO_OUTLINE( IDF3_BOARD* aParent )
     : ROUTE_OUTLINE( aParent )
@@ -2650,7 +2651,7 @@ ROUTE_KO_OUTLINE::ROUTE_KO_OUTLINE( IDF3_BOARD* aParent )
 
 
 /*
- * CLASS: PLACE_KEEPOUT
+ * PLACE_KEEPOUT
  */
 PLACE_KO_OUTLINE::PLACE_KO_OUTLINE( IDF3_BOARD* aParent )
     : PLACE_OUTLINE( aParent )
@@ -2661,7 +2662,7 @@ PLACE_KO_OUTLINE::PLACE_KO_OUTLINE( IDF3_BOARD* aParent )
 
 
 /*
- * CLASS: VIA_KEEPOUT
+ * VIA_KEEPOUT
  */
 VIA_KO_OUTLINE::VIA_KO_OUTLINE( IDF3_BOARD* aParent )
     : OTHER_OUTLINE( aParent )
@@ -2672,7 +2673,7 @@ VIA_KO_OUTLINE::VIA_KO_OUTLINE( IDF3_BOARD* aParent )
 
 
 /*
- * CLASS: PLACEMENT GROUP (PLACE_REGION)
+ * PLACEMENT GROUP (PLACE_REGION)
  */
 GROUP_OUTLINE::GROUP_OUTLINE( IDF3_BOARD* aParent )
 {
@@ -2730,7 +2731,7 @@ bool GROUP_OUTLINE::SetGroupName( std::string aGroupName )
         return false;
 #endif
 
-    groupName = aGroupName;
+    groupName = std::move(aGroupName);
 
     return true;
 }
@@ -2962,7 +2963,7 @@ bool GROUP_OUTLINE::Clear( void )
 }
 
 /*
- * CLASS: COMPONENT OUTLINE
+ * COMPONENT OUTLINE
  */
 IDF3_COMP_OUTLINE::IDF3_COMP_OUTLINE( IDF3_BOARD* aParent )
 {

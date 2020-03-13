@@ -1,8 +1,8 @@
 /*
  * This program source code file is part of KiCad, a free EDA CAD application.
  *
- * Copyright (C) 2015 Jean-Pierre Charras, jp.charras@wanadoo.fr
- * Copyright (C) 1992-2017 KiCad Developers, see AUTHORS.txt for contributors.
+ * Copyright (C) 2019 Jean-Pierre Charras, jp.charras at wanadoo.fr
+ * Copyright (C) 1992-2019 KiCad Developers, see AUTHORS.txt for contributors.
  *
  * This program is free software; you can redistribute it and/or
  * modify it under the terms of the GNU General Public License
@@ -28,82 +28,63 @@
  */
 
 
-#include <fctsys.h>
-#include <pgm_base.h>
-#include <kiface_i.h>
+#include <bom_plugins.h>
 #include <confirm.h>
+#include <dialog_bom_base.h>
+#include <dialog_helpers.h>
+#include <eeschema_settings.h>
+#include <fctsys.h>
 #include <gestfich.h>
-#include <schframe.h>
-#include <wx/dynarray.h>
-
+#include <html_messagebox.h>
+#include <i18n_utility.h> // for _HKI definition used in dialog_bom_help_md.h
+#include <invoke_sch_dialog.h>
+#include <kiface_i.h>
 #include <netlist.h>
 #include <netlist_exporter_generic.h>
-#include <sch_sheet.h>
-#include <invoke_sch_dialog.h>
-#include <dialog_helpers.h>
-#include <dialog_bom_base.h>
-#include <html_messagebox.h>
+#include <pgm_base.h>
 #include <reporter.h>
+#include <sch_edit_frame.h>
 
-#define BOM_PLUGINS_KEY wxT("bom_plugins")
-#define BOM_PLUGIN_SELECTED_KEY wxT("bom_plugin_selected")
+#include <dialogs/dialog_bom_cfg_lexer.h>
 
-const char * s_bomHelpInfo =
-#include <dialog_bom_help_html.h>
+static constexpr wxChar BOM_TRACE[] = wxT( "BOM_GENERATORS" );
+
+wxString s_bomHelpInfo =
+#include <dialog_bom_help_md.h>
 ;
 
-#include <dialog_bom_cfg_lexer.h>
+using namespace T_BOMCFG_T;     // for the BOM_CFG_PARSER parser and its keywords
 
-using namespace T_BOMCFG_T;
+// BOM "plugins" are not actually plugins. They are external tools
+// (scripts or executables) called by this dialog.
+typedef std::vector<BOM_GENERATOR_HANDLER::PTR> BOM_GENERATOR_ARRAY;
+
 
 /**
- * Structure BOM_PLUGIN
- * holds data of the BOM plugin.
+ * Holds data and functions pertinent to parsing a S-expression file
  */
-struct BOM_PLUGIN
+class BOM_CFG_PARSER : public DIALOG_BOM_CFG_LEXER
 {
-    wxString Name;
-    wxString Command;
-    wxArrayString Options;
-};
-
-/**
- * Define wxArray of BOM_PLUGIN.
- */
-WX_DECLARE_OBJARRAY( BOM_PLUGIN, BOM_PLUGIN_ARRAY );
-#include <wx/arrimpl.cpp>
-WX_DEFINE_OBJARRAY( BOM_PLUGIN_ARRAY );
-
-/**
- * Class BOM_CFG_READER_PARSER
- * holds data and functions pertinent to parsing a S-expression file
- * for a WORKSHEET_LAYOUT.
- */
-class BOM_CFG_READER_PARSER : public DIALOG_BOM_CFG_LEXER
-{
-    BOM_PLUGIN_ARRAY* m_pluginsList;
+    BOM_GENERATOR_ARRAY* m_generatorsList;
 
 public:
-    BOM_CFG_READER_PARSER( BOM_PLUGIN_ARRAY* aPlugins,
-                           const char* aData, const wxString& aSource );
+    BOM_CFG_PARSER( BOM_GENERATOR_ARRAY* aGenerators, const char* aData, const wxString& aSource );
     void Parse();
 
 private:
-    void parsePlugin();
+    void parseGenerator();
 };
 
-// PCB_PLOT_PARAMS_PARSER
 
-BOM_CFG_READER_PARSER::BOM_CFG_READER_PARSER(  BOM_PLUGIN_ARRAY* aPlugins,
-                                              const char* aLine,
-                                              const wxString& aSource ) :
+BOM_CFG_PARSER::BOM_CFG_PARSER( BOM_GENERATOR_ARRAY* aGenerators, const char* aLine,
+                                const wxString& aSource ) :
     DIALOG_BOM_CFG_LEXER( aLine, aSource )
 {
-    m_pluginsList = aPlugins;
+    m_generatorsList = aGenerators;
 }
 
 
-void BOM_CFG_READER_PARSER::Parse()
+void BOM_CFG_PARSER::Parse()
 {
     T token;
 
@@ -121,7 +102,7 @@ void BOM_CFG_READER_PARSER::Parse()
         switch( token )
         {
         case T_plugin:   // Defines a new plugin
-            parsePlugin();
+            parseGenerator();
             break;
 
         default:
@@ -131,14 +112,15 @@ void BOM_CFG_READER_PARSER::Parse()
     }
 }
 
-void BOM_CFG_READER_PARSER::parsePlugin()
-{
-    BOM_PLUGIN plugin;
 
+void BOM_CFG_PARSER::parseGenerator()
+{
     NeedSYMBOLorNUMBER();
-    plugin.Name = FromUTF8();
+    wxString name = FromUTF8();
+    auto plugin = std::make_unique<BOM_GENERATOR_HANDLER>( name );
 
     T token;
+
     while( ( token = NextTok() ) != T_RIGHT )
     {
         if( token == T_EOF)
@@ -151,13 +133,26 @@ void BOM_CFG_READER_PARSER::parsePlugin()
 
         case T_cmd:
             NeedSYMBOLorNUMBER();
-            plugin.Command = FromUTF8();
+
+            if( plugin )
+                plugin->SetCommand( FromUTF8() );
+
             NeedRIGHT();
             break;
 
         case T_opts:
             NeedSYMBOLorNUMBER();
-            plugin.Options.Add( FromUTF8() );
+
+            if( plugin )
+            {
+                wxString option = FromUTF8();
+
+                if( option.StartsWith( "nickname=", &name ) )
+                    plugin->SetName( name );
+                else
+                    plugin->Options().Add( option );
+            }
+
             NeedRIGHT();
             break;
 
@@ -167,57 +162,53 @@ void BOM_CFG_READER_PARSER::parsePlugin()
         }
     }
 
-    if( ! plugin.Name.IsEmpty() )
-        m_pluginsList->Add( plugin );
+    if( plugin )
+        m_generatorsList->push_back( std::move( plugin ) );
 }
+
 
 // The main dialog frame to run scripts to build bom
 class DIALOG_BOM : public DIALOG_BOM_BASE
 {
 private:
     SCH_EDIT_FRAME*   m_parent;
-    BOM_PLUGIN_ARRAY  m_plugins;
-    wxConfigBase*     m_config;         // to store the "plugins"
+    BOM_GENERATOR_ARRAY  m_generators;
+    bool              m_initialized;
 
 public:
-    // Constructor and destructor
     DIALOG_BOM( SCH_EDIT_FRAME* parent );
     ~DIALOG_BOM();
 
 private:
-    void OnPluginSelected( wxCommandEvent& event ) override;
-    void OnRunPlugin( wxCommandEvent& event ) override;
-    void OnCancelClick( wxCommandEvent& event ) override;
+    void OnGeneratorSelected( wxCommandEvent& event ) override;
+    void OnRunGenerator( wxCommandEvent& event ) override;
     void OnHelp( wxCommandEvent& event ) override;
-    void OnAddPlugin( wxCommandEvent& event ) override;
-    void OnRemovePlugin( wxCommandEvent& event ) override;
-    void OnEditPlugin( wxCommandEvent& event ) override;
+    void OnAddGenerator( wxCommandEvent& event ) override;
+    void OnRemoveGenerator( wxCommandEvent& event ) override;
+    void OnEditGenerator( wxCommandEvent& event ) override;
     void OnCommandLineEdited( wxCommandEvent& event ) override;
     void OnNameEdited( wxCommandEvent& event ) override;
     void OnShowConsoleChanged( wxCommandEvent& event ) override;
+    void OnIdle( wxIdleEvent& event ) override;
 
     void pluginInit();
-    void installPluginsList();
+    void installGeneratorsList();
+    BOM_GENERATOR_HANDLER* addGenerator( const wxString& aPath, const wxString& aName = wxEmptyString );
+    bool pluginExists( const wxString& aName );
 
-    /**
-     * @return the Plugin filename from a command line
-     * @param aCommand = the command line
-     */
-    wxString getPluginFileName( const wxString& aCommand );
+    BOM_GENERATOR_HANDLER* selectedGenerator()
+    {
+        int idx = m_lbGenerators->GetSelection();
 
-    /**
-     * display (when exists) the text found between the keyword "@package"
-     * (compatible with doxygen comments)
-     * and the end of comment block (""" in python", --> in xml)
-     */
-    void displayPluginInfo( FILE * aFile, const wxString& aFilename );
+        if( idx < 0 || idx >= (int)m_generators.size() )
+            return nullptr;
 
-    /**
-     * Browse plugin files, and set m_CommandStringCtrl field
-     * @return a command line ro run the plugin
-     */
-    wxString choosePlugin();
+        return m_generators[idx].get();
+    }
+
+    wxString chooseGenerator();
 };
+
 
 // Create and show DIALOG_BOM.
 int InvokeDialogCreateBOM( SCH_EDIT_FRAME* aCaller )
@@ -226,16 +217,29 @@ int InvokeDialogCreateBOM( SCH_EDIT_FRAME* aCaller )
     return dlg.ShowModal();
 }
 
+
 DIALOG_BOM::DIALOG_BOM( SCH_EDIT_FRAME* parent ) :
     DIALOG_BOM_BASE( parent )
 {
     m_parent = parent;
-    m_config = Kiface().KifaceSettings();
-    installPluginsList();
+    m_initialized = false;
+
+    m_buttonAddGenerator->SetBitmap( KiBitmap( small_plus_xpm ) );
+    m_buttonDelGenerator->SetBitmap( KiBitmap( trash_xpm ) );
+    m_buttonEdit->SetBitmap( KiBitmap( small_edit_xpm ) );
+
+    installGeneratorsList();
 
 #ifndef __WINDOWS__
     m_checkBoxShowConsole->Show( false );
 #endif
+
+    m_sdbSizerOK->SetLabel( _( "Generate" ) );
+    m_sdbSizerCancel->SetLabel( _( "Close" ) );
+    m_sdbSizer->Layout();
+
+    SetInitialFocus( m_lbGenerators );
+    m_sdbSizerOK->SetDefault();
 
     // Now all widgets have the size fixed, call FinishDialogSettings
     FinishDialogSettings();
@@ -243,9 +247,10 @@ DIALOG_BOM::DIALOG_BOM( SCH_EDIT_FRAME* parent ) :
 
 DIALOG_BOM::~DIALOG_BOM()
 {
+    // TODO(JE) maybe unpack this into JSON instead of sexpr
+
     // Save the plugin descriptions in config.
-    // the config stores only one string.
-    // plugins are saved inside a S expr:
+    // The config stores only one string, so we save the plugins inside a S-expr:
     // ( plugins
     //    ( plugin "plugin name 1" (cmd "command line 1") )
     //    ( plugin "plugin name 2" (cmd "command line 2") (opts "option1") (opts "option2") )
@@ -255,16 +260,24 @@ DIALOG_BOM::~DIALOG_BOM()
     STRING_FORMATTER writer;
     writer.Print( 0, "(plugins" );
 
-    for( unsigned ii = 0; ii < m_plugins.GetCount(); ii++ )
+    for( auto& plugin : m_generators )
     {
         writer.Print( 1, "(plugin %s (cmd %s)",
-                      writer.Quotew( m_plugins.Item( ii ).Name ).c_str(),
-                      writer.Quotew( m_plugins.Item( ii ).Command ).c_str() );
+                      writer.Quotew( plugin->GetFile().GetFullPath() ).c_str(),
+                      writer.Quotew( plugin->GetCommand() ).c_str() );
 
-        for( unsigned jj = 0; jj < m_plugins.Item( ii ).Options.GetCount(); jj++ )
+        for( unsigned jj = 0; jj < plugin->Options().GetCount(); jj++ )
         {
             writer.Print( 1, "(opts %s)",
-                          writer.Quotew( m_plugins.Item( ii ).Options.Item( jj ) ).c_str() );
+                          writer.Quotew( plugin->Options().Item( jj ) ).c_str() );
+        }
+
+        if( !plugin->GetName().IsEmpty() )
+        {
+            wxString option = wxString::Format( "nickname=%s", plugin->GetName() );
+
+            writer.Print( 1, "(opts %s)",
+                          writer.Quotew( option ).c_str() );
         }
 
         writer.Print( 0, ")" );
@@ -274,26 +287,25 @@ DIALOG_BOM::~DIALOG_BOM()
 
     wxString list( FROM_UTF8( writer.GetString().c_str() ) );
 
-    m_config->Write( BOM_PLUGINS_KEY, list );
+    auto cfg = dynamic_cast<EESCHEMA_SETTINGS*>( Kiface().KifaceSettings() );
 
-    wxString active_plugin_name = m_lbPlugins->GetStringSelection( );
-    m_config->Write( BOM_PLUGIN_SELECTED_KEY, active_plugin_name );
-
+    cfg->m_BomPanel.plugins = list.ToStdString();
+    cfg->m_BomPanel.selected_plugin = m_lbGenerators->GetStringSelection().ToStdString();
 }
 
-/* Read the initialized plugins in config and fill the list
- * of names
- */
-void DIALOG_BOM::installPluginsList()
+
+// Read the initialized plugins in config and fill the list of names
+void DIALOG_BOM::installGeneratorsList()
 {
-    wxString list, active_plugin_name;
-    m_config->Read( BOM_PLUGINS_KEY, &list );
-    m_config->Read( BOM_PLUGIN_SELECTED_KEY, &active_plugin_name );
+    auto cfg = dynamic_cast<EESCHEMA_SETTINGS*>( Kiface().KifaceSettings() );
+
+    wxString list               = cfg->m_BomPanel.plugins;
+    wxString active_plugin_name = cfg->m_BomPanel.selected_plugin;
 
     if( !list.IsEmpty() )
     {
-        BOM_CFG_READER_PARSER cfg_parser( &m_plugins, TO_UTF8( list ),
-                                          wxT( "plugins" ) );
+        BOM_CFG_PARSER cfg_parser( &m_generators, TO_UTF8( list ), wxT( "plugins" ) );
+
         try
         {
             cfg_parser.Parse();
@@ -302,125 +314,153 @@ void DIALOG_BOM::installPluginsList()
         {
 //            wxLogMessage( ioe.What() );
         }
+        catch( std::runtime_error& e )
+        {
+            DisplayError( nullptr, e.what() );
+        }
+
+        // Populate list box
+        for( unsigned ii = 0; ii < m_generators.size(); ii++ )
+        {
+            m_lbGenerators->Append( m_generators[ii]->GetName() );
+
+            if( active_plugin_name == m_generators[ii]->GetName() )
+                m_lbGenerators->SetSelection( ii );
+        }
     }
 
-    // Populate list box
-    for( unsigned ii = 0; ii < m_plugins.GetCount(); ii++ )
+    if( m_generators.empty() ) // No plugins found?
     {
-        m_lbPlugins->Append( m_plugins.Item( ii ).Name );
+        // Load plugins from the default locations
+        std::vector<wxString> pluginPaths = {
+#if defined(__WXGTK__)
+            "/usr/share/kicad/plugins",
+            "/usr/local/share/kicad/plugins",
+#elif defined(__WXMSW__)
+            wxString::Format( "%s\\scripting\\plugins", Pgm().GetExecutablePath() ),
+#elif defined(__WXMAC__)
+            wxString::Format( "%s/plugins", GetOSXKicadDataDir() ),
+#endif
+        };
 
-        if( active_plugin_name == m_plugins.Item( ii ).Name )
-            m_lbPlugins->SetSelection( ii );
+        wxFileName pluginPath;
+
+        for( const auto& path : pluginPaths )
+        {
+            wxLogDebug( wxString::Format( "Searching directory %s for BOM generators", path ) );
+            wxDir dir( path );
+
+            if( !dir.IsOpened() )
+                continue;
+
+            pluginPath.AssignDir( dir.GetName() );
+            wxString fileName;
+            bool cont = dir.GetFirst( &fileName, wxFileSelectorDefaultWildcardStr, wxDIR_FILES );
+
+            while( cont )
+            {
+                try
+                {
+                    wxLogTrace( BOM_TRACE, wxString::Format( "Checking if %s is a BOM generator", fileName ) );
+
+                    if( BOM_GENERATOR_HANDLER::IsValidGenerator( fileName ) )
+                    {
+                        pluginPath.SetFullName( fileName );
+                        addGenerator( pluginPath.GetFullPath() );
+                    }
+                }
+                catch( ... ) { /* well, no big deal */ }
+
+                cont = dir.GetNext( &fileName );
+            }
+        }
     }
+
 
     pluginInit();
 }
 
-void DIALOG_BOM::OnPluginSelected( wxCommandEvent& event )
+
+BOM_GENERATOR_HANDLER* DIALOG_BOM::addGenerator( const wxString& aPath, const wxString& aName )
+{
+    BOM_GENERATOR_HANDLER* ret = nullptr;
+    auto plugin = std::make_unique<BOM_GENERATOR_HANDLER>( aPath );
+
+    if( !plugin )
+        return nullptr;
+
+    if( !aName.IsEmpty() )
+    {
+        plugin->SetName( aName );
+        m_lbGenerators->Append( aName );
+    }
+    else
+    {
+        m_lbGenerators->Append( plugin->GetName() );
+    }
+
+    ret = plugin.get();
+    m_generators.push_back( std::move( plugin ) );
+    return ret;
+}
+
+
+bool DIALOG_BOM::pluginExists( const wxString& aName )
+{
+    for( unsigned ii = 0; ii < m_generators.size(); ii++ )
+    {
+        if( aName == m_generators[ii]->GetName() )
+            return true;
+    }
+
+    return false;
+}
+
+
+void DIALOG_BOM::OnGeneratorSelected( wxCommandEvent& event )
 {
     pluginInit();
 }
 
-#include <wx/ffile.h>
+
 void DIALOG_BOM::pluginInit()
 {
-    int ii = m_lbPlugins->GetSelection();
+    auto plugin = selectedGenerator();
 
-    if( ii < 0 )
+    if( !plugin )
     {
         m_textCtrlName->SetValue( wxEmptyString );
         m_textCtrlCommand->SetValue( wxEmptyString );
+        m_Messages->SetValue( wxEmptyString );
         return;
     }
 
-    m_textCtrlName->SetValue( m_plugins.Item( ii ).Name );
-    m_textCtrlCommand->SetValue( m_plugins.Item( ii ).Command );
+    m_textCtrlName->SetValue( plugin->GetName() );
+    m_textCtrlCommand->SetValue( plugin->GetCommand() );
+    m_Messages->SetValue( plugin->GetInfo() );
+    m_Messages->SetSelection( 0, 0 );
 
 #ifdef __WINDOWS__
-    if( m_plugins.Item( ii ).Options.Index( wxT( "show_console" ) ) == wxNOT_FOUND )
+    if( plugin->Options().Index( wxT( "show_console" ) ) == wxNOT_FOUND )
         m_checkBoxShowConsole->SetValue( false );
     else
         m_checkBoxShowConsole->SetValue( true );
 #endif
 
-    wxString pluginName = getPluginFileName( m_textCtrlCommand->GetValue() );
-
-    if( pluginName.IsEmpty() )
-        return;
-
-    FILE* pluginFile = wxFopen( pluginName, "rt" );
-
-    if( pluginFile == NULL )
-    {
-        wxString msg;
-        msg.Printf( _( "Failed to open file '%s'" ), GetChars( pluginName ) );
-        DisplayError( this, msg );
-        return;
-    }
-
-    displayPluginInfo( pluginFile, pluginName );
+    // A plugin can be not working, so do not left the OK button enabled if
+    // the plugin is not ready to use
+    m_sdbSizerOK->Enable( plugin->IsOk() );
 }
 
 
-void DIALOG_BOM::displayPluginInfo( FILE * aFile, const wxString& aFilename )
+void DIALOG_BOM::OnRunGenerator( wxCommandEvent& event )
 {
-    m_Messages->Clear();
-
-    // display (when exists) the text found between the keyword "@package"
-    // (compatible with doxygen comments)
-    // and the end of comment block (""" in python", --> in xml)
-
-    wxString data;
-    wxFFile fdata( aFile );        // dtor will close the file
-
-    if( !fdata.ReadAll( &data ) )
-        return;
-
-    wxString header( wxT( "@package" ) );
-    wxString endsection( wxT( "-->" ) );        // For xml
-
-    wxFileName fn( aFilename );
-
-    if( fn.GetExt().IsSameAs( wxT("py"), false ) )
-        endsection = wxT( "\"\"\"" );
-    else if( !fn.GetExt().IsSameAs( wxT("xsl"), false ) )
-        // If this is not a python file, we know nothing about file
-        // and the info cannot be found
-        return;
-
-    // Extract substring between @package and """
-    int strstart = data.Find( header );
-
-    if( strstart == wxNOT_FOUND )
-        return;
-
-    strstart += header.Length();
-    int strend = data.find( endsection, strstart );
-
-    if( strend == wxNOT_FOUND)
-        return;
-
-    // Remove empty line if any
-    while( data[strstart] < ' ' )
-            strstart++;
-
-    m_Messages->SetValue( data.SubString( strstart, strend-1 ) );
-}
-
-/**
- * Function RunPlugin
- * run the plugin command line
- */
-void DIALOG_BOM::OnRunPlugin( wxCommandEvent& event )
-{
-    wxFileName  fn;
-
     // Calculate the xml netlist filename
-    fn = g_RootSheet->GetScreen()->GetFileName();
+    wxFileName fn = g_RootSheet->GetScreen()->GetFileName();
 
     fn.SetPath( wxPathOnly( Prj().GetProjectFullName() ) );
-
     fn.ClearExt();
+
     wxString fullfilename = fn.GetFullPath();
     m_parent->ClearMsgPanel();
 
@@ -433,260 +473,185 @@ void DIALOG_BOM::OnRunPlugin( wxCommandEvent& event )
         m_parent->SetExecFlags( wxEXEC_SHOW_CONSOLE );
 #endif
 
-    m_parent->CreateNetlist( -1, fullfilename, 0, &reporter, false );
+    auto netlist = m_parent->CreateNetlist( false, false );
+
+    m_parent->WriteNetListFile( netlist, -1,
+                                fullfilename, 0, &reporter );
 
     m_Messages->SetValue( reportmsg );
+
+    // Force focus back on the dialog
+    SetFocus();
 }
 
 
-void DIALOG_BOM::OnCancelClick( wxCommandEvent& event )
+void DIALOG_BOM::OnRemoveGenerator( wxCommandEvent& event )
 {
-    EndModal( wxID_CANCEL );
-}
-
-
-/**
- * Function OnRemovePlugin
- * Remove a plugin from the list
- */
-void DIALOG_BOM::OnRemovePlugin( wxCommandEvent& event )
-{
-    int ii = m_lbPlugins->GetSelection();
+    int ii = m_lbGenerators->GetSelection();
 
     if( ii < 0 )
         return;
 
-    m_lbPlugins->Delete( ii );
-
-    m_plugins.RemoveAt( ii );
+    m_lbGenerators->Delete( ii );
+    m_generators.erase( m_generators.begin() + ii );
 
     // Select the next item, if exists
-    if( (int)m_lbPlugins->GetCount() >= ii )
-        ii =  m_lbPlugins->GetCount() - 1;
-
-    if( ii >= 0 )
-        m_lbPlugins->SetSelection( ii );
+    if( m_lbGenerators->GetCount() )
+        m_lbGenerators->SetSelection( std::min( ii, (int) m_lbGenerators->GetCount() - 1 ) );
 
     pluginInit();
 }
 
-/**
- * Function OnAddPlugin
- * Add a new panel for a new netlist plugin
- */
-void DIALOG_BOM::OnAddPlugin( wxCommandEvent& event )
-{
-    wxString cmdLine = choosePlugin();
-    BOM_PLUGIN newPlugin;
 
-    if( cmdLine.IsEmpty() )
+void DIALOG_BOM::OnAddGenerator( wxCommandEvent& event )
+{
+    wxString filename = chooseGenerator();
+
+    if( filename.IsEmpty() )
         return;
 
     // Creates a new plugin entry
-    wxFileName fn( getPluginFileName( cmdLine ) );
-
-    wxString defaultName = fn.GetName();
-    wxString name = wxGetTextFromUser( _("Plugin name in plugin list") ,
-                                       _("Plugin name"), defaultName );
+    wxFileName fn( filename );
+    wxString name = wxGetTextFromUser( _( "Generator nickname:" ), _( "Add Generator" ),
+                                       fn.GetName(), this );
 
     if( name.IsEmpty() )
         return;
 
     // Verify if it does not exists
-    for( unsigned ii = 0; ii < m_plugins.GetCount(); ii++ )
+    if( pluginExists( name ) )
     {
-        if( name == m_plugins.Item( ii ).Name )
-        {
-            wxMessageBox( _("This name already exists. Abort") );
-            return;
-        }
-    }
-
-    // Append the new plugin
-    newPlugin.Name = name;
-    newPlugin.Command = wxEmptyString;
-    m_plugins.Add( newPlugin );
-    m_lbPlugins->SetSelection( m_lbPlugins->GetCount() - 1 );
-    m_lbPlugins->Append( name );
-    m_lbPlugins->SetSelection( m_lbPlugins->GetCount() - 1 );
-    m_textCtrlCommand->SetValue( cmdLine );
-
-    pluginInit();
-}
-
-/*
- * Browse plugin files, and set m_CommandStringCtrl field
- */
-wxString DIALOG_BOM::choosePlugin()
-{
-    wxString mask = wxT( "*" );
-#ifndef __WXMAC__
-    wxString path = Pgm().GetExecutablePath();
-#else
-    wxString path = GetOSXKicadDataDir() + wxT( "/plugins" );
-#endif
-
-    wxString fullFileName = EDA_FILE_SELECTOR( _( "Plugin files:" ),
-                                               path,
-                                               wxEmptyString,
-                                               wxEmptyString,
-                                               mask,
-                                               this,
-                                               wxFD_OPEN,
-                                               true );
-    if( fullFileName.IsEmpty() )
-        return wxEmptyString;
-
-    // Creates a default command line,
-    // suitable to run the external tool xslproc or python
-    // The default command line depending on plugin extension, currently
-    // "xsl" or "exe" or "py" or "pyw"
-    wxString    cmdLine;
-    wxFileName  fn( fullFileName );
-    wxString    ext = fn.GetExt();
-
-    if( ext == "xsl" )
-        cmdLine.Printf( "xsltproc -o \"%%O\" \"%s\" \"%%I\"", GetChars( fullFileName ) );
-    else if( ext == "exe" || ext.IsEmpty() )
-        cmdLine.Printf( "\"%s\" < \"%%I\" > \"%%O\"", GetChars( fullFileName ) );
-    else if( ext == wxT("py" ) || ext.IsEmpty() )
-        cmdLine.Printf( "python \"%s\" \"%%I\" \"%%O\"", GetChars( fullFileName ) );
-    else if( ext == "pyw" || ext.IsEmpty() )
-#ifdef __WINDOWS__
-        cmdLine.Printf(wxT("pythonw \"%s\" \"%%I\" \"%%O\""), GetChars( fullFileName ) );
-#else
-        cmdLine.Printf( "python \"%s\" \"%%I\" \"%%O\"", GetChars( fullFileName ) );
-#endif
-    else
-        cmdLine.Printf( "\"%s\"", GetChars( fullFileName ) );
-
-    return cmdLine;
-}
-
-
-wxString DIALOG_BOM::getPluginFileName(  const wxString& aCommand )
-{
-    wxString pluginName;
-
-    // Try to find the plugin name.
-    // This is possible if the name ends by .py or .pyw or .xsl or .exe
-    int pos = -1;
-
-    if( (pos = aCommand.Find( wxT(".pyw") )) != wxNOT_FOUND )
-        pos += 3;
-    else if( (pos = aCommand.Find( wxT(".py") )) != wxNOT_FOUND )
-        pos += 2;
-    else if( (pos = aCommand.Find( wxT(".xsl") )) != wxNOT_FOUND )
-        pos += 3;
-    else if( (pos = aCommand.Find( wxT(".exe") )) != wxNOT_FOUND )
-        pos += 3;
-
-    // the end of plugin name is at position pos.
-    if( pos > 0 )
-    {
-        // Be sure this is the end of the name: the next char is " or space
-        int eos = aCommand[pos+1];
-
-        if( eos == ' '|| eos == '\"' )
-        {
-            // search for the starting point of the name
-            int jj = pos-1;
-            while( jj >= 0 )
-                if( aCommand[jj] != eos )
-                    jj--;
-                else
-                    break;
-
-            // extract the name
-            if( jj >= 0 )
-            {
-                eos = aCommand[jj];
-
-                if( eos == ' '|| eos == '\"' )  // do not include delimiters
-                    jj++;
-
-                pluginName = aCommand.SubString( jj, pos );
-            }
-        }
-    }
-
-    // Using a format like %P is possible in  plugin name, so expand it
-    wxString prj_dir = Prj().GetProjectPath();
-
-    if( prj_dir.EndsWith( '/' ) || prj_dir.EndsWith( '\\' ) )
-        prj_dir.RemoveLast();
-
-    pluginName.Replace( wxT( "%P" ), prj_dir.GetData(), true );
-
-    return pluginName;
-}
-
-void DIALOG_BOM::OnEditPlugin( wxCommandEvent& event )
-{
-    wxString    pluginName = getPluginFileName( m_textCtrlCommand->GetValue() );
-
-    if( pluginName.Length() <= 2 )      // if name != ""
-    {
-        wxMessageBox( _("Plugin file name not found. Cannot edit plugin file") );
+        wxMessageBox( wxString::Format( _( "Nickname \"%s\" already in use." ), name ) );
         return;
     }
 
-    AddDelimiterString( pluginName );
-    wxString    editorname = Pgm().GetEditorName();
+    try
+    {
+        auto plugin = addGenerator( fn.GetFullPath(), name );
+
+        if( plugin )
+        {
+            m_lbGenerators->SetSelection( m_lbGenerators->GetCount() - 1 );
+            m_textCtrlCommand->SetValue( plugin->GetCommand() );
+            pluginInit();
+        }
+    }
+    catch( const std::runtime_error& e )
+    {
+        DisplayError( this, e.what() );
+    }
+}
+
+
+wxString DIALOG_BOM::chooseGenerator()
+{
+    static wxString lastPath;
+
+    if( lastPath.IsEmpty() )
+    {
+#ifndef __WXMAC__
+        lastPath = Pgm().GetExecutablePath();
+#else
+        lastPath = GetOSXKicadDataDir() + "/plugins";
+#endif
+    }
+
+    wxString fullFileName = EDA_FILE_SELECTOR( _( "Generator files:" ), lastPath, wxEmptyString,
+                                               wxEmptyString, wxFileSelectorDefaultWildcardStr,
+                                               this, wxFD_OPEN, true );
+
+    return fullFileName;
+}
+
+
+void DIALOG_BOM::OnEditGenerator( wxCommandEvent& event )
+{
+    auto plugin = selectedGenerator();
+
+    if( !plugin )
+        return;
+
+    wxString pluginFile = plugin->GetFile().GetFullPath();
+
+    if( pluginFile.Length() <= 2 )      // if name != ""
+    {
+        wxMessageBox( _( "Generator file name not found." ) );
+        return;
+    }
+
+    AddDelimiterString( pluginFile );
+    wxString editorname = Pgm().GetEditorName();
 
     if( !editorname.IsEmpty() )
-        ExecuteFile( this, editorname, pluginName );
+        ExecuteFile( this, editorname, pluginFile );
     else
-        wxMessageBox( _("No text editor selected in KiCad. Please choose it") );
+        wxMessageBox( _( "No text editor selected in KiCad.  Please choose one." ) );
 }
+
 
 void DIALOG_BOM::OnHelp( wxCommandEvent& event )
 {
-    HTML_MESSAGE_BOX help_Dlg( this, _("Bom Generation Help"),
-                               wxDefaultPosition, wxSize( 750,550 ) );
+    HTML_MESSAGE_BOX help_Dlg( this, _( "Bill of Material Generation Help" ) );
+    help_Dlg.SetDialogSizeInDU( 500, 350 );
 
-    wxString msg = FROM_UTF8(s_bomHelpInfo);
-    help_Dlg.m_htmlWindow->AppendToPage( msg );
+    wxString html_txt;
+    ConvertMarkdown2Html( wxGetTranslation( s_bomHelpInfo ), html_txt );
+    help_Dlg.m_htmlWindow->AppendToPage( html_txt );
     help_Dlg.ShowModal();
 }
 
+
 void DIALOG_BOM::OnCommandLineEdited( wxCommandEvent& event )
 {
-    int ii = m_lbPlugins->GetSelection();
+    auto generator = selectedGenerator();
 
-    if( ii < 0 )
-        return;
-
-    m_plugins.Item( ii ).Command = m_textCtrlCommand->GetValue();
+    if( generator )
+        generator->SetCommand( m_textCtrlCommand->GetValue() );
 }
+
 
 void DIALOG_BOM::OnNameEdited( wxCommandEvent& event )
 {
-    int ii = m_lbPlugins->GetSelection();
+    int ii = m_lbGenerators->GetSelection();
 
     if( ii < 0 )
         return;
 
-    m_plugins.Item( ii ).Name = m_textCtrlName->GetValue();
-    m_lbPlugins->SetString( ii, m_plugins.Item( ii ).Name );
+    m_generators[ii]->SetName( m_textCtrlName->GetValue() );
+    m_lbGenerators->SetString( ii, m_generators[ii]->GetName() );
 }
+
 
 void DIALOG_BOM::OnShowConsoleChanged( wxCommandEvent& event )
 {
 #ifdef __WINDOWS__
-    int ii = m_lbPlugins->GetSelection();
+    static constexpr wxChar OPT_SHOW_CONSOLE[] = wxT( "show_console" );
 
-    if( ii < 0 )
+    auto plugin = selectedGenerator();
+
+    if( !plugin )
         return;
 
     if( m_checkBoxShowConsole->IsChecked() )
     {
-        if( m_plugins.Item( ii ).Options.Index( wxT( "show_console" ) ) == wxNOT_FOUND )
-            m_plugins.Item( ii ).Options.Add( wxT( "show_console" ) );
+        if( plugin->Options().Index( OPT_SHOW_CONSOLE ) == wxNOT_FOUND )
+            plugin->Options().Add( OPT_SHOW_CONSOLE );
     }
     else
     {
-        m_plugins.Item( ii ).Options.Remove( wxT( "show_console" ) );
+        plugin->Options().Remove( OPT_SHOW_CONSOLE );
     }
 #endif
+}
+
+
+void DIALOG_BOM::OnIdle( wxIdleEvent& event )
+{
+    // On some platforms we initialize wxTextCtrls to all-selected, but we don't want that
+    // for the messages text box.
+    if( !m_initialized )
+    {
+        m_Messages->SetSelection( 0, 0 );
+        m_initialized = true;
+    }
 }

@@ -2,7 +2,7 @@
  * This program source code file is part of KiCad, a free EDA CAD application.
  *
  * Copyright (C) 2012 CERN
- * Copyright (C) 2012-2016 KiCad Developers, see AUTHORS.txt for contributors.
+ * Copyright (C) 2012-2019 KiCad Developers, see AUTHORS.txt for contributors.
  *
  * This program is free software; you can redistribute it and/or
  * modify it under the terms of the GNU General Public License
@@ -30,20 +30,21 @@
 #ifndef _PCBNEW_PARSER_H_
 #define _PCBNEW_PARSER_H_
 
-#include <pcb_lexer.h>
+#include <convert_to_biu.h>                      // IU_PER_MM
 #include <hashtables.h>
-#include <layers_id_colors_and_visibility.h>    // PCB_LAYER_ID
-#include <common.h>                             // KiROUND
-#include <convert_to_biu.h>                     // IU_PER_MM
-#include <3d_cache/3d_info.h>
+#include <layers_id_colors_and_visibility.h>     // PCB_LAYER_ID
+#include <math/util.h>                           // KiROUND, Clamp
+#include <pcb_lexer.h>
 
-#include <boost/unordered_map.hpp>
-#include <boost/unordered_set.hpp>
+#include <unordered_map>
 
 
+class ARC;
 class BOARD;
 class BOARD_ITEM;
+class BOARD_ITEM_CONTAINER;
 class D_PAD;
+class BOARD_DESIGN_SETTINGS;
 class DIMENSION;
 class DRAWSEGMENT;
 class EDA_TEXT;
@@ -55,25 +56,30 @@ class MODULE;
 class PCB_TARGET;
 class VIA;
 class ZONE_CONTAINER;
+class MARKER_PCB;
+class MODULE_3D_SETTINGS;
 struct LAYER;
 
 
 /**
- * Class PCB_PARSER
+ * PCB_PARSER
  * reads a Pcbnew s-expression formatted #LINE_READER object and returns the appropriate
  * #BOARD_ITEM object.
  */
 class PCB_PARSER : public PCB_LEXER
 {
-    typedef boost::unordered_map< std::string, PCB_LAYER_ID >   LAYER_ID_MAP;
-    typedef boost::unordered_map< std::string, LSET >       LSET_MAP;
+    typedef std::unordered_map< std::string, PCB_LAYER_ID >   LAYER_ID_MAP;
+    typedef std::unordered_map< std::string, LSET >       LSET_MAP;
 
     BOARD*              m_board;
     LAYER_ID_MAP        m_layerIndices;     ///< map layer name to it's index
     LSET_MAP            m_layerMasks;       ///< map layer names to their masks
+    std::set<wxString>  m_undefinedLayers;  ///< set of layers not defined in layers section
     std::vector<int>    m_netCodes;         ///< net codes mapping for boards being loaded
     bool                m_tooRecent;        ///< true if version parses as later than supported
     int                 m_requiredVersion;  ///< set to the KiCad format version this board requires
+
+    bool                m_showLegacyZoneWarning;
 
     ///> Converts net code using the mapping table if available,
     ///> otherwise returns unchanged net code if < 0 or if is is out of range
@@ -102,6 +108,21 @@ class PCB_PARSER : public PCB_LEXER
      */
     void init();
 
+    /**
+     * Creates a mapping from the (short-lived) bug where layer names were translated
+     * TODO: Remove this once we support custom layer names
+     *
+     * @param aMap string mapping from translated to English layer names
+     */
+    void createOldLayerMapping( std::unordered_map< std::string, std::string >& aMap );
+
+    /**
+     * Function skipCurrent
+     * Skip the current token level, i.e
+     * search for the RIGHT parenthesis which closes the current description
+     */
+    void skipCurrent();
+
     void parseHeader();
     void parseGeneralSection();
     void parsePAGE_INFO();
@@ -110,11 +131,19 @@ class PCB_PARSER : public PCB_LEXER
     void parseLayers();
     void parseLayer( LAYER* aLayer );
 
+    void parseBoardStackup();
+
     void parseSetup();
+    void parseDefaults( BOARD_DESIGN_SETTINGS& aSettings );
+    void parseDefaultTextDims( BOARD_DESIGN_SETTINGS& aSettings, int aLayer );
     void parseNETINFO_ITEM();
     void parseNETCLASS();
 
-    DRAWSEGMENT*    parseDRAWSEGMENT();
+    /** Read a DRAWSEGMENT description.
+     * @param aAllowCirclesZeroWidth = true to allow items with 0 width
+     * Only used in custom pad shapes for filled circles.
+     */
+    DRAWSEGMENT*    parseDRAWSEGMENT( bool aAllowCirclesZeroWidth = false );
     TEXTE_PCB*      parseTEXTE_PCB();
     DIMENSION*      parseDIMENSION();
 
@@ -128,10 +157,12 @@ class PCB_PARSER : public PCB_LEXER
     D_PAD*          parseD_PAD( MODULE* aParent = NULL );
     // Parse only the (option ...) inside a pad description
     bool            parseD_PAD_option( D_PAD* aPad );
+    ARC*            parseARC();
     TRACK*          parseTRACK();
     VIA*            parseVIA();
-    ZONE_CONTAINER* parseZONE_CONTAINER();
+    ZONE_CONTAINER* parseZONE_CONTAINER( BOARD_ITEM_CONTAINER* aParent );
     PCB_TARGET*     parsePCB_TARGET();
+    MARKER_PCB*     parseMARKER( BOARD_ITEM_CONTAINER* aParent );
     BOARD*          parseBOARD();
 
     /**
@@ -198,7 +229,7 @@ class PCB_PARSER : public PCB_LEXER
      */
     void parseEDA_TEXT( EDA_TEXT* aText );
 
-    S3D_INFO* parse3DModel();
+    MODULE_3D_SETTINGS* parse3DModel();
 
     /**
      * Function parseDouble
@@ -229,15 +260,29 @@ class PCB_PARSER : public PCB_LEXER
         // to confirm or experiment.  Use a similar strategy in both places, here
         // and in the test program. Make that program with:
         // $ make test-nm-biu-to-ascii-mm-round-tripping
-        return KiROUND( parseDouble() * IU_PER_MM );
+        auto retval = parseDouble() * IU_PER_MM;
+
+        // N.B. we currently represent board units as integers.  Any values that are
+        // larger or smaller than those board units represent undefined behavior for
+        // the system.  We limit values to the largest that is visible on the screen
+        // This is the diagonal distance of the full screen ~1.5m
+        double int_limit = std::numeric_limits<int>::max() * 0.7071;    // 0.7071 = roughly 1/sqrt(2)
+        return KiROUND( Clamp<double>( -int_limit, retval, int_limit ) );
     }
 
     inline int parseBoardUnits( const char* aExpected )
     {
+        auto retval = parseDouble( aExpected ) * IU_PER_MM;
+
+        // N.B. we currently represent board units as integers.  Any values that are
+        // larger or smaller than those board units represent undefined behavior for
+        // the system.  We limit values to the largest that is visible on the screen
+        double int_limit = std::numeric_limits<int>::max() * 0.7071;
+
         // Use here KiROUND, not KIROUND (see comments about them)
         // when having a function as argument, because it will be called twice
         // with KIROUND
-        return KiROUND( parseDouble( aExpected ) * IU_PER_MM );
+        return KiROUND( Clamp<double>( -int_limit, retval, int_limit ) );
     }
 
     inline int parseBoardUnits( PCB_KEYS_T::T aToken )

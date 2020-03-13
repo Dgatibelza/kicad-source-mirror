@@ -34,8 +34,8 @@
 
 // I really did not want to be dependent on wxWidgets in richio
 // but the errorText needs to be wide char so wxString rules.
+#include <cstdio>
 #include <wx/wx.h>
-#include <stdio.h>
 
 #include <ki_exception.h>
 
@@ -70,33 +70,33 @@ std::string
     StrPrintf( const char* format, ... );
 
 
-#define LINE_READER_LINE_DEFAULT_MAX        100000
+#define LINE_READER_LINE_DEFAULT_MAX        1000000
 #define LINE_READER_LINE_INITIAL_SIZE       5000
 
 /**
- * Class LINE_READER
+ * LINE_READER
  * is an abstract class from which implementation specific LINE_READERs may
  * be derived to read single lines of text and manage a line number counter.
  */
 class LINE_READER
 {
 protected:
-    unsigned    length;         ///< no. bytes in line before trailing nul.
-    unsigned    lineNum;
+    unsigned    m_length;         ///< no. bytes in line before trailing nul.
+    unsigned    m_lineNum;
 
-    char*       line;           ///< the read line of UTF8 text
-    unsigned    capacity;       ///< no. bytes allocated for line.
+    char*       m_line;           ///< the read line of UTF8 text
+    unsigned    m_capacity;       ///< no. bytes allocated for line.
 
-    unsigned    maxLineLength;  ///< maximum allowed capacity using resizing.
+    unsigned    m_maxLineLength;  ///< maximum allowed capacity using resizing.
 
-    wxString    source;         ///< origin of text lines, e.g. filename or "clipboard"
+    wxString    m_source;         ///< origin of text lines, e.g. filename or "clipboard"
 
     /**
      * Function expandCapacity
      * will expand the capacity of @a line up to maxLineLength but not greater, so
      * be careful about making assumptions of @a capacity after calling this.
      */
-    void        expandCapacity( unsigned newsize );
+    void        expandCapacity( unsigned aNewsize );
 
 
 public:
@@ -129,7 +129,7 @@ public:
      */
     virtual const wxString& GetSource() const
     {
-        return source;
+        return m_source;
     }
 
     /**
@@ -138,7 +138,7 @@ public:
      */
     char* Line() const
     {
-        return line;
+        return m_line;
     }
 
     /**
@@ -158,7 +158,7 @@ public:
      */
     virtual unsigned LineNumber() const
     {
-        return lineNum;
+        return m_lineNum;
     }
 
     /**
@@ -167,13 +167,13 @@ public:
      */
     unsigned Length() const
     {
-        return length;
+        return m_length;
     }
 };
 
 
 /**
- * Class FILE_LINE_READER
+ * FILE_LINE_READER
  * is a LINE_READER that reads from an open file. File must be already open
  * so that this class can exist without any UI policy.
  */
@@ -181,8 +181,8 @@ class FILE_LINE_READER : public LINE_READER
 {
 protected:
 
-    bool    iOwn;   ///< if I own the file, I'll promise to close it, else not.
-    FILE*   fp;     ///< I may own this file, but might not.
+    bool    m_iOwn; ///< if I own the file, I'll promise to close it, else not.
+    FILE*   m_fp;   ///< I may own this file, but might not.
 
 public:
 
@@ -241,21 +241,21 @@ public:
      */
     void Rewind()
     {
-        rewind( fp );
-        lineNum = 0;
+        rewind( m_fp );
+        m_lineNum = 0;
     }
 };
 
 
 /**
- * Class STRING_LINE_READER
+ * STRING_LINE_READER
  * is a LINE_READER that reads from a multiline 8 bit wide std::string
  */
 class STRING_LINE_READER : public LINE_READER
 {
 protected:
-    std::string     lines;
-    size_t          ndx;
+    std::string     m_lines;
+    size_t          m_ndx;
 
 public:
 
@@ -284,7 +284,7 @@ public:
 
 
 /**
- * Class INPUTSTREAM_LINE_READER
+ * INPUTSTREAM_LINE_READER
  * is a LINE_READER that reads from a wxInputStream object.
  */
 class INPUTSTREAM_LINE_READER : public LINE_READER
@@ -309,7 +309,7 @@ public:
 #define OUTPUTFMTBUFZ    500        ///< default buffer size for any OUTPUT_FORMATTER
 
 /**
- * Class OUTPUTFORMATTER
+ * OUTPUTFORMATTER
  * is an important interface (abstract class) used to output 8 bit text in
  * a convenient way. The primary interface is "printf() - like" but
  * with support for indentation control.  The destination of the 8 bit
@@ -326,7 +326,7 @@ public:
  */
 class OUTPUTFORMATTER
 {
-    std::vector<char>   buffer;
+    std::vector<char>   m_buffer;
     char                quoteChar[2];
 
     int sprint( const char* fmt, ... );
@@ -335,7 +335,7 @@ class OUTPUTFORMATTER
 
 protected:
     OUTPUTFORMATTER( int aReserve = OUTPUTFMTBUFZ, char aQuoteChar = '"' ) :
-            buffer( aReserve, '\0' )
+            m_buffer( aReserve, '\0' )
     {
         quoteChar[0] = aQuoteChar;
         quoteChar[1] = '\0';
@@ -438,13 +438,13 @@ public:
 
 
 /**
- * Class STRING_FORMATTER
+ * STRING_FORMATTER
  * implements OUTPUTFORMATTER to a memory buffer.  After Print()ing the
  * string is available through GetString()
 */
 class STRING_FORMATTER : public OUTPUTFORMATTER
 {
-    std::string             mystring;
+    std::string m_mystring;
 
 public:
 
@@ -463,7 +463,7 @@ public:
      */
     void Clear()
     {
-        mystring.clear();
+        m_mystring.clear();
     }
 
     /**
@@ -474,7 +474,7 @@ public:
 
     const std::string& GetString()
     {
-        return mystring;
+        return m_mystring;
     }
 
 protected:
@@ -485,7 +485,7 @@ protected:
 
 
 /**
- * Class FILE_OUTPUTFORMATTER
+ * FILE_OUTPUTFORMATTER
  * may be used for text file output.  It is about 8 times faster than
  * STREAM_OUTPUTFORMATTER for file streams.
  */
@@ -519,13 +519,13 @@ protected:
 
 
 /**
- * Class STREAM_OUTPUTFORMATTER
+ * STREAM_OUTPUTFORMATTER
  * implements OUTPUTFORMATTER to a wxWidgets wxOutputStream.  The stream is
  * neither opened nor closed by this class.
  */
 class STREAM_OUTPUTFORMATTER : public OUTPUTFORMATTER
 {
-    wxOutputStream& os;
+    wxOutputStream& m_os;
 
 public:
     /**
@@ -535,7 +535,7 @@ public:
      */
     STREAM_OUTPUTFORMATTER( wxOutputStream& aStream, char aQuoteChar = '"' ) :
         OUTPUTFORMATTER( OUTPUTFMTBUFZ, aQuoteChar ),
-        os( aStream )
+        m_os( aStream )
     {
     }
 

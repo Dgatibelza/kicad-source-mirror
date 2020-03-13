@@ -35,6 +35,7 @@
 #include <class_board.h>
 #include <class_module.h>
 #include <3d_math.h>
+#include <math/util.h>      // for KiROUND
 
 #include <base_units.h>
 
@@ -65,7 +66,7 @@ C3D_RENDER_OGL_LEGACY::C3D_RENDER_OGL_LEGACY( CINFO3D_VISU &aSettings ) :
 
     m_ogl_circle_texture = 0;
     m_ogl_disp_list_grid = 0;
-    m_last_grid_type = GRID3D_NONE;
+    m_last_grid_type     = GRID3D_TYPE::NONE;
 
     m_3dmodel_map.clear();
 }
@@ -175,8 +176,7 @@ void C3D_RENDER_OGL_LEGACY::render_3D_arrows()
 
 void C3D_RENDER_OGL_LEGACY::setupMaterials()
 {
-
-    memset( &m_materials, 0, sizeof( m_materials ) );
+    m_materials = {};
 
     if( m_settings.GetFlag( FL_USE_REALISTIC_MODE ) )
     {
@@ -199,6 +199,7 @@ void C3D_RENDER_OGL_LEGACY::setupMaterials()
                                               0.00f, 0.30f );
 
         m_materials.m_Copper.m_Shininess = shininessfactor * 128.0f;
+        m_materials.m_Copper.m_Emissive = SFVEC3F( 0.0f, 0.0f, 0.0f );
 
 
         // Paste material mixed with paste color
@@ -214,37 +215,61 @@ void C3D_RENDER_OGL_LEGACY::setupMaterials()
                                                   m_settings.m_SolderPasteColor.b );
 
         m_materials.m_Paste.m_Shininess = 0.1f * 128.0f;
+        m_materials.m_Paste.m_Emissive = SFVEC3F( 0.0f, 0.0f, 0.0f );
 
 
         // Silk screen material mixed with silk screen color
-        m_materials.m_SilkS.m_Ambient = SFVEC3F( m_settings.m_SilkScreenColor.r,
-                                                 m_settings.m_SilkScreenColor.g,
-                                                 m_settings.m_SilkScreenColor.b );
+        m_materials.m_SilkSTop.m_Ambient = SFVEC3F( m_settings.m_SilkScreenColorTop.r,
+                m_settings.m_SilkScreenColorTop.g, m_settings.m_SilkScreenColorTop.b );
 
-        m_materials.m_SilkS.m_Specular = SFVEC3F( m_settings.m_SilkScreenColor.r *
-                                                  m_settings.m_SilkScreenColor.r + 0.10f,
-                                                  m_settings.m_SilkScreenColor.g *
-                                                  m_settings.m_SilkScreenColor.g + 0.10f,
-                                                  m_settings.m_SilkScreenColor.b *
-                                                  m_settings.m_SilkScreenColor.b + 0.10f );
+        m_materials.m_SilkSTop.m_Specular = SFVEC3F(
+                m_settings.m_SilkScreenColorTop.r * m_settings.m_SilkScreenColorTop.r + 0.10f,
+                m_settings.m_SilkScreenColorTop.g * m_settings.m_SilkScreenColorTop.g + 0.10f,
+                m_settings.m_SilkScreenColorTop.b * m_settings.m_SilkScreenColorTop.b + 0.10f );
 
-        m_materials.m_SilkS.m_Shininess = 0.078125f * 128.0f;
+        m_materials.m_SilkSTop.m_Shininess = 0.078125f * 128.0f;
+        m_materials.m_SilkSTop.m_Emissive  = SFVEC3F( 0.0f, 0.0f, 0.0f );
+
+        // Silk screen material mixed with silk screen color
+        m_materials.m_SilkSBot.m_Ambient = SFVEC3F( m_settings.m_SilkScreenColorBot.r,
+                m_settings.m_SilkScreenColorBot.g, m_settings.m_SilkScreenColorBot.b );
+
+        m_materials.m_SilkSBot.m_Specular = SFVEC3F(
+                m_settings.m_SilkScreenColorBot.r * m_settings.m_SilkScreenColorBot.r + 0.10f,
+                m_settings.m_SilkScreenColorBot.g * m_settings.m_SilkScreenColorBot.g + 0.10f,
+                m_settings.m_SilkScreenColorBot.b * m_settings.m_SilkScreenColorBot.b + 0.10f );
+
+        m_materials.m_SilkSBot.m_Shininess = 0.078125f * 128.0f;
+        m_materials.m_SilkSBot.m_Emissive  = SFVEC3F( 0.0f, 0.0f, 0.0f );
 
 
         // Solder mask material mixed with solder mask color
-        m_materials.m_SolderMask.m_Ambient = SFVEC3F( m_settings.m_SolderMaskColor.r * 0.3f,
-                                                      m_settings.m_SolderMaskColor.g * 0.3f,
-                                                      m_settings.m_SolderMaskColor.b * 0.3f );
+        m_materials.m_SolderMaskTop.m_Ambient = SFVEC3F( m_settings.m_SolderMaskColorTop.r * 0.3f,
+                m_settings.m_SolderMaskColorTop.g * 0.3f,
+                m_settings.m_SolderMaskColorTop.b * 0.3f );
 
-        m_materials.m_SolderMask.m_Specular = SFVEC3F( m_settings.m_SolderMaskColor.r *
-                                                       m_settings.m_SolderMaskColor.r,
-                                                       m_settings.m_SolderMaskColor.g *
-                                                       m_settings.m_SolderMaskColor.g,
-                                                       m_settings.m_SolderMaskColor.b *
-                                                       m_settings.m_SolderMaskColor.b );
+        m_materials.m_SolderMaskTop.m_Specular =
+                SFVEC3F( m_settings.m_SolderMaskColorTop.r * m_settings.m_SolderMaskColorTop.r,
+                        m_settings.m_SolderMaskColorTop.g * m_settings.m_SolderMaskColorTop.g,
+                        m_settings.m_SolderMaskColorTop.b * m_settings.m_SolderMaskColorTop.b );
 
-        m_materials.m_SolderMask.m_Shininess = 0.8f * 128.0f;
-        m_materials.m_SolderMask.m_Transparency = 0.17f;
+        m_materials.m_SolderMaskTop.m_Shininess    = 0.8f * 128.0f;
+        m_materials.m_SolderMaskTop.m_Transparency = 0.17f;
+        m_materials.m_SolderMaskTop.m_Emissive     = SFVEC3F( 0.0f, 0.0f, 0.0f );
+
+        // Solder mask material mixed with solder mask color
+        m_materials.m_SolderMaskBot.m_Ambient = SFVEC3F( m_settings.m_SolderMaskColorBot.r * 0.3f,
+                m_settings.m_SolderMaskColorBot.g * 0.3f,
+                m_settings.m_SolderMaskColorBot.b * 0.3f );
+
+        m_materials.m_SolderMaskBot.m_Specular =
+                SFVEC3F( m_settings.m_SolderMaskColorBot.r * m_settings.m_SolderMaskColorBot.r,
+                        m_settings.m_SolderMaskColorBot.g * m_settings.m_SolderMaskColorBot.g,
+                        m_settings.m_SolderMaskColorBot.b * m_settings.m_SolderMaskColorBot.b );
+
+        m_materials.m_SolderMaskBot.m_Shininess    = 0.8f * 128.0f;
+        m_materials.m_SolderMaskBot.m_Transparency = 0.17f;
+        m_materials.m_SolderMaskBot.m_Emissive     = SFVEC3F( 0.0f, 0.0f, 0.0f );
 
 
         // Epoxy material
@@ -259,6 +284,7 @@ void C3D_RENDER_OGL_LEGACY::setupMaterials()
                                                         20.0f / 255.0f );
 
         m_materials.m_EpoxyBoard.m_Shininess = 0.1f * 128.0f;
+        m_materials.m_EpoxyBoard.m_Emissive = SFVEC3F( 0.0f, 0.0f, 0.0f );
     }
     else    // Technical Mode
     {
@@ -270,34 +296,53 @@ void C3D_RENDER_OGL_LEGACY::setupMaterials()
         m_materials.m_Copper.m_Ambient   = matAmbientColor;
         m_materials.m_Copper.m_Specular  = matSpecularColor;
         m_materials.m_Copper.m_Shininess = matShininess;
+        m_materials.m_Copper.m_Emissive = SFVEC3F( 0.0f, 0.0f, 0.0f );
 
         // Paste material
         m_materials.m_Paste.m_Ambient   = matAmbientColor;
         m_materials.m_Paste.m_Specular  = matSpecularColor;
         m_materials.m_Paste.m_Shininess = matShininess;
+        m_materials.m_Paste.m_Emissive = SFVEC3F( 0.0f, 0.0f, 0.0f );
 
         // Silk screen material
-        m_materials.m_SilkS.m_Ambient   = matAmbientColor;
-        m_materials.m_SilkS.m_Specular  = matSpecularColor;
-        m_materials.m_SilkS.m_Shininess = matShininess;
+        m_materials.m_SilkSTop.m_Ambient   = matAmbientColor;
+        m_materials.m_SilkSTop.m_Specular  = matSpecularColor;
+        m_materials.m_SilkSTop.m_Shininess = matShininess;
+        m_materials.m_SilkSTop.m_Emissive  = SFVEC3F( 0.0f, 0.0f, 0.0f );
+
+        // Silk screen material
+        m_materials.m_SilkSBot.m_Ambient   = matAmbientColor;
+        m_materials.m_SilkSBot.m_Specular  = matSpecularColor;
+        m_materials.m_SilkSBot.m_Shininess = matShininess;
+        m_materials.m_SilkSBot.m_Emissive  = SFVEC3F( 0.0f, 0.0f, 0.0f );
 
         // Solder mask material
-        m_materials.m_SolderMask.m_Ambient   = matAmbientColor;
-        m_materials.m_SolderMask.m_Specular  = matSpecularColor;
-        m_materials.m_SolderMask.m_Shininess = matShininess;
-        m_materials.m_SolderMask.m_Transparency = 0.17f;
+        m_materials.m_SolderMaskTop.m_Ambient      = matAmbientColor;
+        m_materials.m_SolderMaskTop.m_Specular     = matSpecularColor;
+        m_materials.m_SolderMaskTop.m_Shininess    = matShininess;
+        m_materials.m_SolderMaskTop.m_Transparency = 0.17f;
+        m_materials.m_SolderMaskTop.m_Emissive     = SFVEC3F( 0.0f, 0.0f, 0.0f );
+
+        // Solder mask material
+        m_materials.m_SolderMaskBot.m_Ambient      = matAmbientColor;
+        m_materials.m_SolderMaskBot.m_Specular     = matSpecularColor;
+        m_materials.m_SolderMaskBot.m_Shininess    = matShininess;
+        m_materials.m_SolderMaskBot.m_Transparency = 0.17f;
+        m_materials.m_SolderMaskBot.m_Emissive     = SFVEC3F( 0.0f, 0.0f, 0.0f );
 
         // Epoxy material
         m_materials.m_EpoxyBoard.m_Ambient   = matAmbientColor;
         m_materials.m_EpoxyBoard.m_Diffuse   = m_settings.m_BoardBodyColor;
         m_materials.m_EpoxyBoard.m_Specular  = matSpecularColor;
         m_materials.m_EpoxyBoard.m_Shininess = matShininess;
+        m_materials.m_EpoxyBoard.m_Emissive = SFVEC3F( 0.0f, 0.0f, 0.0f );
 
         // Gray material (used for example in technical vias and pad holes)
         m_materials.m_GrayMaterial.m_Ambient    = SFVEC3F( 0.8f, 0.8f, 0.8f );
         m_materials.m_GrayMaterial.m_Diffuse    = SFVEC3F( 0.3f, 0.3f, 0.3f );
         m_materials.m_GrayMaterial.m_Specular   = SFVEC3F( 0.4f, 0.4f, 0.4f );
         m_materials.m_GrayMaterial.m_Shininess  = 0.01f * 128.0f;
+        m_materials.m_GrayMaterial.m_Emissive = SFVEC3F( 0.0f, 0.0f, 0.0f );
     }
 }
 
@@ -307,10 +352,13 @@ void C3D_RENDER_OGL_LEGACY::set_layer_material( PCB_LAYER_ID aLayerID )
     switch( aLayerID )
     {
         case B_Mask:
+            m_materials.m_SolderMaskBot.m_Diffuse = get_layer_color( aLayerID );
+            OGL_SetMaterial( m_materials.m_SolderMaskBot );
+            break;
         case F_Mask:
-            m_materials.m_SolderMask.m_Diffuse = get_layer_color( aLayerID );
-            OGL_SetMaterial( m_materials.m_SolderMask );
-        break;
+            m_materials.m_SolderMaskTop.m_Diffuse = get_layer_color( aLayerID );
+            OGL_SetMaterial( m_materials.m_SolderMaskTop );
+            break;
 
         case B_Paste:
         case F_Paste:
@@ -319,10 +367,12 @@ void C3D_RENDER_OGL_LEGACY::set_layer_material( PCB_LAYER_ID aLayerID )
         break;
 
         case B_SilkS:
+            m_materials.m_SilkSBot.m_Diffuse = get_layer_color( aLayerID );
+            OGL_SetMaterial( m_materials.m_SilkSBot );
         case F_SilkS:
-            m_materials.m_SilkS.m_Diffuse = get_layer_color( aLayerID );
-            OGL_SetMaterial( m_materials.m_SilkS );
-        break;
+            m_materials.m_SilkSTop.m_Diffuse = get_layer_color( aLayerID );
+            OGL_SetMaterial( m_materials.m_SilkSTop );
+            break;
 
         case B_Adhes:
         case F_Adhes:
@@ -348,6 +398,7 @@ void C3D_RENDER_OGL_LEGACY::set_layer_material( PCB_LAYER_ID aLayerID )
                                     m_materials.m_Plastic.m_Diffuse.b * 0.7f );
 
             m_materials.m_Plastic.m_Shininess = 0.078125f * 128.0f;
+            m_materials.m_Plastic.m_Emissive = SFVEC3F( 0.0f, 0.0f, 0.0f );
             OGL_SetMaterial( m_materials.m_Plastic );
         break;
 
@@ -370,22 +421,26 @@ SFVEC3F C3D_RENDER_OGL_LEGACY::get_layer_color( PCB_LAYER_ID aLayerID )
         {
             case B_Adhes:
             case F_Adhes:
-            break;
+                break;
 
             case B_Mask:
+                layerColor = m_settings.m_SolderMaskColorBot;
+                break;
             case F_Mask:
-                layerColor = m_settings.m_SolderMaskColor;
-            break;
+                layerColor = m_settings.m_SolderMaskColorTop;
+                break;
 
             case B_Paste:
             case F_Paste:
                 layerColor = m_settings.m_SolderPasteColor;
-            break;
+                break;
 
             case B_SilkS:
+                layerColor = m_settings.m_SilkScreenColorBot;
+                break;
             case F_SilkS:
-                layerColor = m_settings.m_SilkScreenColor;
-            break;
+                layerColor = m_settings.m_SilkScreenColorTop;
+                break;
 
             case Dwgs_User:
             case Cmts_User:
@@ -393,19 +448,19 @@ SFVEC3F C3D_RENDER_OGL_LEGACY::get_layer_color( PCB_LAYER_ID aLayerID )
             case Eco2_User:
             case Edge_Cuts:
             case Margin:
-            break;
+                break;
 
             case B_CrtYd:
             case F_CrtYd:
-            break;
+                break;
 
             case B_Fab:
             case F_Fab:
-            break;
+                break;
 
             default:
                 layerColor = m_settings.m_CopperColor;
-            break;
+                break;
         }
     }
 
@@ -461,8 +516,8 @@ void init_lights(void)
 }
 
 
-bool C3D_RENDER_OGL_LEGACY::Redraw( bool aIsMoving,
-                                    REPORTER *aStatusTextReporter )
+bool C3D_RENDER_OGL_LEGACY::Redraw(
+        bool aIsMoving, REPORTER* aStatusTextReporter, REPORTER* aWarningTextReporter )
 {
     // Initialize openGL
     if( !m_is_opengl_initialized )
@@ -473,10 +528,12 @@ bool C3D_RENDER_OGL_LEGACY::Redraw( bool aIsMoving,
 
     if( m_reloadRequested )
     {
+        std::unique_ptr<BUSY_INDICATOR> busy = CreateBusyIndicator();
+
         if( aStatusTextReporter )
             aStatusTextReporter->Report( _( "Loading..." ) );
 
-        reload( aStatusTextReporter );
+        reload( aStatusTextReporter, aWarningTextReporter );
         setupMaterials();
 
         // generate a new 3D grid as the size of the board may had changed
@@ -678,8 +735,40 @@ bool C3D_RENDER_OGL_LEGACY::Redraw( bool aIsMoving,
         }
         else
         {
-            pLayerDispList->DrawAllCameraCulled( m_settings.CameraGet().GetPos().z,
-                                                 (aIsMoving == false) );
+            if( m_settings.GetFlag( FL_SUBTRACT_MASK_FROM_SILK ) &&
+                ( ( ( layer_id == B_SilkS ) &&
+                    ( m_ogl_disp_lists_layers.find( B_Mask ) != m_ogl_disp_lists_layers.end() ) ) ||
+                  ( ( layer_id == F_SilkS ) &&
+                    ( m_ogl_disp_lists_layers.find( F_Mask ) != m_ogl_disp_lists_layers.end() ) ) ) )
+            {
+                const PCB_LAYER_ID layerMask_id = (layer_id == B_SilkS)?B_Mask:F_Mask;
+
+                const CLAYERS_OGL_DISP_LISTS *pLayerDispListMask = m_ogl_disp_lists_layers.at( layerMask_id );
+
+                pLayerDispList->DrawAllCameraCulledSubtractLayer(
+                            pLayerDispListMask,
+                            m_ogl_disp_list_through_holes_vias_outer,
+                            (aIsMoving == false) );
+            }
+            else
+            {
+                if( m_ogl_disp_list_through_holes_vias_outer &&
+                    ( ( layer_id == B_SilkS ) || ( layer_id == F_SilkS )
+                      // Remove vias on SolderPaste can be added as an option in future
+                      // ( layer_id == B_Paste ) || ( layer_id == F_Paste ) )
+                    ) )
+                {
+                    pLayerDispList->DrawAllCameraCulledSubtractLayer(
+                                NULL,
+                                m_ogl_disp_list_through_holes_vias_outer,
+                                (aIsMoving == false) );
+                }
+                else
+                {
+                    pLayerDispList->DrawAllCameraCulled( m_settings.CameraGet().GetPos().z,
+                                                         (aIsMoving == false) );
+                }
+            }
         }
 
         glPopMatrix();
@@ -705,6 +794,11 @@ bool C3D_RENDER_OGL_LEGACY::Redraw( bool aIsMoving,
         //setLight_Top( true );
         //setLight_Bottom( true );
 
+        // add a depth buffer offset, it will help to hide some artifacts
+        // on silkscreen where the SolderMask is removed
+        glEnable( GL_POLYGON_OFFSET_FILL );
+        glPolygonOffset( 0.0f, -1.0f );
+
         if( m_settings.CameraGet().GetPos().z > 0 )
         {
             render_solder_mask_layer( B_Mask, m_settings.GetLayerTopZpos3DU( B_Mask ),
@@ -721,6 +815,9 @@ bool C3D_RENDER_OGL_LEGACY::Redraw( bool aIsMoving,
             render_solder_mask_layer( B_Mask, m_settings.GetLayerTopZpos3DU( B_Mask ),
                                       aIsMoving );
         }
+
+        glDisable( GL_POLYGON_OFFSET_FILL );
+        glPolygonOffset( 0.0f, 0.0f );
     }
 
 
@@ -739,7 +836,7 @@ bool C3D_RENDER_OGL_LEGACY::Redraw( bool aIsMoving,
     // Render Grid
     // /////////////////////////////////////////////////////////////////////////
 
-    if( m_settings.GridGet() != GRID3D_NONE )
+    if( m_settings.GridGet() != GRID3D_TYPE::NONE )
     {
         glDisable( GL_LIGHTING );
 
@@ -789,7 +886,7 @@ bool C3D_RENDER_OGL_LEGACY::initializeOpenGL()
 
     CIMAGE *circleImage_Copy = new CIMAGE( *circleImage );
 
-    circleImage->EfxFilter( circleImage_Copy, FILTER_BLUR_3X3 );
+    circleImage->EfxFilter( circleImage_Copy, IMAGE_FILTER::BLUR_3X3 );
 
     m_ogl_circle_texture = OGL_LoadTexture( *circleImage );
 
@@ -979,18 +1076,13 @@ void C3D_RENDER_OGL_LEGACY::render_3D_models( bool aRenderTopOrBot,
                                               bool aRenderTransparentOnly )
 {
     // Go for all modules
-    if( m_settings.GetBoard()->m_Modules.GetCount() )
+    for( auto module : m_settings.GetBoard()->Modules() )
     {
-        for( const MODULE* module = m_settings.GetBoard()->m_Modules;
-             module;
-             module = module->Next() )
-        {
-            if( !module->Models().empty() )
-                if( m_settings.ShouldModuleBeDisplayed( (MODULE_ATTR_T)module->GetAttributes() ) )
-                    if( ( aRenderTopOrBot && !module->IsFlipped()) ||
-                        (!aRenderTopOrBot &&  module->IsFlipped()) )
-                        render_3D_module( module, aRenderTransparentOnly );
-        }
+        if( !module->Models().empty() )
+            if( m_settings.ShouldModuleBeDisplayed( (MODULE_ATTR_T) module->GetAttributes() ) )
+                if( ( aRenderTopOrBot && !module->IsFlipped() )
+                        || ( !aRenderTopOrBot && module->IsFlipped() ) )
+                    render_3D_module( module, aRenderTransparentOnly );
     }
 }
 
@@ -1026,8 +1118,8 @@ void C3D_RENDER_OGL_LEGACY::render_3D_module( const MODULE* module,
                   modelunit_to_3d_units_factor );
 
         // Get the list of model files for this model
-        std::list<S3D_INFO>::const_iterator sM = module->Models().begin();
-        std::list<S3D_INFO>::const_iterator eM = module->Models().end();
+        auto sM = module->Models().begin();
+        auto eM = module->Models().end();
 
         while( sM != eM )
         {
@@ -1046,9 +1138,7 @@ void C3D_RENDER_OGL_LEGACY::render_3D_module( const MODULE* module,
                         {
                             glPushMatrix();
 
-                            glTranslatef( sM->m_Offset.x * 25.4f,
-                                          sM->m_Offset.y * 25.4f,
-                                          sM->m_Offset.z * 25.4f );
+                            glTranslatef( sM->m_Offset.x, sM->m_Offset.y, sM->m_Offset.z );
 
                             glRotatef( -sM->m_Rotation.z, 0.0f, 0.0f, 1.0f );
                             glRotatef( -sM->m_Rotation.y, 0.0f, 1.0f, 0.0f );
@@ -1102,7 +1192,7 @@ void C3D_RENDER_OGL_LEGACY::generate_new_3DGrid( GRID3D_TYPE aGridType )
 
     m_ogl_disp_list_grid = 0;
 
-    if( aGridType == GRID3D_NONE )
+    if( aGridType == GRID3D_TYPE::NONE )
         return;
 
     m_ogl_disp_list_grid = glGenLists( 1 );
@@ -1130,18 +1220,18 @@ void C3D_RENDER_OGL_LEGACY::generate_new_3DGrid( GRID3D_TYPE aGridType )
     switch( aGridType )
     {
     default:
-    case GRID3D_NONE:
+    case GRID3D_TYPE::NONE:
         return;
-    case GRID3D_1MM:
+    case GRID3D_TYPE::GRID_1MM:
         griSizeMM = 1.0;
         break;
-    case GRID3D_2P5MM:
+    case GRID3D_TYPE::GRID_2P5MM:
         griSizeMM = 2.5;
         break;
-    case GRID3D_5MM:
+    case GRID3D_TYPE::GRID_5MM:
         griSizeMM = 5.0;
         break;
-    case GRID3D_10MM:
+    case GRID3D_TYPE::GRID_10MM:
         griSizeMM = 10.0;
         break;
     }

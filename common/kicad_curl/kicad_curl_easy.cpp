@@ -25,11 +25,11 @@
 #include <kicad_curl/kicad_curl.h>
 #include <kicad_curl/kicad_curl_easy.h>
 
+#include <cstdarg>
 #include <cstddef>
 #include <exception>
-#include <stdarg.h>
-#include <sstream>
 #include <ki_exception.h>   // THROW_IO_ERROR
+#include <sstream>
 
 
 static size_t write_callback( void* contents, size_t size, size_t nmemb, void* userp )
@@ -141,4 +141,15 @@ bool KICAD_CURL_EASY::SetFollowRedirects( bool aFollow )
         return true;
     }
     return false;
+}
+
+
+std::string KICAD_CURL_EASY::Escape( const std::string& aUrl )
+{
+    char* escaped = curl_easy_escape( m_CURL, aUrl.c_str(), aUrl.length() );
+
+    std::string ret( escaped );
+    curl_free( escaped );
+
+    return ret;
 }

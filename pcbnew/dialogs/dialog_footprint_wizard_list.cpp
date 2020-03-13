@@ -28,20 +28,21 @@
 
 #include <wx/grid.h>
 
-#include <fctsys.h>
 #include <pcbnew.h>
+#include <pcbnew_settings.h>
+#include <pgm_base.h>
+#include <settings/settings_manager.h>
 #include <kiface_i.h>
 #include <dialog_footprint_wizard_list.h>
-#include <class_footprint_wizard.h>
 #include <footprint_wizard_frame.h>
 
 #if defined(KICAD_SCRIPTING) || defined(KICAD_SCRIPTING_WXPYTHON)
 #include <python_scripting.h>
 #else
 // Dummy functions, actually defined in python_scripting.h when KICAD_SCRIPTING is enabled
-static void pcbnewGetWizardsBackTrace( wxString& aText ) {};
-static void pcbnewGetScriptsSearchPaths( wxString& aText ) {};
-static void pcbnewGetUnloadableScriptNames( wxString& aText ) {};
+static void pcbnewGetWizardsBackTrace( wxString& aText ) {}
+static void pcbnewGetScriptsSearchPaths( wxString& aText ) {}
+static void pcbnewGetUnloadableScriptNames( wxString& aText ) {}
 #endif
 
 enum FPGeneratorRowNames
@@ -51,23 +52,18 @@ enum FPGeneratorRowNames
     FP_GEN_ROW_DESCR,
 };
 
-#define FPWIZARTDLIST_HEIGHT_KEY wxT( "FpWizardListHeight" )
-#define FPWIZARTDLIST_WIDTH_KEY  wxT( "FpWizardListWidth" )
 
 DIALOG_FOOTPRINT_WIZARD_LIST::DIALOG_FOOTPRINT_WIZARD_LIST( wxWindow* aParent )
     : DIALOG_FOOTPRINT_WIZARD_LIST_BASE( aParent )
 {
-    m_config = Kiface().KifaceSettings();
     initLists();
 
-    if( m_config )
-    {
-        wxSize size;
-        m_config->Read( FPWIZARTDLIST_WIDTH_KEY, &size.x, -1 );
-        m_config->Read( FPWIZARTDLIST_HEIGHT_KEY, &size.y, -1 );
-        SetSize( size );
-    }
+    auto cfg = Pgm().GetSettingsManager().GetAppSettings<PCBNEW_SETTINGS>();
 
+    wxSize size;
+    size.x = cfg->m_FootprintWizardList.width;
+    size.y = cfg->m_FootprintWizardList.height;
+    SetSize( size );
 
     m_sdbSizerOK->SetDefault();
     FinishDialogSettings();
@@ -78,10 +74,12 @@ DIALOG_FOOTPRINT_WIZARD_LIST::DIALOG_FOOTPRINT_WIZARD_LIST( wxWindow* aParent )
 
 DIALOG_FOOTPRINT_WIZARD_LIST::~DIALOG_FOOTPRINT_WIZARD_LIST()
 {
-    if( m_config && !IsIconized() )
+    if( !IsIconized() )
     {
-        m_config->Write( FPWIZARTDLIST_WIDTH_KEY, GetSize().x );
-        m_config->Write( FPWIZARTDLIST_HEIGHT_KEY, GetSize().y );
+        auto cfg = Pgm().GetSettingsManager().GetAppSettings<PCBNEW_SETTINGS>();
+
+        cfg->m_FootprintWizardList.width  = GetSize().x;
+        cfg->m_FootprintWizardList.height = GetSize().y;
     }
 }
 
@@ -91,10 +89,10 @@ void DIALOG_FOOTPRINT_WIZARD_LIST::initLists()
     // Current wizard selection, empty or first
     m_footprintWizard = NULL;
 
-    int n_wizards = FOOTPRINT_WIZARDS::GetWizardsCount();
+    int n_wizards = FOOTPRINT_WIZARD_LIST::GetWizardsCount();
 
     if( n_wizards )
-        m_footprintWizard = FOOTPRINT_WIZARDS::GetWizard( 0 );
+        m_footprintWizard = FOOTPRINT_WIZARD_LIST::GetWizard( 0 );
 
     // Choose selection mode and insert the needed rows
 
@@ -112,7 +110,7 @@ void DIALOG_FOOTPRINT_WIZARD_LIST::initLists()
     for( int ii = 0; ii < n_wizards; ii++ )
     {
         wxString num = wxString::Format( "%d", ii+1 );
-        FOOTPRINT_WIZARD *wizard = FOOTPRINT_WIZARDS::GetWizard( ii );
+        FOOTPRINT_WIZARD *wizard = FOOTPRINT_WIZARD_LIST::GetWizard( ii );
         wxString name = wizard->GetName();
         wxString description = wizard->GetDescription();
         wxString image = wizard->GetImage();
@@ -133,9 +131,11 @@ void DIALOG_FOOTPRINT_WIZARD_LIST::initLists()
     if ( width > m_footprintGeneratorsGrid->GetColMinimalAcceptableWidth() )
         m_footprintGeneratorsGrid->SetColSize( FP_GEN_ROW_DESCR, width );
 
-    // Select the first row
+    // Select the first row if it exists
     m_footprintGeneratorsGrid->ClearSelection();
-    m_footprintGeneratorsGrid->SelectRow( 0, false );
+
+    if( m_footprintGeneratorsGrid->GetNumberRows() > 0 )
+        m_footprintGeneratorsGrid->SelectRow( 0, false );
 
     // Display info about scripts: Search paths
     wxString message;
@@ -168,7 +168,7 @@ void DIALOG_FOOTPRINT_WIZARD_LIST::onUpdatePythonModulesClick( wxCommandEvent& e
 void DIALOG_FOOTPRINT_WIZARD_LIST::OnCellFpGeneratorClick( wxGridEvent& event )
 {
     int click_row = event.GetRow();
-    m_footprintWizard = FOOTPRINT_WIZARDS::GetWizard( click_row );
+    m_footprintWizard = FOOTPRINT_WIZARD_LIST::GetWizard( click_row );
     m_footprintGeneratorsGrid->SelectRow( event.GetRow(), false );
     // Move the grid cursor to the active line, mainly for aesthetic reasons:
     m_footprintGeneratorsGrid->GoToCell( event.GetRow(), FP_GEN_ROW_NUMBER );

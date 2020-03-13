@@ -1,12 +1,8 @@
-/**
- * @file pl_editor_undo_redo.cpp
- * @brief page layout editor: undo and redo functions
- */
-
 /*
  * This program source code file is part of KiCad, a free EDA CAD application.
  *
  * Copyright (C) 2013 CERN
+ * Copyright (C) 2019 KiCad Developers, see AUTHORS.txt for contributors.
  * @author Jean-Pierre Charras, jp.charras at wanadoo.fr
  *
  * This program is free software; you can redistribute it and/or
@@ -28,54 +24,23 @@
  */
 
 #include <fctsys.h>
-#include <class_drawpanel.h>
 #include <macros.h>
-#include <worksheet_shape_builder.h>
+#include <ws_data_model.h>
+#include <ws_draw_item.h>
 
 #include <pl_editor_frame.h>
+#include <tool/tool_manager.h>
+#include <tools/pl_selection_tool.h>
+#include <ws_proxy_undo_item.h>
+#include <tool/actions.h>
 
-/* Note: the Undo/redo commands use a "brute" method:
- * the full page layout is converted to a S expression, and saved as string.
- * When a previous version is needed, the old string is parsed,
- * and the description replaces the current desc, just like reading a new file
- *
- * This is not optimal from the memory point of view, but:
- * - the descriptions are never very long (max few thousand of bytes)
- * - this is very easy to code
- */
-
-// A helper class used in undo/redo commad:
-class PL_ITEM_LAYOUT: public EDA_ITEM
+void PL_EDITOR_FRAME::SaveCopyInUndoList( bool aSavePageSettingsAndTitleBlock )
 {
-public:
-    wxString m_Layout;
+    PICKED_ITEMS_LIST*  lastcmd = new PICKED_ITEMS_LIST();
+    WS_PROXY_UNDO_ITEM* copyItem = new WS_PROXY_UNDO_ITEM( this );
+    ITEM_PICKER         wrapper( copyItem, UR_LIBEDIT );
 
-public:
-    PL_ITEM_LAYOUT() : EDA_ITEM( TYPE_PL_EDITOR_LAYOUT ) {}
-
-    // Required to keep compiler happy on debug builds.
-#if defined(DEBUG)
-    virtual void Show( int nestLevel, std::ostream& os ) const override {}
-#endif
-
-    /** Get class name
-     * @return  string "PL_ITEM_LAYOUT"
-     */
-    virtual wxString GetClass() const override
-    {
-        return wxT( "PL_ITEM_LAYOUT" );
-    }
-};
-
-void PL_EDITOR_FRAME::SaveCopyInUndoList()
-{
-    PL_ITEM_LAYOUT* copyItem = new PL_ITEM_LAYOUT;
-    WORKSHEET_LAYOUT& pglayout = WORKSHEET_LAYOUT::GetTheInstance();
-    pglayout.SaveInString( copyItem->m_Layout );
-
-    PICKED_ITEMS_LIST* lastcmd = new PICKED_ITEMS_LIST();
-    ITEM_PICKER wrapper( copyItem, UR_LIBEDIT );
-    lastcmd->PushItem(wrapper);
+    lastcmd->PushItem( wrapper );
     GetScreen()->PushCommandToUndoList( lastcmd );
 
     // Clear redo list, because after new save there is no redo to do.
@@ -83,79 +48,101 @@ void PL_EDITOR_FRAME::SaveCopyInUndoList()
 }
 
 
-/* Redo the last edition:
+/* Redo the last edit:
  * - Place the current edited layout in undo list
  * - Get previous version of the current edited layput
  */
-void PL_EDITOR_FRAME::GetLayoutFromRedoList( wxCommandEvent& event )
+void PL_EDITOR_FRAME::GetLayoutFromRedoList()
 {
+    PL_SELECTION_TOOL*  selTool = GetToolManager()->GetTool<PL_SELECTION_TOOL>();
+
     if ( GetScreen()->GetRedoCommandCount() <= 0 )
         return;
 
-    PICKED_ITEMS_LIST* lastcmd = new PICKED_ITEMS_LIST();
-    PL_ITEM_LAYOUT* copyItem = new PL_ITEM_LAYOUT;
-    WORKSHEET_LAYOUT& pglayout = WORKSHEET_LAYOUT::GetTheInstance();
-    pglayout.SaveInString( copyItem->m_Layout );
+    ITEM_PICKER         redoWrapper = GetScreen()->PopCommandFromRedoList()->PopItem();
+    WS_PROXY_UNDO_ITEM* redoItem = static_cast<WS_PROXY_UNDO_ITEM*>( redoWrapper.GetItem() );
+    bool                pageSettingsAndTitleBlock = redoItem->Type() == WS_PROXY_UNDO_ITEM_PLUS_T;
 
-    ITEM_PICKER wrapper( copyItem, UR_LIBEDIT );
+    PICKED_ITEMS_LIST*  undoCmd = new PICKED_ITEMS_LIST();
 
-    lastcmd->PushItem( wrapper );
-    GetScreen()->PushCommandToUndoList( lastcmd );
+    undoCmd->PushItem( new WS_PROXY_UNDO_ITEM( pageSettingsAndTitleBlock ? this : nullptr ) );
+    GetScreen()->PushCommandToUndoList( undoCmd );
 
-    lastcmd = GetScreen()->PopCommandFromRedoList();
+    selTool->ClearSelection();
+    redoItem->Restore( this, GetCanvas()->GetView() );
+    selTool->RebuildSelection();
 
-    wrapper = lastcmd->PopItem();
-    copyItem = static_cast<PL_ITEM_LAYOUT*>( wrapper.GetItem() );
-    pglayout.SetPageLayout( TO_UTF8(copyItem->m_Layout) );
-    delete copyItem;
+    delete redoItem;
+
+    if( pageSettingsAndTitleBlock )
+        HardRedraw();   // items based off of corners will need re-calculating
+    else
+        GetCanvas()->Refresh();
 
     OnModify();
-    RebuildDesignTree();
-    m_canvas->Refresh();
 }
 
 
-/* Undo the last edition:
+/* Undo the last edit:
  * - Place the current layout in Redo list
  * - Get previous version of the current edited layout
  */
-void PL_EDITOR_FRAME::GetLayoutFromUndoList( wxCommandEvent& event )
+void PL_EDITOR_FRAME::GetLayoutFromUndoList()
 {
+    PL_SELECTION_TOOL*  selTool = GetToolManager()->GetTool<PL_SELECTION_TOOL>();
+
     if ( GetScreen()->GetUndoCommandCount() <= 0 )
         return;
 
-    PICKED_ITEMS_LIST* lastcmd = new PICKED_ITEMS_LIST();
-    PL_ITEM_LAYOUT* copyItem = new PL_ITEM_LAYOUT;
-    WORKSHEET_LAYOUT& pglayout = WORKSHEET_LAYOUT::GetTheInstance();
-    pglayout.SaveInString( copyItem->m_Layout );
+    ITEM_PICKER         undoWrapper = GetScreen()->PopCommandFromUndoList()->PopItem();
+    WS_PROXY_UNDO_ITEM* undoItem = static_cast<WS_PROXY_UNDO_ITEM*>( undoWrapper.GetItem() );
+    bool                pageSettingsAndTitleBlock = undoItem->Type() == WS_PROXY_UNDO_ITEM_PLUS_T;
 
-    ITEM_PICKER wrapper( copyItem, UR_LIBEDIT );
-    lastcmd->PushItem( wrapper );
-    GetScreen()->PushCommandToRedoList( lastcmd );
+    PICKED_ITEMS_LIST*  redoCmd = new PICKED_ITEMS_LIST();
 
-    lastcmd = GetScreen()->PopCommandFromUndoList();
+    redoCmd->PushItem( new WS_PROXY_UNDO_ITEM( pageSettingsAndTitleBlock ? this : nullptr ) );
+    GetScreen()->PushCommandToRedoList( redoCmd );
 
-    wrapper = lastcmd->PopItem();
-    copyItem = static_cast<PL_ITEM_LAYOUT*>( wrapper.GetItem() );
-    pglayout.SetPageLayout( TO_UTF8(copyItem->m_Layout) );
-    delete copyItem;
+    selTool->ClearSelection();
+    undoItem->Restore( this, GetCanvas()->GetView() );
+    selTool->RebuildSelection();
+
+    delete undoItem;
+
+    if( pageSettingsAndTitleBlock )
+        HardRedraw();   // items based off of corners will need re-calculating
+    else
+        GetCanvas()->Refresh();
 
     OnModify();
-    RebuildDesignTree();
-    m_canvas->Refresh();
 }
+
 
 /* Remove the last command in Undo List.
  * Used to clean the uUndo stack after a cancel command
  */
-void PL_EDITOR_FRAME::RemoveLastCommandInUndoList()
+void PL_EDITOR_FRAME::RollbackFromUndo()
 {
+    PL_SELECTION_TOOL*  selTool = GetToolManager()->GetTool<PL_SELECTION_TOOL>();
+
     if ( GetScreen()->GetUndoCommandCount() <= 0 )
         return;
 
-    PICKED_ITEMS_LIST* lastcmd = GetScreen()->PopCommandFromUndoList();
+    ITEM_PICKER         undoWrapper = GetScreen()->PopCommandFromUndoList()->PopItem();
+    WS_PROXY_UNDO_ITEM* undoItem = static_cast<WS_PROXY_UNDO_ITEM*>( undoWrapper.GetItem() );
+    bool                pageSettingsAndTitleBlock = undoItem->Type() == WS_PROXY_UNDO_ITEM_PLUS_T;
 
-    ITEM_PICKER wrapper = lastcmd->PopItem();
-    PL_ITEM_LAYOUT* copyItem = static_cast<PL_ITEM_LAYOUT*>( wrapper.GetItem() );
-    delete copyItem;
+    selTool->ClearSelection();
+    undoItem->Restore( this, GetCanvas()->GetView() );
+    selTool->RebuildSelection();
+
+    delete undoItem;
+
+    if( pageSettingsAndTitleBlock )
+    {
+        GetToolManager()->RunAction( ACTIONS::zoomFitScreen, true );
+        HardRedraw();   // items based off of corners will need re-calculating
+    }
+    else
+        GetCanvas()->Refresh();
 }

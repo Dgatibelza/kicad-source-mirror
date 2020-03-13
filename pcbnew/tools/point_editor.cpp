@@ -1,7 +1,7 @@
 /*
  * This program source code file is part of KiCad, a free EDA CAD application.
  *
- * Copyright (C) 2013-2017 CERN
+ * Copyright (C) 2013-2019 CERN
  * @author Maciej Suminski <maciej.suminski@cern.ch>
  *
  * This program is free software; you can redistribute it and/or
@@ -23,37 +23,26 @@
  */
 
 #include <functional>
+#include <memory>
 using namespace std::placeholders;
-
 #include <tool/tool_manager.h>
 #include <view/view_controls.h>
 #include <gal/graphics_abstraction_layer.h>
 #include <geometry/seg.h>
 #include <confirm.h>
-
 #include "pcb_actions.h"
 #include "selection_tool.h"
 #include "point_editor.h"
+#include "grid_helper.h"
 #include <board_commit.h>
 #include <bitmaps.h>
-
-#include <wxPcbStruct.h>
+#include <status_popup.h>
+#include <pcb_edit_frame.h>
 #include <class_edge_mod.h>
 #include <class_dimension.h>
 #include <class_zone.h>
-#include <class_board.h>
-#include <class_module.h>
-#include <connectivity.h>
-
-// Point editor
-TOOL_ACTION PCB_ACTIONS::pointEditorAddCorner( "pcbnew.PointEditor.addCorner",
-        AS_GLOBAL, 0,
-        _( "Create Corner" ), _( "Create a corner" ), add_corner_xpm );
-
-TOOL_ACTION PCB_ACTIONS::pointEditorRemoveCorner( "pcbnew.PointEditor.removeCorner",
-        AS_GLOBAL, 0,
-        _( "Remove Corner" ), _( "Remove corner" ), delete_xpm );
-
+#include <connectivity/connectivity_data.h>
+#include <widgets/progress_reporter.h>
 
 // Few constants to avoid using bare numbers for point indices
 enum SEG_POINTS
@@ -63,12 +52,20 @@ enum SEG_POINTS
 
 enum ARC_POINTS
 {
-    ARC_CENTER, ARC_START, ARC_END
+    ARC_CENTER, ARC_START, ARC_MID, ARC_END
 };
 
 enum CIRCLE_POINTS
 {
     CIRC_CENTER, CIRC_END
+};
+
+enum BEZIER_CURVE_POINTS
+{
+    BEZIER_CURVE_START,
+    BEZIER_CURVE_CONTROL_POINT1,
+    BEZIER_CURVE_CONTROL_POINT2,
+    BEZIER_CURVE_END
 };
 
 enum DIMENSION_POINTS
@@ -83,7 +80,8 @@ class EDIT_POINTS_FACTORY
 {
 private:
 
-    static void buildForPolyOutline( std::shared_ptr<EDIT_POINTS> points, const SHAPE_POLY_SET* aOutline, KIGFX::GAL* aGal )
+    static void buildForPolyOutline( std::shared_ptr<EDIT_POINTS> points,
+                                     const SHAPE_POLY_SET* aOutline, KIGFX::GAL* aGal )
     {
 
         int cornersCount = aOutline->TotalVertices();
@@ -96,8 +94,8 @@ private:
                 points->AddBreak();
         }
 
-    // Lines have to be added after creating edit points,
-    // as they use EDIT_POINT references
+        // Lines have to be added after creating edit points,
+        // as they use EDIT_POINT references
         for( int i = 0; i < cornersCount - 1; ++i )
         {
             if( points->IsContourEnd( i ) )
@@ -114,7 +112,7 @@ private:
                             std::bind( &KIGFX::GAL::GetGridPoint, aGal, _1 ) ) );
         }
 
-    // The last missing line, connecting the last and the first polygon point
+        // The last missing line, connecting the last and the first polygon point
         points->AddLine( points->Point( cornersCount - 1 ),
                 points->Point( points->GetContourStartIdx( cornersCount - 1 ) ) );
 
@@ -149,6 +147,7 @@ public:
                 case S_ARC:
                     points->AddPoint( segment->GetCenter() );
                     points->AddPoint( segment->GetArcStart() );
+                    points->AddPoint( segment->GetArcMid() );
                     points->AddPoint( segment->GetArcEnd() );
 
                     // Set constraints
@@ -156,18 +155,27 @@ public:
                     points->Point( ARC_END ).SetConstraint( new EC_CIRCLE( points->Point( ARC_END ),
                                                                            points->Point( ARC_CENTER ),
                                                                            points->Point( ARC_START ) ) );
+
+                    points->Point( ARC_MID ).SetConstraint( new EC_LINE( points->Point( ARC_MID ),
+                                                                         points->Point( ARC_CENTER ) ) );
                     break;
 
                 case S_CIRCLE:
                     points->AddPoint( segment->GetCenter() );
                     points->AddPoint( segment->GetEnd() );
+
                     break;
 
                 case S_POLYGON:
-                {
                     buildForPolyOutline( points, &segment->GetPolyShape(), aGal );
                     break;
-                }
+
+                case S_CURVE:
+                    points->AddPoint( segment->GetStart() );
+                    points->AddPoint( segment->GetBezControl1() );
+                    points->AddPoint( segment->GetBezControl2() );
+                    points->AddPoint( segment->GetEnd() );
+                    break;
 
                 default:        // suppress warnings
                     break;
@@ -176,6 +184,7 @@ public:
                 break;
             }
 
+            case PCB_MODULE_ZONE_AREA_T:
             case PCB_ZONE_AREA_T:
             {
                 auto zone = static_cast<const ZONE_CONTAINER*>( aItem );
@@ -215,29 +224,35 @@ private:
 
 
 POINT_EDITOR::POINT_EDITOR() :
-    TOOL_INTERACTIVE( "pcbnew.PointEditor" ), m_selectionTool( NULL ), m_editedPoint( NULL ),
-    m_original( VECTOR2I( 0, 0 ) ), m_altConstrainer( VECTOR2I( 0, 0 ) )
+    PCB_TOOL_BASE( "pcbnew.PointEditor" ),
+    m_selectionTool( NULL ),
+    m_editedPoint( NULL ),
+    m_original( VECTOR2I( 0, 0 ) ),
+    m_altConstrainer( VECTOR2I( 0, 0 ) ),
+    m_refill( false )
 {
 }
 
 
 void POINT_EDITOR::Reset( RESET_REASON aReason )
 {
+    m_refill = false;
     m_editPoints.reset();
     m_altConstraint.reset();
+    getViewControls()->SetAutoPan( false );
+
+    m_statusPopup = std::make_unique<STATUS_TEXT_POPUP>( getEditFrame<PCB_BASE_EDIT_FRAME>() );
+    m_statusPopup->SetTextColor( wxColour( 255, 0, 0 ) );
+    m_statusPopup->SetText( _( "Self-intersecting polygons are not allowed." ) );
 }
 
 
 bool POINT_EDITOR::Init()
 {
     // Find the selection tool, so they can cooperate
-    m_selectionTool = static_cast<SELECTION_TOOL*>( m_toolMgr->FindTool( "pcbnew.InteractiveSelection" ) );
+    m_selectionTool = m_toolMgr->GetTool<SELECTION_TOOL>();
 
-    if( !m_selectionTool )
-    {
-        DisplayError( NULL, wxT( "pcbnew.InteractiveSelection tool is not available" ) );
-        return false;
-    }
+    wxASSERT_MSG( m_selectionTool, _( "pcbnew.InteractiveSelection tool is not available" ) );
 
     auto& menu = m_selectionTool->GetToolMenu().GetMenu();
     menu.AddItem( PCB_ACTIONS::pointEditorAddCorner, POINT_EDITOR::addCornerCondition );
@@ -250,7 +265,7 @@ bool POINT_EDITOR::Init()
 
 void POINT_EDITOR::updateEditedPoint( const TOOL_EVENT& aEvent )
 {
-    EDIT_POINT* point = m_editedPoint;
+    EDIT_POINT* point;
 
     if( aEvent.IsMotion() )
     {
@@ -260,6 +275,10 @@ void POINT_EDITOR::updateEditedPoint( const TOOL_EVENT& aEvent )
     {
         point = m_editPoints->FindPoint( aEvent.DragOrigin(), getView() );
     }
+    else
+    {
+        point = m_editPoints->FindPoint( getViewControls()->GetCursorPosition(), getView() );
+    }
 
     if( m_editedPoint != point )
         setEditedPoint( point );
@@ -268,9 +287,12 @@ void POINT_EDITOR::updateEditedPoint( const TOOL_EVENT& aEvent )
 
 int POINT_EDITOR::OnSelectionChange( const TOOL_EVENT& aEvent )
 {
-    const SELECTION& selection = m_selectionTool->GetSelection();
+    if( !m_selectionTool )
+        return 0;
 
-    if( selection.Size() != 1 )
+    const PCBNEW_SELECTION& selection = m_selectionTool->GetSelection();
+
+    if( selection.Size() != 1 || selection.Front()->GetEditFlags() )
         return 0;
 
     Activate();
@@ -278,7 +300,14 @@ int POINT_EDITOR::OnSelectionChange( const TOOL_EVENT& aEvent )
     KIGFX::VIEW_CONTROLS* controls = getViewControls();
     KIGFX::VIEW* view = getView();
     PCB_BASE_EDIT_FRAME* editFrame = getEditFrame<PCB_BASE_EDIT_FRAME>();
-    auto item = selection.Front();
+
+    controls->ShowCursor( true );
+
+    GRID_HELPER grid( editFrame );
+    BOARD_ITEM* item = static_cast<BOARD_ITEM*>( selection.Front() );
+
+    if( !item )
+        return 0;
 
     m_editPoints = EDIT_POINTS_FACTORY::Make( item, getView()->GetGAL() );
 
@@ -286,100 +315,99 @@ int POINT_EDITOR::OnSelectionChange( const TOOL_EVENT& aEvent )
         return 0;
 
     view->Add( m_editPoints.get() );
-    m_editedPoint = NULL;
-    bool modified = false;
-    bool revert = false;
+    setEditedPoint( nullptr );
+    updateEditedPoint( aEvent );
+    m_refill = false;
+    bool inDrag = false;
 
     BOARD_COMMIT commit( editFrame );
+    LSET snapLayers = item->GetLayerSet();
+
+    if( item->Type() == PCB_DIMENSION_T )
+        snapLayers = LSET::AllLayersMask();
 
     // Main loop: keep receiving events
-    while( OPT_TOOL_EVENT evt = Wait() )
+    while( TOOL_EVENT* evt = Wait() )
     {
-        if( revert )
+        grid.SetSnap( !evt->Modifier( MD_SHIFT ) );
+        grid.SetUseGrid( !evt->Modifier( MD_ALT ) );
+        controls->SetSnapping( !evt->Modifier( MD_ALT ) );
+
+        if( !m_editPoints || evt->IsSelectionEvent() )
             break;
 
-        if( !m_editPoints ||
-            evt->Matches( m_selectionTool->ClearedEvent ) ||
-            evt->Matches( m_selectionTool->UnselectedEvent ) ||
-            evt->Matches( m_selectionTool->SelectedEvent ) )
-        {
-            break;
-        }
-
-        if ( !modified )
+        if ( !inDrag )
             updateEditedPoint( *evt );
 
         if( evt->IsDrag( BUT_LEFT ) && m_editedPoint )
         {
-            if( !modified )
+            if( !inDrag )
             {
                 commit.StageItems( selection, CHT_MODIFY );
 
                 controls->ForceCursorPosition( false );
                 m_original = *m_editedPoint;    // Save the original position
                 controls->SetAutoPan( true );
-                modified = true;
+                inDrag = true;
+                grid.SetAuxAxes( true, m_original.GetPosition() );
             }
 
+            //TODO: unify the constraints to solve simultaneously instead of sequentially
+            m_editedPoint->SetPosition( grid.BestSnapAnchor( evt->Position(),
+                                                             snapLayers, { item } ) );
+
+            // The alternative constraint limits to 45°
             bool enableAltConstraint = !!evt->Modifier( MD_CTRL );
 
             if( enableAltConstraint != (bool) m_altConstraint )  // alternative constraint
                 setAltConstraint( enableAltConstraint );
-
-            m_editedPoint->SetPosition( controls->GetCursorPosition() );
 
             if( m_altConstraint )
                 m_altConstraint->Apply();
             else
                 m_editedPoint->ApplyConstraint();
 
+            m_editedPoint->SetPosition( grid.BestSnapAnchor( m_editedPoint->GetPosition(),
+                                                             snapLayers, { item } ) );
+
             updateItem();
             updatePoints();
         }
 
-        else if( evt->IsMouseUp( BUT_LEFT ) )
+        else if( inDrag && evt->IsMouseUp( BUT_LEFT ) )
         {
             controls->SetAutoPan( false );
             setAltConstraint( false );
 
-            if( modified )
-            {
-                commit.Push( _( "Drag a line ending" ) );
-                modified = false;
-            }
-
-            m_toolMgr->PassEvent();
+            commit.Push( _( "Drag a corner" ) );
+            inDrag = false;
+            m_refill = true;
         }
 
-        else if( evt->IsCancel() )
+        else if( evt->IsCancelInteractive() || evt->IsActivate() )
         {
-            if( modified )      // Restore the last change
-                revert = true;
+            if( inDrag )      // Restore the last change
+                commit.Revert();
+            else if( evt->IsCancelInteractive() )
+                break;
 
-            // Let the selection tool receive the event too
-            m_toolMgr->PassEvent();
-
-            // Do not exit right now, let the selection clear the selection
-            //break;
+            if( evt->IsActivate() && !evt->IsMoveTool() )
+                break;
         }
 
         else
-        {
-            m_toolMgr->PassEvent();
-        }
+            evt->SetPassEvent();
     }
 
     if( m_editPoints )
     {
         view->Remove( m_editPoints.get() );
 
-        if( modified && revert )
-            commit.Revert();
-        else
-            finishItem();
-
+        finishItem();
         m_editPoints.reset();
     }
+
+    frame()->UpdateMsgPanel();
 
     return 0;
 }
@@ -388,6 +416,8 @@ int POINT_EDITOR::OnSelectionChange( const TOOL_EVENT& aEvent )
 void POINT_EDITOR::updateItem() const
 {
     EDA_ITEM* item = m_editPoints->GetParent();
+
+    const BOARD_DESIGN_SETTINGS& boardSettings = board()->GetDesignSettings();
 
     if( !item )
         return;
@@ -413,9 +443,10 @@ void POINT_EDITOR::updateItem() const
 
         case S_ARC:
         {
-            const VECTOR2I& center = m_editPoints->Point( ARC_CENTER ).GetPosition();
-            const VECTOR2I& start = m_editPoints->Point( ARC_START ).GetPosition();
-            const VECTOR2I& end = m_editPoints->Point( ARC_END ).GetPosition();
+            VECTOR2I center = m_editPoints->Point( ARC_CENTER ).GetPosition();
+            VECTOR2I mid = m_editPoints->Point( ARC_MID ).GetPosition();
+            VECTOR2I start = m_editPoints->Point( ARC_START ).GetPosition();
+            VECTOR2I end = m_editPoints->Point( ARC_END ).GetPosition();
 
             if( center != segment->GetCenter() )
             {
@@ -424,14 +455,21 @@ void POINT_EDITOR::updateItem() const
 
                 m_editPoints->Point( ARC_START ).SetPosition( segment->GetArcStart() );
                 m_editPoints->Point( ARC_END ).SetPosition( segment->GetArcEnd() );
+                m_editPoints->Point( ARC_MID ).SetPosition( segment->GetArcMid() );
             }
-
             else
             {
+                if( mid != segment->GetArcMid() )
+                {
+                    center = GetArcCenter( start, mid, end );
+                    segment->SetCenter( wxPoint( center.x, center.y ) );
+                    m_editPoints->Point( ARC_CENTER ).SetPosition( center );
+                }
+
                 segment->SetArcStart( wxPoint( start.x, start.y ) );
 
                 VECTOR2D startLine = start - center;
-                VECTOR2I endLine = end - center;
+                VECTOR2D endLine = end - center;
                 double newAngle = RAD2DECIDEG( endLine.Angle() - startLine.Angle() );
 
                 // Adjust the new angle to (counter)clockwise setting
@@ -468,14 +506,31 @@ void POINT_EDITOR::updateItem() const
 
         case S_POLYGON:
         {
-            SHAPE_POLY_SET* outline = &segment->GetPolyShape();
+            SHAPE_POLY_SET& outline = segment->GetPolyShape();
 
-            for( int i = 0; i < outline->TotalVertices(); ++i )
-            {
-                VECTOR2I point = m_editPoints->Point( i ).GetPosition();
-                outline->Vertex( i ) = point;
-            }
+            for( int i = 0; i < outline.TotalVertices(); ++i )
+                outline.SetVertex( i, m_editPoints->Point( i ).GetPosition() );
+
+            validatePolygon( outline );
+            break;
         }
+
+        case S_CURVE:
+            if( isModified( m_editPoints->Point( BEZIER_CURVE_START ) ) )
+                segment->SetStart( wxPoint( m_editPoints->Point( BEZIER_CURVE_START ).GetPosition().x,
+                                            m_editPoints->Point( BEZIER_CURVE_START ).GetPosition().y ) );
+            else if( isModified( m_editPoints->Point( BEZIER_CURVE_CONTROL_POINT1 ) ) )
+                segment->SetBezControl1( wxPoint( m_editPoints->Point( BEZIER_CURVE_CONTROL_POINT1 ).GetPosition().x,
+                                          m_editPoints->Point( BEZIER_CURVE_CONTROL_POINT1 ).GetPosition().y ) );
+            else if( isModified( m_editPoints->Point( BEZIER_CURVE_CONTROL_POINT2 ) ) )
+                segment->SetBezControl2( wxPoint( m_editPoints->Point( BEZIER_CURVE_CONTROL_POINT2 ).GetPosition().x,
+                                            m_editPoints->Point( BEZIER_CURVE_CONTROL_POINT2 ).GetPosition().y ) );
+            else if( isModified( m_editPoints->Point( BEZIER_CURVE_END ) ) )
+                segment->SetEnd( wxPoint( m_editPoints->Point( BEZIER_CURVE_END ).GetPosition().x,
+                                          m_editPoints->Point( BEZIER_CURVE_END ).GetPosition().y ) );
+
+            segment->RebuildBezierToSegmentsPointsList( segment->GetWidth() );
+            break;
 
         default:        // suppress warnings
             break;
@@ -488,20 +543,23 @@ void POINT_EDITOR::updateItem() const
         break;
     }
 
+    case PCB_MODULE_ZONE_AREA_T:
     case PCB_ZONE_AREA_T:
     {
         ZONE_CONTAINER* zone = static_cast<ZONE_CONTAINER*>( item );
         zone->ClearFilledPolysList();
-        SHAPE_POLY_SET* outline = zone->Outline();
+        SHAPE_POLY_SET& outline = *zone->Outline();
 
-        for( int i = 0; i < outline->TotalVertices(); ++i )
+        for( int i = 0; i < outline.TotalVertices(); ++i )
         {
-            VECTOR2I point = m_editPoints->Point( i ).GetPosition();
-            outline->Vertex( i ) = point;
+            if( outline.CVertex( i ) != m_editPoints->Point( i ).GetPosition() )
+                zone->SetNeedRefill( true );
+
+            outline.SetVertex( i, m_editPoints->Point( i ).GetPosition() );
         }
 
+        validatePolygon( outline );
         zone->Hatch();
-
         break;
     }
 
@@ -516,9 +574,9 @@ void POINT_EDITOR::updateItem() const
             VECTOR2D crossBar( dimension->GetEnd() - dimension->GetOrigin() );
 
             if( featureLine.Cross( crossBar ) > 0 )
-                dimension->SetHeight( -featureLine.EuclideanNorm() );
+                dimension->SetHeight( -featureLine.EuclideanNorm(), boardSettings.m_DimensionPrecision );
             else
-                dimension->SetHeight( featureLine.EuclideanNorm() );
+                dimension->SetHeight( featureLine.EuclideanNorm(), boardSettings.m_DimensionPrecision );
         }
 
         else if( isModified( m_editPoints->Point( DIM_CROSSBARF ) ) )
@@ -527,14 +585,15 @@ void POINT_EDITOR::updateItem() const
             VECTOR2D crossBar( dimension->GetEnd() - dimension->GetOrigin() );
 
             if( featureLine.Cross( crossBar ) > 0 )
-                dimension->SetHeight( -featureLine.EuclideanNorm() );
+                dimension->SetHeight( -featureLine.EuclideanNorm(), boardSettings.m_DimensionPrecision );
             else
-                dimension->SetHeight( featureLine.EuclideanNorm() );
+                dimension->SetHeight( featureLine.EuclideanNorm(), boardSettings.m_DimensionPrecision );
         }
 
         else if( isModified( m_editPoints->Point( DIM_FEATUREGO ) ) )
         {
-            dimension->SetOrigin( wxPoint( m_editedPoint->GetPosition().x, m_editedPoint->GetPosition().y ) );
+            dimension->SetOrigin( wxPoint( m_editedPoint->GetPosition().x, m_editedPoint->GetPosition().y ),
+                                  boardSettings.m_DimensionPrecision );
             m_editPoints->Point( DIM_CROSSBARO ).SetConstraint( new EC_LINE( m_editPoints->Point( DIM_CROSSBARO ),
                                                                              m_editPoints->Point( DIM_FEATUREGO ) ) );
             m_editPoints->Point( DIM_CROSSBARF ).SetConstraint( new EC_LINE( m_editPoints->Point( DIM_CROSSBARF ),
@@ -543,7 +602,8 @@ void POINT_EDITOR::updateItem() const
 
         else if( isModified( m_editPoints->Point( DIM_FEATUREDO ) ) )
         {
-            dimension->SetEnd( wxPoint( m_editedPoint->GetPosition().x, m_editedPoint->GetPosition().y ) );
+            dimension->SetEnd( wxPoint( m_editedPoint->GetPosition().x, m_editedPoint->GetPosition().y ) ,
+                               boardSettings.m_DimensionPrecision );
             m_editPoints->Point( DIM_CROSSBARO ).SetConstraint( new EC_LINE( m_editPoints->Point( DIM_CROSSBARO ),
                                                                              m_editPoints->Point( DIM_FEATUREGO ) ) );
             m_editPoints->Point( DIM_CROSSBARF ).SetConstraint( new EC_LINE( m_editPoints->Point( DIM_CROSSBARF ),
@@ -556,26 +616,48 @@ void POINT_EDITOR::updateItem() const
     default:
         break;
     }
+
+    if( frame() )
+        frame()->SetMsgPanel( item );
 }
 
 
-void POINT_EDITOR::finishItem() const
+void POINT_EDITOR::finishItem()
 {
-    EDA_ITEM* item = m_editPoints->GetParent();
+    auto item = m_editPoints->GetParent();
 
     if( !item )
         return;
 
-    if( item->Type() == PCB_ZONE_AREA_T )
+    if( item->Type() == PCB_ZONE_AREA_T || item->Type() == PCB_MODULE_ZONE_AREA_T )
     {
-        ZONE_CONTAINER* zone = static_cast<ZONE_CONTAINER*>( item );
+        auto zone = static_cast<ZONE_CONTAINER*>( item );
 
-        if( zone->IsFilled() )
+        if( zone->IsFilled() && m_refill && zone->NeedRefill() )
+            m_toolMgr->RunAction( PCB_ACTIONS::zoneFill, true, zone );
+    }
+}
+
+
+bool POINT_EDITOR::validatePolygon( SHAPE_POLY_SET& aPoly ) const
+{
+    bool valid = !aPoly.IsSelfIntersecting();
+
+    if( m_statusPopup )
+    {
+        if( valid )
         {
-            getEditFrame<PCB_EDIT_FRAME>()->Fill_Zone( zone );
-//            zone->GetBoard()->GetRatsnest()->Recalculate( zone->GetNetCode() );
+            m_statusPopup->Hide();
+        }
+        else
+        {
+            wxPoint p = wxGetMousePosition() + wxPoint( 20, 20 );
+            m_statusPopup->Move( p );
+            m_statusPopup->PopupFor( 1500 );
         }
     }
+
+    return valid;
 }
 
 
@@ -595,41 +677,69 @@ void POINT_EDITOR::updatePoints()
     case PCB_MODULE_EDGE_T:
     {
         const DRAWSEGMENT* segment = static_cast<const DRAWSEGMENT*>( item );
+
+        switch( segment->GetShape() )
         {
-            switch( segment->GetShape() )
+        case S_SEGMENT:
+            m_editPoints->Point( SEG_START ).SetPosition( segment->GetStart() );
+            m_editPoints->Point( SEG_END ).SetPosition( segment->GetEnd() );
+            break;
+
+        case S_ARC:
+            m_editPoints->Point( ARC_CENTER ).SetPosition( segment->GetCenter() );
+            m_editPoints->Point( ARC_START ).SetPosition( segment->GetArcStart() );
+            m_editPoints->Point( ARC_MID ).SetPosition( segment->GetArcMid() );
+            m_editPoints->Point( ARC_END ).SetPosition( segment->GetArcEnd() );
+            break;
+
+        case S_CIRCLE:
+            m_editPoints->Point( CIRC_CENTER ).SetPosition( segment->GetCenter() );
+            m_editPoints->Point( CIRC_END ).SetPosition( segment->GetEnd() );
+            break;
+
+        case S_POLYGON:
+        {
+            const auto& points = segment->BuildPolyPointsList();
+
+            if( m_editPoints->PointsSize() != (unsigned) points.size() )
             {
-            case S_SEGMENT:
-                m_editPoints->Point( SEG_START ).SetPosition( segment->GetStart() );
-                m_editPoints->Point( SEG_END ).SetPosition( segment->GetEnd() );
-                break;
-
-            case S_ARC:
-                m_editPoints->Point( ARC_CENTER ).SetPosition( segment->GetCenter() );
-                m_editPoints->Point( ARC_START).SetPosition( segment->GetArcStart() );
-                m_editPoints->Point( ARC_END ).SetPosition( segment->GetArcEnd() );
-                break;
-
-            case S_CIRCLE:
-                m_editPoints->Point( CIRC_CENTER ).SetPosition( segment->GetCenter() );
-                m_editPoints->Point( CIRC_END ).SetPosition( segment->GetEnd() );
-                break;
-
-            default:        // suppress warnings
-                break;
+                getView()->Remove( m_editPoints.get() );
+                m_editedPoint = nullptr;
+                m_editPoints = EDIT_POINTS_FACTORY::Make( item, getView()->GetGAL() );
+                getView()->Add( m_editPoints.get() );
             }
-
+            else
+            {
+                for( unsigned i = 0; i < points.size(); i++ )
+                    m_editPoints->Point( i ).SetPosition( points[i] );
+            }
             break;
         }
+
+        case S_CURVE:
+            m_editPoints->Point( BEZIER_CURVE_START ).SetPosition( segment->GetStart() );
+            m_editPoints->Point( BEZIER_CURVE_CONTROL_POINT1 ).SetPosition( segment->GetBezControl1() );
+            m_editPoints->Point( BEZIER_CURVE_CONTROL_POINT2 ).SetPosition( segment->GetBezControl2() );
+            m_editPoints->Point( BEZIER_CURVE_END ).SetPosition( segment->GetEnd() );
+            break;
+
+        default:        // suppress warnings
+            break;
+        }
+
+        break;
     }
 
+    case PCB_MODULE_ZONE_AREA_T:
     case PCB_ZONE_AREA_T:
     {
-        const ZONE_CONTAINER* zone = static_cast<const ZONE_CONTAINER*>( item );
+        ZONE_CONTAINER* zone = static_cast<ZONE_CONTAINER*>( item );
         const SHAPE_POLY_SET* outline = zone->Outline();
 
         if( m_editPoints->PointsSize() != (unsigned) outline->TotalVertices() )
         {
             getView()->Remove( m_editPoints.get() );
+            m_editedPoint = nullptr;
             m_editPoints = EDIT_POINTS_FACTORY::Make( item, getView()->GetGAL() );
             getView()->Add( m_editPoints.get() );
         }
@@ -667,14 +777,15 @@ void POINT_EDITOR::setEditedPoint( EDIT_POINT* aPoint )
 
     if( aPoint )
     {
+        frame()->GetCanvas()->SetCurrentCursor( wxCURSOR_ARROW );
         controls->ForceCursorPosition( true, aPoint->GetPosition() );
         controls->ShowCursor( true );
-        controls->SetSnapping( true );
     }
     else
     {
-        controls->ShowCursor( false );
-        controls->SetSnapping( false );
+        if( frame()->ToolStackIsEmpty() )
+            controls->ShowCursor( false );
+
         controls->ForceCursorPosition( false );
     }
 
@@ -688,10 +799,11 @@ void POINT_EDITOR::setAltConstraint( bool aEnabled )
     {
         EDIT_LINE* line = dynamic_cast<EDIT_LINE*>( m_editedPoint );
 
-        if( line )
+        if( line &&
+            ( m_editPoints->GetParent()->Type() == PCB_ZONE_AREA_T
+              || m_editPoints->GetParent()->Type() == PCB_MODULE_ZONE_AREA_T ) )
         {
-            if( m_editPoints->GetParent()->Type() == PCB_ZONE_AREA_T )
-                m_altConstraint.reset( (EDIT_CONSTRAINT<EDIT_POINT>*)( new EC_CONVERGING( *line, *m_editPoints ) ) );
+            m_altConstraint.reset( (EDIT_CONSTRAINT<EDIT_POINT>*)( new EC_CONVERGING( *line, *m_editPoints ) ) );
         }
         else
         {
@@ -759,13 +871,15 @@ EDIT_POINT POINT_EDITOR::get45DegConstrainer() const
 }
 
 
-void POINT_EDITOR::setTransitions()
+bool POINT_EDITOR::canAddCorner( const EDA_ITEM& aItem )
 {
-    Go( &POINT_EDITOR::addCorner, PCB_ACTIONS::pointEditorAddCorner.MakeEvent() );
-    Go( &POINT_EDITOR::removeCorner, PCB_ACTIONS::pointEditorRemoveCorner.MakeEvent() );
-    Go( &POINT_EDITOR::modifiedSelection, PCB_ACTIONS::selectionModified.MakeEvent() );
-    Go( &POINT_EDITOR::OnSelectionChange, SELECTION_TOOL::SelectedEvent );
-    Go( &POINT_EDITOR::OnSelectionChange, SELECTION_TOOL::UnselectedEvent );
+    const auto type = aItem.Type();
+
+    // Works only for zones and line segments
+    return type == PCB_ZONE_AREA_T || type == PCB_MODULE_ZONE_AREA_T ||
+           ( ( type == PCB_LINE_T || type == PCB_MODULE_EDGE_T ) &&
+             ( static_cast<const DRAWSEGMENT&>( aItem ).GetShape() == S_SEGMENT  ||
+               static_cast<const DRAWSEGMENT&>( aItem ).GetShape() == S_POLYGON ) );
 }
 
 
@@ -774,28 +888,59 @@ bool POINT_EDITOR::addCornerCondition( const SELECTION& aSelection )
     if( aSelection.Size() != 1 )
         return false;
 
-    auto item = aSelection.Front();
+    const EDA_ITEM* item = aSelection.Front();
 
-    // Works only for zones and line segments
-    return item->Type() == PCB_ZONE_AREA_T ||
-           ( ( item->Type() == PCB_LINE_T || item->Type() == PCB_MODULE_EDGE_T ) &&
-               static_cast<DRAWSEGMENT*>( item )->GetShape() == S_SEGMENT );
+    return ( item != nullptr ) && canAddCorner( *item );
+}
+
+
+// Finds a corresponding vertex in a polygon set
+static std::pair<bool, SHAPE_POLY_SET::VERTEX_INDEX>
+findVertex( SHAPE_POLY_SET& aPolySet, const EDIT_POINT& aPoint )
+{
+    for( auto it = aPolySet.IterateWithHoles(); it; ++it )
+    {
+        auto vertexIdx = it.GetIndex();
+
+        if( aPolySet.CVertex( vertexIdx ) == aPoint.GetPosition() )
+            return std::make_pair( true, vertexIdx );
+    }
+
+    return std::make_pair( false, SHAPE_POLY_SET::VERTEX_INDEX() );
 }
 
 
 bool POINT_EDITOR::removeCornerCondition( const SELECTION& )
 {
-    if( !m_editPoints )
+    if( !m_editPoints || !m_editedPoint )
         return false;
 
     EDA_ITEM* item = m_editPoints->GetParent();
 
-    if( item->Type() != PCB_ZONE_AREA_T )
+    if( !item || !( item->Type() == PCB_ZONE_AREA_T || item->Type() == PCB_MODULE_ZONE_AREA_T ||
+            ( ( item->Type() == PCB_MODULE_EDGE_T || item->Type() == PCB_LINE_T ) &&
+                   static_cast<DRAWSEGMENT*>( item )->GetShape() == S_POLYGON ) ) )
         return false;
 
-    ZONE_CONTAINER* zone = static_cast<ZONE_CONTAINER*>( item );
+    SHAPE_POLY_SET *polyset;
 
-    if( zone->GetNumCorners() <= 3 )
+    if( item->Type() == PCB_ZONE_AREA_T || item->Type() == PCB_MODULE_ZONE_AREA_T )
+        polyset = static_cast<ZONE_CONTAINER*>( item )->Outline();
+    else
+        polyset = &static_cast<DRAWSEGMENT*>( item )->GetPolyShape();
+
+    auto vertex = findVertex( *polyset, *m_editedPoint );
+
+    if( !vertex.first )
+        return false;
+
+    const auto& vertexIdx = vertex.second;
+
+    // Check if there are enough vertices so one can be removed without
+    // degenerating the polygon.
+    // The first condition allows one to remove all corners from holes (when
+    // there are only 2 vertices left, a hole is removed).
+    if( vertexIdx.m_contour == 0 && polyset->Polygon( vertexIdx.m_polygon )[vertexIdx.m_contour].PointCount() <= 3 )
         return false;
 
     // Remove corner does not work with lines
@@ -808,22 +953,39 @@ bool POINT_EDITOR::removeCornerCondition( const SELECTION& )
 
 int POINT_EDITOR::addCorner( const TOOL_EVENT& aEvent )
 {
+    if( !m_editPoints )
+        return 0;
+
     EDA_ITEM* item = m_editPoints->GetParent();
     PCB_BASE_EDIT_FRAME* frame = getEditFrame<PCB_BASE_EDIT_FRAME>();
     const VECTOR2I& cursorPos = getViewControls()->GetCursorPosition();
+
+    // called without an active edited polygon
+    if( !item || !canAddCorner( *item ) )
+        return 0;
+
+    DRAWSEGMENT* graphicItem = dynamic_cast<DRAWSEGMENT*>( item );
     BOARD_COMMIT commit( frame );
 
-    if( item->Type() == PCB_ZONE_AREA_T )
+    if( item->Type() == PCB_ZONE_AREA_T || item->Type() == PCB_MODULE_ZONE_AREA_T ||
+            ( graphicItem && graphicItem->GetShape() == S_POLYGON ) )
     {
-        ZONE_CONTAINER* zone = static_cast<ZONE_CONTAINER*>( item );
-        SHAPE_POLY_SET* zoneOutline = zone->Outline();
-
-        commit.Modify( zone );
-
         unsigned int nearestIdx = 0;
         unsigned int nextNearestIdx = 0;
         unsigned int nearestDist = INT_MAX;
         unsigned int firstPointInContour = 0;
+        SHAPE_POLY_SET* zoneOutline;
+
+        if( item->Type() == PCB_ZONE_AREA_T || item->Type() == PCB_MODULE_ZONE_AREA_T )
+        {
+            ZONE_CONTAINER* zone = static_cast<ZONE_CONTAINER*>( item );
+            zoneOutline = zone->Outline();
+            zone->SetNeedRefill( true );
+        }
+        else
+            zoneOutline = &( graphicItem->GetPolyShape() );
+
+        commit.Modify( item );
 
         // Search the best outline segment to add a new corner
         // and therefore break this segment into two segments
@@ -844,7 +1006,7 @@ int POINT_EDITOR::addCorner( const TOOL_EVENT& aEvent )
                 firstPointInContour = curr_idx+1;     // Prepare next contour analysis
             }
 
-            SEG curr_segment( zoneOutline->Vertex( curr_idx ), zoneOutline->Vertex( jj ) );
+            SEG curr_segment( zoneOutline->CVertex( curr_idx ), zoneOutline->CVertex( jj ) );
 
             unsigned int distance = curr_segment.Distance( cursorPos );
 
@@ -856,10 +1018,9 @@ int POINT_EDITOR::addCorner( const TOOL_EVENT& aEvent )
             }
         }
 
-
         // Find the point on the closest segment
-        VECTOR2I sideOrigin = zoneOutline->Vertex( nearestIdx );
-        VECTOR2I sideEnd = zoneOutline->Vertex( nextNearestIdx );
+        auto&    sideOrigin = zoneOutline->CVertex( nearestIdx );
+        auto&    sideEnd = zoneOutline->CVertex( nextNearestIdx );
         SEG nearestSide( sideOrigin, sideEnd );
         VECTOR2I nearestPoint = nearestSide.NearestPoint( cursorPos );
 
@@ -868,51 +1029,52 @@ int POINT_EDITOR::addCorner( const TOOL_EVENT& aEvent )
         if( nearestPoint == sideOrigin || nearestPoint == sideEnd )
             nearestPoint = ( sideOrigin + sideEnd ) / 2;
 
-        // Add corner between nearestIdx and nextNearestIdx:
         zoneOutline->InsertVertex( nextNearestIdx, nearestPoint );
-        zone->Hatch();
+
+        // We re-hatch the filled zones but not polygons
+        if( item->Type() == PCB_ZONE_AREA_T || item->Type() == PCB_MODULE_ZONE_AREA_T )
+            static_cast<ZONE_CONTAINER*>( item )->Hatch();
+
 
         commit.Push( _( "Add a zone corner" ) );
     }
 
-    else if( item->Type() == PCB_LINE_T || item->Type() == PCB_MODULE_EDGE_T )
+    else if( graphicItem && graphicItem->GetShape() == S_SEGMENT )
     {
-        bool moduleEdge = item->Type() == PCB_MODULE_EDGE_T;
+        commit.Modify( graphicItem );
 
-        DRAWSEGMENT* segment = static_cast<DRAWSEGMENT*>( item );
+        SEG seg( graphicItem->GetStart(), graphicItem->GetEnd() );
+        VECTOR2I nearestPoint = seg.NearestPoint( cursorPos );
 
-        if( segment->GetShape() == S_SEGMENT )
+        // Move the end of the line to the break point..
+        graphicItem->SetEnd( wxPoint( nearestPoint.x, nearestPoint.y ) );
+
+        if( graphicItem->Type() == PCB_MODULE_EDGE_T )
+            static_cast<EDGE_MODULE*>( graphicItem )->SetLocalCoord();
+
+        // and add another one starting from the break point
+        DRAWSEGMENT* newSegment;
+
+        if( item->Type() == PCB_MODULE_EDGE_T )
         {
-            commit.Modify( segment );
-
-            SEG seg( segment->GetStart(), segment->GetEnd() );
-            VECTOR2I nearestPoint = seg.NearestPoint( cursorPos );
-
-            // Move the end of the line to the break point..
-            segment->SetEnd( wxPoint( nearestPoint.x, nearestPoint.y ) );
-
-            // and add another one starting from the break point
-            DRAWSEGMENT* newSegment;
-
-            if( moduleEdge )
-            {
-                EDGE_MODULE* edge = static_cast<EDGE_MODULE*>( segment );
-                assert( edge->Type() == PCB_MODULE_EDGE_T );
-                assert( edge->GetParent()->Type() == PCB_MODULE_T );
-                newSegment = new EDGE_MODULE( *edge );
-            }
-            else
-            {
-                newSegment = new DRAWSEGMENT( *segment );
-            }
-
-            newSegment->ClearSelected();
-            newSegment->SetStart( wxPoint( nearestPoint.x, nearestPoint.y ) );
-            newSegment->SetEnd( wxPoint( seg.B.x, seg.B.y ) );
-
-            commit.Add( newSegment );
-            commit.Push( _( "Split segment" ) );
+            EDGE_MODULE* edge = static_cast<EDGE_MODULE*>( graphicItem );
+            assert( edge->GetParent()->Type() == PCB_MODULE_T );
+            newSegment = new EDGE_MODULE( *edge );
         }
+        else
+        {
+            newSegment = new DRAWSEGMENT( *graphicItem );
+        }
+
+        newSegment->ClearSelected();
+        newSegment->SetStart( wxPoint( nearestPoint.x, nearestPoint.y ) );
+        newSegment->SetEnd( wxPoint( seg.B.x, seg.B.y ) );
+
+        if( newSegment->Type() == PCB_MODULE_EDGE_T )
+            static_cast<EDGE_MODULE*>( newSegment )->SetLocalCoord();
+
+        commit.Add( newSegment );
+        commit.Push( _( "Split segment" ) );
     }
 
     updatePoints();
@@ -922,7 +1084,7 @@ int POINT_EDITOR::addCorner( const TOOL_EVENT& aEvent )
 
 int POINT_EDITOR::removeCorner( const TOOL_EVENT& aEvent )
 {
-    if( !m_editedPoint )
+    if( !m_editPoints || !m_editedPoint )
         return 0;
 
     EDA_ITEM* item = m_editPoints->GetParent();
@@ -930,43 +1092,67 @@ int POINT_EDITOR::removeCorner( const TOOL_EVENT& aEvent )
     if( !item )
         return 0;
 
-    SHAPE_POLY_SET *outline = nullptr;
+    SHAPE_POLY_SET* polygon = nullptr;
 
-    if( item->Type() == PCB_ZONE_AREA_T)
+    if( item->Type() == PCB_ZONE_AREA_T || item->Type() == PCB_MODULE_ZONE_AREA_T )
     {
         auto zone = static_cast<ZONE_CONTAINER*>( item );
-        outline = zone->Outline();
+        polygon = zone->Outline();
+        zone->SetNeedRefill( true );
     }
-    else if ( item->Type() == PCB_LINE_T )
+    else if( (item->Type() == PCB_MODULE_EDGE_T ) || ( item->Type() == PCB_LINE_T ) )
     {
         auto ds = static_cast<DRAWSEGMENT*>( item );
+
         if( ds->GetShape() == S_POLYGON )
-        {
-            outline = &ds->GetPolyShape();
-        }
+            polygon = &ds->GetPolyShape();
     }
 
-    if( !outline )
+    if( !polygon )
         return 0;
 
     PCB_BASE_FRAME* frame = getEditFrame<PCB_BASE_FRAME>();
     BOARD_COMMIT commit( frame );
+    auto vertex = findVertex( *polygon, *m_editedPoint );
 
-    commit.Modify( item );
-
-    for( int i = 0; i < outline->TotalVertices(); ++i )
+    if( vertex.first )
     {
-        if( outline->Vertex( i ) == m_editedPoint->GetPosition() )
+        const auto& vertexIdx = vertex.second;
+        auto& outline = polygon->Polygon( vertexIdx.m_polygon )[vertexIdx.m_contour];
+
+        if( outline.PointCount() > 3 )
         {
-            outline->RemoveVertex( i );
-            setEditedPoint( NULL );
-            commit.Push( _( "Remove a zone/polygon corner" ) );
-            break;
+            // the usual case: remove just the corner when there are >3 vertices
+            commit.Modify( item );
+            polygon->RemoveVertex( vertexIdx );
+            validatePolygon( *polygon );
         }
+        else
+        {
+            // either remove a hole or the polygon when there are <= 3 corners
+            if( vertexIdx.m_contour > 0 )
+            {
+                // remove hole
+                commit.Modify( item );
+                polygon->RemoveContour( vertexIdx.m_contour );
+            }
+            else
+            {
+                m_toolMgr->RunAction( PCB_ACTIONS::selectionClear, true );
+                commit.Remove( item );
+            }
+        }
+
+        setEditedPoint( nullptr );
+
+        commit.Push( _( "Remove a zone/polygon corner" ) );
+
+        // Refresh zone hatching
+        if( item->Type() == PCB_ZONE_AREA_T || item->Type() == PCB_MODULE_ZONE_AREA_T )
+            static_cast<ZONE_CONTAINER*>( item )->Hatch();
+
+        updatePoints();
     }
-
-    updatePoints();
-
 
     return 0;
 }
@@ -976,4 +1162,15 @@ int POINT_EDITOR::modifiedSelection( const TOOL_EVENT& aEvent )
 {
     updatePoints();
     return 0;
+}
+
+
+void POINT_EDITOR::setTransitions()
+{
+    Go( &POINT_EDITOR::OnSelectionChange, ACTIONS::activatePointEditor.MakeEvent() );
+    Go( &POINT_EDITOR::addCorner,         PCB_ACTIONS::pointEditorAddCorner.MakeEvent() );
+    Go( &POINT_EDITOR::removeCorner,      PCB_ACTIONS::pointEditorRemoveCorner.MakeEvent() );
+    Go( &POINT_EDITOR::modifiedSelection, EVENTS::SelectedItemsModified );
+    Go( &POINT_EDITOR::OnSelectionChange, EVENTS::SelectedEvent );
+    Go( &POINT_EDITOR::OnSelectionChange, EVENTS::UnselectedEvent );
 }

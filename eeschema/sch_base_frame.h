@@ -1,10 +1,8 @@
-#ifndef SCH_BASE_FRAME_H_
-#define SCH_BASE_FRAME_H_
 /*
  * This program source code file is part of KiCad, a free EDA CAD application.
  *
  * Copyright (C) 2015 SoftPLC Corporation, Dick Hollenbeck <dick@softplc.com>
- * Copyright (C) 2015-2017 KiCad Developers, see AUTHORS.txt for contributors.
+ * Copyright (C) 2015-2018 KiCad Developers, see AUTHORS.txt for contributors.
  *
  * This program is free software; you can redistribute it and/or
  * modify it under the terms of the GNU General Public License
@@ -24,23 +22,64 @@
  * 51 Franklin Street, Fifth Floor, Boston, MA  02110-1301, USA
  */
 
-#include <draw_frame.h>
-#include <class_sch_screen.h>
+#ifndef SCH_BASE_FRAME_H_
+#define SCH_BASE_FRAME_H_
+
+#include <eda_draw_frame.h>
+#include <frame_type.h>
+#include <lib_id.h>
+#include <page_info.h>
+#include <sch_draw_panel.h>
+#include <sch_screen.h>
+
+#include <stddef.h>
+#include <utility>
+#include <vector>
+#include <wx/event.h>
+#include <wx/gdicmn.h>
+#include <wx/string.h>
+
+#include <template_fieldnames.h>
+
+
+namespace KIGFX
+{
+    class SCH_RENDER_SETTINGS;
+}
 
 class PAGE_INFO;
 class TITLE_BLOCK;
 class LIB_VIEW_FRAME;
 class LIB_EDIT_FRAME;
-class LIB_ALIAS;
+class LIB_PART;
 class PART_LIB;
 class SCHLIB_FILTER;
+class LIB_ID;
+class SYMBOL_LIB_TABLE;
 
 /**
- * Class SCH_BASE_FRAME
- * is a shim class between EDA_DRAW_FRAME and several derived classes:
+ * Load symbol from symbol library table.
+ *
+ * Check the symbol library table for the part defined by \a aLibId and optionally
+ * check the optional cache library.
+ *
+ * @param aLibId is the symbol library identifier to load.
+ * @param aLibTable is the #SYMBOL_LIBRARY_TABLE to load the alias from.
+ * @param aCacheLib is an optional cache library.
+ * @param aParent is an optiona parent window when displaying an error message.
+ * @param aShowErrorMessage set to true to show any error messages.
+ *
+ * @return The symbol found in the library or NULL if the symbol was not found.
+ */
+LIB_PART* SchGetLibPart( const LIB_ID& aLibId, SYMBOL_LIB_TABLE* aLibTable,
+                         PART_LIB* aCacheLib = NULL, wxWindow* aParent = NULL,
+                         bool aShowErrorMsg = false );
+
+/**
+ * A shim class between EDA_DRAW_FRAME and several derived classes:
  * LIB_EDIT_FRAME, LIB_VIEW_FRAME, and SCH_EDIT_FRAME, and it brings in a
  * common way of handling the provided virtual functions for the derived classes.
- * <p>
+ *
  * The motivation here is to switch onto GetScreen() for the underlying data model.
  *
  * @author Dick Hollenbeck
@@ -48,11 +87,16 @@ class SCHLIB_FILTER;
 class SCH_BASE_FRAME : public EDA_DRAW_FRAME
 {
 protected:
-    wxPoint  m_repeatStep;          ///< the increment value of the position of an item
-                                    ///< when it is repeated
-    int      m_repeatDeltaLabel;    ///< the increment value of labels like bus members
-                                    ///< when they are repeated
+    TEMPLATES m_templateFieldNames;
+    wxPoint   m_repeatStep;                // the increment value of the position of an item
+                                           // when it is repeated
+    int       m_repeatDeltaLabel;          // the increment value of labels like bus members
+                                           // when they are repeated
+    bool      m_showPinElectricalTypeName;
+    bool      m_dragActionIsMove;          // drag action defaults to move, otherwise it's drag
 
+    bool      m_repeatComponent;           // After placing one component, reload a sequential
+    bool      m_useAllUnits;               // After placing unit A, place unit B of the same
 
 public:
     SCH_BASE_FRAME( KIWAY* aKiway, wxWindow* aParent,
@@ -63,7 +107,30 @@ public:
 
     virtual ~SCH_BASE_FRAME();
 
+    void createCanvas();
+
+    SCH_DRAW_PANEL* GetCanvas() const override;
     SCH_SCREEN* GetScreen() const override;
+    void SetScreen( BASE_SCREEN* aScreen ) override;
+
+    KIGFX::SCH_RENDER_SETTINGS* GetRenderSettings();
+
+    /**
+     * Allow some frames to show/hide hidden pins.  The default impl shows all pins.
+     */
+    virtual bool GetShowAllPins() const { return true; }
+
+    /**
+     * Allow some frames to select the parent symbol when trying to select a pin.
+     * The default impl select the pin.
+     */
+    virtual bool GetSelectPinSelectSymbol() const { return false; }
+
+    /**
+     * Allow some frames to show/hide pin electrical type names.
+     */
+    bool GetShowElectricalType() { return m_showPinElectricalTypeName; }
+    void SetShowElectricalType( bool aShow ) { m_showPinElectricalTypeName = aShow; }
 
     /**
      * @return the increment value of the position of an item
@@ -91,6 +158,28 @@ public:
      */
     void SetRepeatDeltaLabel( int aDelta ) { m_repeatDeltaLabel = aDelta; }
 
+    /**
+     * @return the current setting of placing copies of the same symbol for each click
+     */
+    const bool GetRepeatComponent() { return m_repeatComponent; }
+
+    /**
+     * If true, keep placing new copies of the same symbol on each click
+     * @param aRepeat True to repeat the same symbol, False to only set one
+     */
+    void SetRepeatComponent( bool aRepeat ) { m_repeatComponent = aRepeat; }
+
+    /**
+     * @return the current setting to use all units when placing a component
+     */
+    const bool GetUseAllUnits() { return m_useAllUnits; }
+
+    /**
+     * Sets whether to utilize all units of a component when placing
+     * @param aUseAll True to iterate through Units A, B, ...
+     */
+    void SetUseAllUnits( bool aUseAll ) { m_useAllUnits = aUseAll; }
+
 
     /**
      * Function GetZoomLevelIndicator
@@ -99,6 +188,9 @@ public:
      * Virtual from the base class
      */
     const wxString GetZoomLevelIndicator() const override;
+
+    void SetDragActionIsMove( bool aValue ) { m_dragActionIsMove = aValue; }
+    bool GetDragActionIsMove() const { return m_dragActionIsMove; }
 
     void SetPageSettings( const PAGE_INFO& aPageSettings ) override;
     const PAGE_INFO& GetPageSettings () const override;
@@ -114,31 +206,12 @@ public:
     }
     void SetGridOrigin( const wxPoint& aPoint ) override {}
 
-    // Virtual from EDA_DRAW_FRAME
-    // the background color of the draw canvas:
-    COLOR4D GetDrawBgColor() const override;
-    void SetDrawBgColor( COLOR4D aColor) override;
+    void OnGridSettings( wxCommandEvent& aEvent ) override;
 
     const TITLE_BLOCK& GetTitleBlock() const override;
     void SetTitleBlock( const TITLE_BLOCK& aTitleBlock ) override;
 
     void UpdateStatusBar() override;
-
-
-    struct COMPONENT_SELECTION
-    {
-        wxString    Name;
-        int         Unit;
-        int         Convert;
-
-        std::vector<std::pair<int, wxString>>   Fields;
-
-        COMPONENT_SELECTION():
-            Name(""),
-            Unit(1),
-            Convert(1)
-        {}
-    };
 
     typedef std::vector<COMPONENT_SELECTION> HISTORY_LIST;
 
@@ -161,85 +234,136 @@ public:
      * @param aConvert           preselected De Morgan shape
      * @param aHighlight         name of component to highlight in the list.
      *                           highlights none if there isn't one by that name
+     * @param aShowFootprints    whether to show footprints in the dialog
      * @param aAllowFields       whether to allow field editing in the dialog
      *
      * @return the selected component
      */
-    COMPONENT_SELECTION SelectComponentFromLibrary(
-            const SCHLIB_FILTER*                aFilter,
-            std::vector<COMPONENT_SELECTION>&   aHistoryList,
-            bool                                aUseLibBrowser,
-            int                                 aUnit,
-            int                                 aConvert,
-            const wxString& aHighlight = wxEmptyString,
-            bool                                aAllowFields = true );
+    COMPONENT_SELECTION SelectCompFromLibTree(
+            const SCHLIB_FILTER* aFilter,
+            std::vector<COMPONENT_SELECTION>& aHistoryList,
+            bool aUseLibBrowser,
+            int aUnit,
+            int aConvert,
+            bool aShowFootprints,
+            const LIB_ID* aHighlight = nullptr,
+            bool aAllowFields = true );
 
-    void OnEditSymbolLibTable( wxCommandEvent& aEvent );
+    /**
+     * Return a template field names list for read only access.
+     */
+    const TEMPLATE_FIELDNAMES& GetTemplateFieldNames()
+    {
+        return m_templateFieldNames.GetTemplateFieldNames();
+    }
 
-protected:
+    /**
+     * Return a specific template field names list (global or project) for read only access.
+     */
+    const TEMPLATE_FIELDNAMES& GetTemplateFieldNames( bool aGlobal )
+    {
+        return m_templateFieldNames.GetTemplateFieldNames( aGlobal );
+    }
+
+    /**
+     * Search for \a aName in the the template field name list.
+     *
+     * @param aName A wxString object containing the field name to search for.
+     * @return the template fieldname if found; NULL otherwise.
+     */
+    const TEMPLATE_FIELDNAME* GetTemplateFieldName( const wxString& aName )
+    {
+        return m_templateFieldNames.GetFieldName( aName );
+    }
+
+    /**
+     * Load symbol from symbol library table.
+     *
+     * @param aLibId is the symbol library identifier to load.
+     * @param aUseCacheLib set to true to fall back to cache library if symbol is not found in
+     *                     symbol library table.
+     * @param aShowErrorMessage set to true to show any error messages.
+     * @return The symbol found in the library or NULL if the symbol was not found.
+     */
+    LIB_PART* GetLibPart( const LIB_ID& aLibId, bool aUseCacheLib = false,
+                          bool aShowErrorMsg = false );
+
+    LIB_PART* GetFlattenedLibPart( const LIB_ID& aLibId, bool aShowErrorMsg = false );
 
     /**
      * Function SelectComponentFromLibBrowser
      * Calls the library viewer to select component to import into schematic.
      * if the library viewer is currently running, it is closed and reopened
      * in modal mode.
+     * @param aParent is the caller
      * @param aFilter is a filter to pass the allowed library names
      *          and/or some other filter
-     * @param aPreselectedAlias Preselected component alias. NULL if none.
+     * @param aPreselectedLibId Preselected component LIB_ID. Not valid if none selected.
      * @param aUnit             preselected unit
      * @param aConvert          preselected deMorgan conversion
      * @return the selected component
      */
-    COMPONENT_SELECTION SelectComponentFromLibBrowser(
-            const SCHLIB_FILTER* aFilter,
-            LIB_ALIAS* aPreselectedAlias,
-            int aUnit, int aConvert );
+    COMPONENT_SELECTION SelectComponentFromLibBrowser( wxTopLevelWindow* aParent,
+                                                       const SCHLIB_FILTER* aFilter,
+                                                       const LIB_ID& aPreselectedLibid,
+                                                       int aUnit, int aConvert );
+
+    virtual void RedrawScreen( const wxPoint& aCenterPoint, bool aWarpPointer );
+
+    virtual void CenterScreen( const wxPoint& aCenterPoint, bool aWarpPointer );
+
+    void HardRedraw() override;
 
     /**
-     * Function OnOpenLibraryViewer
-     * Open the library viewer only to browse library contents.
-     * If the viewed is already opened from this, raise the viewer
-     * If the viewed is already opened from an other window, close it and reopen
+     * Add an item to the screen (and view)
+     * aScreen is the screen the item is located on, if not the current screen
      */
-    void OnOpenLibraryViewer( wxCommandEvent& event );
+    void AddToScreen( EDA_ITEM* aItem, SCH_SCREEN* aScreen = nullptr );
 
     /**
-     * Function DisplayComponentsNamesInLib
-     * Select a component from the list of components in a library
-     *
-     * @param aLibrary = a reference to the library to explore
-     *                If NULL the user will be prompted tp chose a library
-     * @param aBuffer = a wxString to put the selected component name
-     * @param aPreviousChoice = the previously selected component name.
-     * it will be added to the selection list. Can be empty.
-     *
-     * @return true if a component is selected
-     *         false on cancel
+     * Remove an item from the screen (and view)
+     * aScreen is the screen the item is located on, if not the current screen
      */
-    bool DisplayListComponentsInLib( PART_LIB*  aLibrary, wxString&  aBuffer,
-                                     wxString&  aPreviousChoice );
+    void RemoveFromScreen( EDA_ITEM* aItem, SCH_SCREEN* aScreen = nullptr );
 
     /**
-     * Function SelectLibraryFromList
-     * displays a list of current loaded libraries, and allows the user to select
-     * a library
-     * This list is sorted, with the library cache always at end of the list
-     * @return a reference to the selected library, or NULL
+     * Mark an item for refresh.
      */
-    PART_LIB* SelectLibraryFromList();
+    void RefreshItem( EDA_ITEM* aItem, bool isAddOrDelete = false );
 
     /**
-     * Function SelectPartNameToLoad
-     * Select a part name from the list of components (parts) found in a library.
-     *
-     * @param aLibrary = a reference to the library to explore
-     *                If NULL the user will be prompted tp chose a library
-     * @param aBufName = a wxString to put the selected component name
-     *
-     * @return true if a component is selected
-     *         false on cancel
+     * Mark selected items for refresh.
      */
-    bool SelectPartNameToLoad( PART_LIB* aLibrary, wxString& aBufName );
+    void RefreshSelection();
+
+    /**
+     * Mark all items for refresh.
+     */
+    void SyncView();
+
+    /**
+     * Must be called after a model change in order to set the "modify" flag and
+     * do other frame-specific processing.
+     */
+    virtual void OnModify() {}
+
+    /**
+     * Helper to retrieve a layer color from the global color settings
+     */
+    COLOR4D GetLayerColor( SCH_LAYER_ID aLayer );
+
+    COLOR_SETTINGS* GetColorSettings() override;
+
+protected:
+    /**
+     * Saves Symbol Library Tables to disk.
+     *
+     * @param aGlobal when true, the Global Table is saved.
+     * @param aProject when true, the Project Table is saved.
+     * @return True when all requested actions succeeded.
+     */
+    bool saveSymbolLibTables( bool aGlobal, bool aProject );
+
 };
 
 #endif // SCH_BASE_FRAME_H_

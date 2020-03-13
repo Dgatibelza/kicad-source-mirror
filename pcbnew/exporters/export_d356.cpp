@@ -2,7 +2,7 @@
  * This program source code file is part of KiCad, a free EDA CAD application.
  *
  * Copyright (C) 2011-2013 Lorenzo Marcantonio <l.marcantonio@logossrl.com>
- * Copyright (C) 2004-2011 KiCad Developers, see change_log.txt for contributors.
+ * Copyright (C) 2004-2017 KiCad Developers, see change_log.txt for contributors.
  *
  * This program is free software; you can redistribute it and/or
  * modify it under the terms of the GNU General Public License
@@ -28,45 +28,25 @@
  */
 
 #include <fctsys.h>
-#include <class_drawpanel.h>
 #include <confirm.h>
 #include <gestfich.h>
 #include <kiface_i.h>
-#include <wxPcbStruct.h>
+#include <pcb_edit_frame.h>
 #include <trigo.h>
 #include <build_version.h>
 #include <macros.h>
-
+#include <wildcards_and_files_ext.h>
 #include <pcbnew.h>
-
 #include <class_board.h>
 #include <class_module.h>
 #include <class_track.h>
 #include <class_edge_mod.h>
 #include <vector>
 #include <cctype>
+#include <math/util.h>      // for KiROUND
+#include <export_d356.h>
 
-/* Structure for holding the D-356 record fields.
- * Useful because 356A (when implemented) must be sorted before outputting it */
-struct D356_RECORD
-{
-    bool       smd;
-    bool       hole;
-    wxString   netname;
-    wxString   refdes;
-    wxString   pin;
-    bool       midpoint;
-    int        drill;
-    bool       mechanical;
-    int        access;      // Access 0 is 'both sides'
-    int        soldermask;
-    // All these in PCB units, will be output in decimils
-    int        x_location;
-    int        y_location;
-    int        x_size;
-    int        y_size;
-    int        rotation;
-};
+
 
 // Compute the access code for a pad. Returns -1 if there is no copper
 static int compute_pad_access_code( BOARD *aPcb, LSET aLayerMask )
@@ -116,10 +96,9 @@ static void build_pad_testpoints( BOARD *aPcb,
 {
     wxPoint origin = aPcb->GetAuxOrigin();
 
-    for( MODULE* module = aPcb->m_Modules;
-        module; module = module->Next() )
+    for( auto module : aPcb->Modules() )
     {
-        for( D_PAD* pad = module->PadsList();  pad; pad = pad->Next() )
+        for( auto pad : module->Pads() )
         {
             D356_RECORD rk;
             rk.access = compute_pad_access_code( aPcb, pad->GetLayerSet() );
@@ -192,7 +171,7 @@ static void build_via_testpoints( BOARD *aPcb,
     wxPoint origin = aPcb->GetAuxOrigin();
 
     // Enumerate all the track segments and keep the vias
-    for( TRACK *track = aPcb->m_Track; track; track = track->Next() )
+    for( auto track : aPcb->Tracks() )
     {
         if( track->Type() == PCB_VIA_T )
         {
@@ -234,13 +213,15 @@ static const wxString intern_new_d356_netname( const wxString &aNetname,
         std::map<wxString, wxString> &aMap, std::set<wxString> &aSet )
 {
     wxString canon;
-    for (wxString::const_iterator i = aNetname.begin();
-            i != aNetname.end(); ++i)
+
+    for( size_t ii = 0; ii < aNetname.Len(); ++ii )
     {
         // Rule: we can only use the standard ASCII, control excluded
-        char ch = *i;
-        if( ch > 126 || !std::isgraph( ch ) )
+        wxUniChar ch = aNetname[ii];
+
+        if( ch > 126 || !std::isgraph( static_cast<unsigned char>( ch ) ) )
             ch = '?';
+
         canon += ch;
     }
 
@@ -280,32 +261,32 @@ static const wxString intern_new_d356_netname( const wxString &aNetname,
 }
 
 /* Write all the accumuled data to the file in D356 format */
-static void write_D356_records( std::vector <D356_RECORD> &aRecords,
-                                FILE *fout )
+void IPC356D_WRITER::write_D356_records( std::vector <D356_RECORD> &aRecords, FILE* aFile )
 {
     // Sanified and shorted network names and set of short names
     std::map<wxString, wxString> d356_net_map;
     std::set<wxString> d356_net_set;
 
-    for (unsigned i = 0; i < aRecords.size(); i++)
+    for( unsigned i = 0; i < aRecords.size(); i++ )
     {
         D356_RECORD &rk = aRecords[i];
 
         // Try to sanify the network name (there are limits on this), if
         // not already done. Also 'empty' net are marked as N/C, as
         // specified.
-        wxString d356_net( wxT("N/C") );
+        wxString d356_net( wxT( "N/C" ) );
+
         if( !rk.netname.empty() )
         {
             d356_net = d356_net_map[rk.netname];
 
             if( d356_net.empty() )
-                d356_net = intern_new_d356_netname( rk.netname, d356_net_map,
-                                                    d356_net_set );
+                d356_net = intern_new_d356_netname( rk.netname, d356_net_map, d356_net_set );
         }
 
         // Choose the best record type
         int rktype;
+
         if( rk.smd )
             rktype = 327;
         else
@@ -317,7 +298,7 @@ static void write_D356_records( std::vector <D356_RECORD> &aRecords,
         }
 
         // Operation code, signal and component
-        fprintf( fout, "%03d%-14.14s   %-6.6s%c%-4.4s%c",
+        fprintf( aFile, "%03d%-14.14s   %-6.6s%c%-4.4s%c",
                  rktype, TO_UTF8(d356_net),
                  TO_UTF8(rk.refdes),
                  rk.pin.empty()?' ':'-',
@@ -327,15 +308,15 @@ static void write_D356_records( std::vector <D356_RECORD> &aRecords,
         // Hole definition
         if( rk.hole )
         {
-            fprintf( fout, "D%04d%c",
+            fprintf( aFile, "D%04d%c",
                      iu_to_d356( rk.drill, 9999 ),
                      rk.mechanical ? 'U':'P' );
         }
         else
-            fprintf( fout, "      " );
+            fprintf( aFile, "      " );
 
         // Test point access
-        fprintf( fout, "A%02dX%+07dY%+07dX%04dY%04dR%03d",
+        fprintf( aFile, "A%02dX%+07dY%+07dX%04dY%04dR%03d",
                 rk.access,
                 iu_to_d356( rk.x_location, 999999 ),
                 iu_to_d356( rk.y_location, 999999 ),
@@ -344,8 +325,40 @@ static void write_D356_records( std::vector <D356_RECORD> &aRecords,
                 rk.rotation );
 
         // Soldermask
-        fprintf( fout, "S%d\n", rk.soldermask );
+        fprintf( aFile, "S%d\n", rk.soldermask );
     }
+}
+
+
+void IPC356D_WRITER::Write( const wxString& aFilename )
+{
+    FILE*     file = nullptr;
+    LOCALE_IO toggle; // Switch the locale to standard C
+
+    if( ( file = wxFopen( aFilename, wxT( "wt" ) ) ) == nullptr )
+    {
+        wxString details;
+        details.Printf( "The file %s could not be opened for writing", aFilename );
+        DisplayErrorMessage( m_parent, "Could not write IPC-356D file!", details );
+        return;
+    }
+
+    // This will contain everything needed for the 356 file
+    std::vector<D356_RECORD> d356_records;
+
+    build_via_testpoints( m_pcb, d356_records );
+
+    build_pad_testpoints( m_pcb, d356_records );
+
+    // Code 00 AFAIK is ASCII, CUST 0 is decimils/degrees
+    // CUST 1 would be metric but gerbtool simply ignores it!
+    fprintf( file, "P  CODE 00\n" );
+    fprintf( file, "P  UNITS CUST 0\n" );
+    fprintf( file, "P  arrayDim   N\n" );
+    write_D356_records( d356_records, file );
+    fprintf( file, "999\n" );
+
+    fclose( file );
 }
 
 
@@ -353,10 +366,9 @@ void PCB_EDIT_FRAME::GenD356File( wxCommandEvent& aEvent )
 {
     wxFileName  fn = GetBoard()->GetFileName();
     wxString    msg, ext, wildcard;
-    FILE*       file;
 
-    ext = wxT( "d356" );
-    wildcard = _( "IPC-D-356 Test Files (.d356)|*.d356" );
+    ext = IpcD356FileExtension;
+    wildcard = IpcD356FileWildcard();
     fn.SetExt( ext );
 
     wxString pro_dir = wxPathOnly( Prj().GetProjectFullName() );
@@ -368,29 +380,7 @@ void PCB_EDIT_FRAME::GenD356File( wxCommandEvent& aEvent )
     if( dlg.ShowModal() == wxID_CANCEL )
         return;
 
-    if( ( file = wxFopen( dlg.GetPath(), wxT( "wt" ) ) ) == NULL )
-    {
-        msg = _( "Unable to create " ) + dlg.GetPath();
-        DisplayError( this, msg ); return;
-    }
+    IPC356D_WRITER writer( GetBoard(), this );
 
-    LOCALE_IO       toggle;     // Switch the locale to standard C
-
-    // This will contain everything needed for the 356 file
-    std::vector <D356_RECORD> d356_records;
-    BOARD* pcb = GetBoard();
-
-    build_via_testpoints( pcb, d356_records );
-
-    build_pad_testpoints( pcb, d356_records );
-
-    // Code 00 AFAIK is ASCII, CUST 0 is decimils/degrees
-    // CUST 1 would be metric but gerbtool simply ignores it!
-    fprintf( file, "P  CODE 00\n" );
-    fprintf( file, "P  UNITS CUST 0\n" );
-    fprintf( file, "P  DIM   N\n" );
-    write_D356_records( d356_records, file );
-    fprintf( file, "999\n" );
-
-    fclose( file );
+    writer.Write( dlg.GetPath() );
 }

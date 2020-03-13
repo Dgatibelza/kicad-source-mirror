@@ -2,11 +2,11 @@
  * This program source code file is part of KICAD, a free EDA CAD application.
  *
  * Copyright (C) 2011 jean-pierre.charras
- * Copyright (C) 1992-2015 Kicad Developers, see change_log.txt for contributors.
+ * Copyright (C) 1992-2015 Kicad Developers, see AUTHORS.txt for contributors.
  *
  * This program is free software; you can redistribute it and/or
  * modify it under the terms of the GNU General Public License
- * as published by the Free Software Foundation; either version 2
+ * as published by the Free Software Foundation; either version 3
  * of the License, or (at your option) any later version.
  *
  * This program is distributed in the hope that it will be useful,
@@ -14,12 +14,8 @@
  * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
  * GNU General Public License for more details.
  *
- * You should have received a copy of the GNU General Public License
- * along with this program; if not, you may find one here:
- * http://www.gnu.org/licenses/old-licenses/gpl-2.0.html
- * or you may search the http://www.gnu.org website for the version 2 license,
- * or you may write to the Free Software Foundation, Inc.,
- * 51 Franklin Street, Fifth Floor, Boston, MA  02110-1301, USA
+ * You should have received a copy of the GNU General Public License along
+ * with this program.  If not, see <http://www.gnu.org/licenses/>.
  */
 
 /* see
@@ -31,47 +27,40 @@
 #include <cassert>
 #include <cmath>
 #include <wx/wx.h>
-#include <wx/config.h>
+#include <kiface_i.h>
+#include <dialog_helpers.h>
 
 #include <pcb_calculator_frame_base.h>
 
 #include <pcb_calculator.h>
+#include <pcb_calculator_settings.h>
 #include <UnitSelector.h>
 #include <units_scales.h>
 
+wxString tracks_width_versus_current_formula =
+#include <tracks_width_versus_current_formula.h>
+
 extern double DoubleFromString( const wxString& TextValue );
 
-// Key words to read/write some parameters in config:
-#define KEYWORD_TW_CURRENT                     wxT( "TW_Track_Current" )
-#define KEYWORD_TW_DELTA_TC                    wxT( "TW_Delta_TC" )
-#define KEYWORD_TW_TRACK_LEN                   wxT( "TW_Track_Len" )
-#define KEYWORD_TW_TRACK_LEN_UNIT              wxT( "TW_Track_Len_Unit" )
-#define KEYWORD_TW_RESISTIVITY                 wxT( "TW_Resistivity" )
-#define KEYWORD_TW_EXTTRACK_WIDTH              wxT( "TW_ExtTrack_Width" )
-#define KEYWORD_TW_EXTTRACK_WIDTH_UNIT         wxT( "TW_ExtTrack_Width_Unit" )
-#define KEYWORD_TW_EXTTRACK_THICKNESS          wxT( "TW_ExtTrack_Thickness" )
-#define KEYWORD_TW_EXTTRACK_THICKNESS_UNIT     wxT( "TW_ExtTrack_Thickness_Unit" )
-#define KEYWORD_TW_INTTRACK_WIDTH              wxT( "TW_IntTrack_Width" )
-#define KEYWORD_TW_INTTRACK_WIDTH_UNIT         wxT( "TW_IntTrack_Width_Unit" )
-#define KEYWORD_TW_INTTRACK_THICKNESS          wxT( "TW_IntTrack_Thickness" )
-#define KEYWORD_TW_INTTRACK_THICKNESS_UNIT     wxT( "TW_IntTrack_Thickness_Unit" )
 
-void PCB_CALCULATOR_FRAME::TW_WriteConfig( wxConfigBase* aCfg )
+void PCB_CALCULATOR_FRAME::TW_WriteConfig()
 {
     // Save current parameters values in config.
-    aCfg->Write( KEYWORD_TW_CURRENT,                 m_TrackCurrentValue->GetValue() );
-    aCfg->Write( KEYWORD_TW_DELTA_TC,                m_TrackDeltaTValue->GetValue() );
-    aCfg->Write( KEYWORD_TW_TRACK_LEN,               m_TrackLengthValue->GetValue() );
-    aCfg->Write( KEYWORD_TW_TRACK_LEN_UNIT,          m_TW_CuLength_choiceUnit->GetSelection() );
-    aCfg->Write( KEYWORD_TW_RESISTIVITY,             m_TWResistivity->GetValue() );
-    aCfg->Write( KEYWORD_TW_EXTTRACK_WIDTH,          m_ExtTrackWidthValue->GetValue() );
-    aCfg->Write( KEYWORD_TW_EXTTRACK_WIDTH_UNIT,     m_TW_ExtTrackWidth_choiceUnit->GetSelection() );
-    aCfg->Write( KEYWORD_TW_EXTTRACK_THICKNESS,      m_ExtTrackThicknessValue->GetValue() );
-    aCfg->Write( KEYWORD_TW_EXTTRACK_THICKNESS_UNIT, m_ExtTrackThicknessUnit->GetSelection() );
-    aCfg->Write( KEYWORD_TW_INTTRACK_WIDTH,          m_IntTrackWidthValue->GetValue() );
-    aCfg->Write( KEYWORD_TW_INTTRACK_WIDTH_UNIT,     m_TW_IntTrackWidth_choiceUnit->GetSelection() );
-    aCfg->Write( KEYWORD_TW_INTTRACK_THICKNESS,      m_IntTrackThicknessValue->GetValue() );
-    aCfg->Write( KEYWORD_TW_INTTRACK_THICKNESS_UNIT, m_IntTrackThicknessUnit->GetSelection() );
+    auto cfg = static_cast<PCB_CALCULATOR_SETTINGS*>( Kiface().KifaceSettings() );
+
+    cfg->m_TrackWidth.current                   = m_TrackCurrentValue->GetValue();
+    cfg->m_TrackWidth.delta_tc                  = m_TrackDeltaTValue->GetValue();
+    cfg->m_TrackWidth.track_len                 = m_TrackLengthValue->GetValue();
+    cfg->m_TrackWidth.track_len_units           = m_TW_CuLength_choiceUnit->GetSelection();
+    cfg->m_TrackWidth.resistivity               = m_TWResistivity->GetValue();
+    cfg->m_TrackWidth.ext_track_width           = m_ExtTrackWidthValue->GetValue();
+    cfg->m_TrackWidth.ext_track_width_units     = m_TW_ExtTrackWidth_choiceUnit->GetSelection();
+    cfg->m_TrackWidth.ext_track_thickness       = m_ExtTrackThicknessValue->GetValue();
+    cfg->m_TrackWidth.ext_track_thickness_units = m_ExtTrackThicknessUnit->GetSelection();
+    cfg->m_TrackWidth.int_track_width           = m_IntTrackWidthValue->GetValue();
+    cfg->m_TrackWidth.int_track_width_units     = m_TW_IntTrackWidth_choiceUnit->GetSelection();
+    cfg->m_TrackWidth.int_track_thickness       = m_IntTrackThicknessValue->GetValue();
+    cfg->m_TrackWidth.int_track_thickness_units = m_IntTrackThicknessUnit->GetSelection();
 }
 
 
@@ -218,6 +207,24 @@ void PCB_CALCULATOR_FRAME::OnTWCalculateFromIntWidth( wxCommandEvent& event )
 
     // Re-enable the events.
     m_TWNested = false;
+}
+
+
+void PCB_CALCULATOR_FRAME::OnTWResetButtonClick( wxCommandEvent& event )
+{
+    m_TrackCurrentValue->SetValue( wxT( "1.0" ) );
+    m_TrackDeltaTValue->SetValue( wxT( "10.0" ) );
+    m_TrackLengthValue->SetValue( wxT( "20" ) );
+    m_TW_CuLength_choiceUnit->SetSelection( 0 );
+    m_TWResistivity->SetValue( wxT( "1.72e-8" ) );
+    m_ExtTrackWidthValue->SetValue( wxT( "0.2" ) );
+    m_TW_ExtTrackWidth_choiceUnit->SetSelection( 0 );
+    m_ExtTrackThicknessValue->SetValue( wxT( "0.035" ) );
+    m_ExtTrackThicknessUnit->SetSelection( 0 );
+    m_IntTrackWidthValue->SetValue( wxT( "0.2" ) );
+    m_TW_IntTrackWidth_choiceUnit->SetSelection( 0 );
+    m_IntTrackThicknessValue->SetValue( wxT( "0.035" ) );
+    m_IntTrackThicknessUnit->SetSelection( 0 );
 }
 
 
@@ -408,66 +415,38 @@ double PCB_CALCULATOR_FRAME::TWCalculateCurrent( double aWidth, double aThicknes
 }
 
 
-void PCB_CALCULATOR_FRAME::TW_Init( wxConfigBase* aCfg )
+void PCB_CALCULATOR_FRAME::TW_Init()
 {
-    int      tmp;
     wxString msg;
 
     // Disable calculations while we initialise.
     m_TWNested = true;
 
     // Read parameter values.
-    aCfg->Read( KEYWORD_TW_CURRENT,                 &msg, wxT( "1.0" ) );
-    m_TrackCurrentValue->SetValue( msg );
-    aCfg->Read( KEYWORD_TW_DELTA_TC,                &msg, wxT( "10.0" ) );
-    m_TrackDeltaTValue->SetValue( msg );
-    aCfg->Read( KEYWORD_TW_TRACK_LEN,               &msg, wxT( "20" ) );
-    m_TrackLengthValue->SetValue( msg );
-    aCfg->Read( KEYWORD_TW_TRACK_LEN_UNIT,          &tmp, 0 );
-    m_TW_CuLength_choiceUnit->SetSelection( tmp );
-    aCfg->Read( KEYWORD_TW_RESISTIVITY,             &msg, wxT( "1.72e-8" ) );
-    m_TWResistivity->SetValue( msg );
-    aCfg->Read( KEYWORD_TW_EXTTRACK_WIDTH,          &msg, wxT( "0.2" ) );
-    m_ExtTrackWidthValue->SetValue( msg );
-    aCfg->Read( KEYWORD_TW_EXTTRACK_WIDTH_UNIT,     &tmp, 0 );
-    m_TW_ExtTrackWidth_choiceUnit->SetSelection( tmp );
-    aCfg->Read( KEYWORD_TW_EXTTRACK_THICKNESS,      &msg, wxT( "0.035" ) );
-    m_ExtTrackThicknessValue->SetValue( msg );
-    aCfg->Read( KEYWORD_TW_EXTTRACK_THICKNESS_UNIT, &tmp, 0 );
-    m_ExtTrackThicknessUnit->SetSelection( tmp );
-    aCfg->Read( KEYWORD_TW_INTTRACK_WIDTH,          &msg, wxT( "0.2" ) );
-    m_IntTrackWidthValue->SetValue( msg );
-    aCfg->Read( KEYWORD_TW_INTTRACK_WIDTH_UNIT,     &tmp, 0 );
-    m_TW_IntTrackWidth_choiceUnit->SetSelection( tmp );
-    aCfg->Read( KEYWORD_TW_INTTRACK_THICKNESS,      &msg, wxT( "0.035" ) );
-    m_IntTrackThicknessValue->SetValue( msg );
-    aCfg->Read( KEYWORD_TW_INTTRACK_THICKNESS_UNIT, &tmp, 0 );
-    m_IntTrackThicknessUnit->SetSelection( tmp );
+    auto cfg = static_cast<PCB_CALCULATOR_SETTINGS*>( Kiface().KifaceSettings() );
+   
+    m_TrackCurrentValue->SetValue( cfg->m_TrackWidth.current );
+    m_TrackDeltaTValue->SetValue( cfg->m_TrackWidth.delta_tc );
+    m_TrackLengthValue->SetValue( cfg->m_TrackWidth.track_len );
+    m_TW_CuLength_choiceUnit->SetSelection( cfg->m_TrackWidth.track_len_units );
+    m_TWResistivity->SetValue( cfg->m_TrackWidth.resistivity );
+    m_ExtTrackWidthValue->SetValue( cfg->m_TrackWidth.ext_track_width );
+    m_TW_ExtTrackWidth_choiceUnit->SetSelection( cfg->m_TrackWidth.ext_track_width_units );
+    m_ExtTrackThicknessValue->SetValue( cfg->m_TrackWidth.ext_track_thickness );
+    m_ExtTrackThicknessUnit->SetSelection( cfg->m_TrackWidth.ext_track_thickness_units );
+    m_IntTrackWidthValue->SetValue( cfg->m_TrackWidth.int_track_width );
+    m_TW_IntTrackWidth_choiceUnit->SetSelection( cfg->m_TrackWidth.int_track_width_units );
+    m_IntTrackThicknessValue->SetValue( cfg->m_TrackWidth.int_track_thickness );
+    m_IntTrackThicknessUnit->SetSelection( cfg->m_TrackWidth.int_track_thickness_units );
 
-    // Init formulas text
-    msg = "<br>";
-    msg << _( "If you specify the maximum current, then the trace "
-              "widths will be calculated to suit." )
-        << "<br>" << _( "If you specify one of the trace widths, the maximum "
-                        "current it can handle will be calculated. The width "
-                        "for the other trace to also handle this current will "
-                        "then be calculated." )
-        << "<br>" << _( "The controlling value is shown in bold." ) << "<br><br>"
-        <<  _( "The calculations are valid for currents up to 35A "
-               "(external) or 17.5A (internal), temperature rises "
-               "up to 100 deg C, and widths of up to 400mil (10mm)." )<< "<br>"
-        << _( "The formula, from IPC 2221, is" )
-        << "<center><b>I = K * dT<sup>0.44</sup> * (W*H)<sup>0.725</sup></b></center>"
-        << _( "where:" ) << "<br><b>I</b> = "
-        << _( "maximum current in amps" )
-        << "<br><b>dT</b> = "
-        << _( "temperature rise above ambient in deg C" )
-        << "<br><b>W,H</b> = "
-        << _( "width and thickness in mils" ) << "<br>"
-        << "<b>K</b> = "
-        << _( "0.024 for internal traces or 0.048 for external traces" );
-
-    m_htmlWinFormulas->AppendToPage( msg );
+    if( tracks_width_versus_current_formula.StartsWith( "<!" ) )
+        m_htmlWinFormulas->SetPage( tracks_width_versus_current_formula );
+    else
+    {
+        wxString html_txt;
+        ConvertMarkdown2Html( wxGetTranslation( tracks_width_versus_current_formula ), html_txt );
+        m_htmlWinFormulas->SetPage( html_txt );
+    }
 
     // Make sure the correct master mode is displayed.
     TWUpdateModeDisplay();

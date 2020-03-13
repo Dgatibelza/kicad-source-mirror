@@ -41,7 +41,7 @@ namespace PNS {
 class ROUTER;
 
 /**
- * Class DP_MEANDER_PLACER
+ * DP_MEANDER_PLACER
  *
  * Differential Pair length-matching/meandering tool.
  */
@@ -78,7 +78,16 @@ public:
      * result is violating design rules - in such case, the track is only committed
      * if Settings.CanViolateDRC() is on.
      */
-    bool FixRoute( const VECTOR2I& aP, ITEM* aEndItem ) override;
+    bool FixRoute( const VECTOR2I& aP, ITEM* aEndItem, bool aForceFinish = false ) override;
+
+    /// @copydoc PLACEMENT_ALGO::CommitPlacement()
+    bool CommitPlacement() override;
+
+    /// @copydoc PLACEMENT_ALGO::AbortPlacement()
+    bool AbortPlacement() override;
+
+    /// @copydoc PLACEMENT_ALGO::HasPlacedAnything()
+    bool HasPlacedAnything() const override;
 
     const LINE Trace() const;
 
@@ -98,9 +107,9 @@ public:
 
     int CurrentLayer() const override;
 
-    int totalLength();
+    long long int totalLength();
 
-    const wxString TuningInfo() const override;
+    const wxString TuningInfo( EDA_UNITS aUnits ) const override;
     TUNING_STATUS TuningStatus() const override;
 
     bool CheckFit( MEANDER_SHAPE* aShape ) override;
@@ -115,14 +124,12 @@ private:
 //    void addCorner ( const VECTOR2I& aP );
 
     const SEG baselineSegment( const DIFF_PAIR::COUPLED_SEGMENTS& aCoupledSegs );
-
+    bool pairOrientation( const DIFF_PAIR::COUPLED_SEGMENTS& aPair );
+    
     void setWorld( NODE* aWorld );
     void release();
 
-    int origPathLength() const;
-
-    ///> pointer to world to search colliding items
-    NODE* m_world;
+    long long int origPathLength() const;
 
     ///> current routing start point (end of tail, beginning of head)
     VECTOR2I m_currentStart;
@@ -140,7 +147,9 @@ private:
     MEANDERED_LINE m_result;
     SEGMENT* m_initialSegment;
 
-    int m_lastLength;
+    long long int m_lastLength;
+    int           m_padToDieP;
+    int           m_padToDieN;
     TUNING_STATUS m_lastStatus;
 };
 

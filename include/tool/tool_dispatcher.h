@@ -36,10 +36,10 @@ class ACTIONS;
 namespace KIGFX
 {
 class VIEW;
-};
+}
 
 /**
- * Class TOOL_DISPATCHER
+ * TOOL_DISPATCHER
  *
  * - takes wx events,
  * - fixes all wx quirks (mouse warping, panning, ordering problems, etc)
@@ -114,9 +114,6 @@ private:
 
         return mods;
     }
-
-    ///> Redraws the status bar and message panel.
-    void updateUI();
 
     ///> Stores all the informations regarding a mouse button state.
     struct BUTTON_STATE;

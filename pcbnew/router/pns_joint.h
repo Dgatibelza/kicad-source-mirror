@@ -23,7 +23,6 @@
 #define __PNS_JOINT_H
 
 #include <vector>
-#include <boost/functional/hash.hpp>
 
 #include <math/vector2d.h>
 
@@ -34,7 +33,7 @@
 namespace PNS {
 
 /**
- * Class JOINT
+ * JOINT
  *
  * Represents a 2D point on a given set of layers and belonging to a certain
  * net, that links together a number of board items.
@@ -52,6 +51,20 @@ public:
     {
         VECTOR2I pos;
         int net;
+    };
+
+    struct JOINT_TAG_HASH
+    {
+        std::size_t operator()( const JOINT::HASH_TAG& aP ) const
+        {
+            using std::size_t;
+            using std::hash;
+            using std::string;
+
+            return ( (hash<int>()( aP.pos.x )
+                      ^ (hash<int>()( aP.pos.y ) << 1) ) >> 1 )
+                   ^ (hash<int>()( aP.net ) << 1);
+        }
     };
 
     JOINT() :
@@ -87,11 +100,11 @@ public:
     /// segments of the same net, on the same layer.
     bool IsLineCorner() const
     {
-        if( m_linkedItems.Size() != 2 || m_linkedItems.Count( SEGMENT_T ) != 2 )
+        if( m_linkedItems.Size() != 2 || m_linkedItems.Count( SEGMENT_T | ARC_T ) != 2 )
             return false;
 
-        SEGMENT* seg1 = static_cast<SEGMENT*>( m_linkedItems[0] );
-        SEGMENT* seg2 = static_cast<SEGMENT*>( m_linkedItems[1] );
+        auto seg1 = static_cast<LINKED_ITEM*>( m_linkedItems[0] );
+        auto seg2 = static_cast<LINKED_ITEM*>( m_linkedItems[1] );
 
         // joints between segments of different widths are not considered trivial.
         return seg1->Width() == seg2->Width();
@@ -101,8 +114,14 @@ public:
     {
         int vias = m_linkedItems.Count( VIA_T );
         int segs = m_linkedItems.Count( SEGMENT_T );
+        segs += m_linkedItems.Count( ARC_T );
 
         return ( m_linkedItems.Size() == 3 && vias == 1 && segs == 2 );
+    }
+
+    bool IsStitchingVia() const
+    {
+        return ( m_linkedItems.Size() == 1 && m_linkedItems.Count( VIA_T ) == 1 );
     }
 
     bool IsTraceWidthChange() const
@@ -138,12 +157,12 @@ public:
 
     ///> For trivial joints, returns the segment adjacent to (aCurrent). For non-trival ones, returns
     ///> NULL, indicating the end of line.
-    SEGMENT* NextSegment( SEGMENT* aCurrent ) const
+    LINKED_ITEM* NextSegment( ITEM* aCurrent ) const
     {
         if( !IsLineCorner() )
             return NULL;
 
-        return static_cast<SEGMENT*>( m_linkedItems[m_linkedItems[0] == aCurrent ? 1 : 0] );
+        return static_cast<LINKED_ITEM*>( m_linkedItems[m_linkedItems[0] == aCurrent ? 1 : 0] );
     }
 
     VIA* Via()
@@ -247,16 +266,6 @@ private:
 inline bool operator==( JOINT::HASH_TAG const& aP1, JOINT::HASH_TAG const& aP2 )
 {
     return aP1.pos == aP2.pos && aP1.net == aP2.net;
-}
-
-inline std::size_t hash_value( JOINT::HASH_TAG const& aP )
-{
-    std::size_t seed = 0;
-    boost::hash_combine( seed, aP.pos.x );
-    boost::hash_combine( seed, aP.pos.y );
-    boost::hash_combine( seed, aP.net );
-
-    return seed;
 }
 
 }

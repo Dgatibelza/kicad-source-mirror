@@ -76,19 +76,19 @@ X3DAPP::~X3DAPP()
 void X3DAPP::init()
 {
     // default material values as per VRML2 spec
-    diffuseColor.x = 0.8;
-    diffuseColor.y = 0.8;
-    diffuseColor.z = 0.8;
+    diffuseColor.x = 0.8f;
+    diffuseColor.y = 0.8f;
+    diffuseColor.z = 0.8f;
 
-    emissiveColor.x = 0.0;
-    emissiveColor.y = 0.0;
-    emissiveColor.z = 0.0;
+    emissiveColor.x = 0.0f;
+    emissiveColor.y = 0.0f;
+    emissiveColor.z = 0.0f;
 
     specularColor = emissiveColor;
 
-    ambientIntensity = 0.2;
-    shininess = 0.2;
-    transparency = 0.0;
+    ambientIntensity = 0.2f;
+    shininess = 0.2f;
+    transparency = 0.0f;
 
     return;
 }
@@ -110,7 +110,7 @@ void X3DAPP::readFields( wxXmlNode* aNode )
          prop != NULL;
          prop = prop->GetNext() )
     {
-        wxString pname = prop->GetName();
+        const wxString& pname = prop->GetName();
 
         if( pname == "DEF" )
         {
@@ -163,7 +163,7 @@ bool X3DAPP::Read( wxXmlNode* aNode, X3DNODE* aTopNode, X3D_DICT& aDict )
          prop != NULL;
          prop = prop->GetNext() )
     {
-        wxString pname = prop->GetName();
+        const wxString& pname = prop->GetName();
 
         if( pname == "DEF" )
         {

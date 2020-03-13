@@ -23,11 +23,13 @@
  */
 
 #include <wx/clipbrd.h>
-#include <common.h>
-#include <pcb_parser.h>
-#include <class_netinfo.h>
-#include <class_board.h>
+
 #include <build_version.h>
+#include <class_board.h>
+#include <class_track.h>
+#include <common.h>
+#include <netinfo.h>
+#include <pcb_parser.h>
 
 #include <kicad_plugin.h>
 #include <kicad_clipboard.h>
@@ -41,7 +43,10 @@ CLIPBOARD_IO::CLIPBOARD_IO():
 }
 
 
-CLIPBOARD_IO::~CLIPBOARD_IO(){}
+CLIPBOARD_IO::~CLIPBOARD_IO()
+{
+    delete m_parser;
+}
 
 
 STRING_FORMATTER* CLIPBOARD_IO::GetFormatter()
@@ -56,9 +61,8 @@ void CLIPBOARD_IO::SetBoard( BOARD* aBoard )
 }
 
 
-void CLIPBOARD_IO::SaveSelection( const SELECTION& aSelected )
+void CLIPBOARD_IO::SaveSelection( const PCBNEW_SELECTION& aSelected )
 {
-    LOCALE_IO   toggle;     // toggles on, then off, the C locale.
     VECTOR2I refPoint( 0, 0 );
 
     // dont even start if the selection is empty
@@ -81,7 +85,7 @@ void CLIPBOARD_IO::SaveSelection( const SELECTION& aSelected )
                 ( i->Type() != PCB_PAD_T ) )
         {
             onlyModuleParts = false;
-            continue;
+            break;
         }
     }
 
@@ -95,12 +99,13 @@ void CLIPBOARD_IO::SaveSelection( const SELECTION& aSelected )
         // make the module safe to transfer to other pcbs
         const MODULE* mod = static_cast<MODULE*>( aSelected.Front() );
         // Do not modify existing board
-        MODULE newModule(*mod);
+        MODULE newModule( *mod );
 
-        for( D_PAD* pad = newModule.PadsList().begin(); pad; pad = pad->Next() )
-        {
-            pad->SetNetCode( 0, 0 );
-        }
+        for( D_PAD* pad : newModule.Pads() )
+            pad->SetNetCode( 0 );
+
+        // locked means "locked in place"; copied items therefore can't be locked
+        newModule.SetLocked( false );
 
         // locate the reference point at (0, 0) in the copied items
         newModule.Move( wxPoint( -refPoint.x, -refPoint.y ) );
@@ -112,27 +117,25 @@ void CLIPBOARD_IO::SaveSelection( const SELECTION& aSelected )
     {
         for( const auto item : aSelected )
         {
-            auto clone = static_cast<BOARD_ITEM*>( item->Clone() );
+            BOARD_ITEM* clone = static_cast<BOARD_ITEM*>( item->Clone() );
 
             // Do not add reference/value - convert them to the common type
             if( TEXTE_MODULE* text = dyn_cast<TEXTE_MODULE*>( clone ) )
                 text->SetType( TEXTE_MODULE::TEXT_is_DIVERS );
 
             // If it is only a module, clear the nets from the pads
-            if( clone->Type() == PCB_PAD_T )
-            {
-               D_PAD* pad = static_cast<D_PAD*>( clone );
-               pad->SetNetCode( 0, 0 );
-            }
+            if( D_PAD* pad = dyn_cast<D_PAD*>( clone ) )
+               pad->SetNetCode( 0 );
+
+            // Add the pad to the new module before moving to ensure the local coords are correct
+            partialModule.Add( clone );
 
             // locate the reference point at (0, 0) in the copied items
-            clone->Move( wxPoint(-refPoint.x, -refPoint.y ) );
-
-            partialModule.Add( clone );
+            clone->Move( (wxPoint) -refPoint );
         }
 
         // Set the new relative internal local coordinates of copied items
-        MODULE* editedModule = m_board->m_Modules;
+        MODULE* editedModule = m_board->Modules().front();
         wxPoint moveVector = partialModule.GetPosition() + editedModule->GetPosition();
 
         partialModule.MoveAnchorPosition( moveVector );
@@ -145,6 +148,8 @@ void CLIPBOARD_IO::SaveSelection( const SELECTION& aSelected )
     {
         // we will fake being a .kicad_pcb to get the full parser kicking
         // This means we also need layers and nets
+        LOCALE_IO io;
+
         m_formatter.Print( 0, "(kicad_pcb (version %d) (host pcbnew %s)\n",
                 SEXPR_BOARD_FILE_VERSION, m_formatter.Quotew( GetBuildVersion() ).c_str() );
 
@@ -167,46 +172,70 @@ void CLIPBOARD_IO::SaveSelection( const SELECTION& aSelected )
                 auto item = static_cast<BOARD_ITEM*>( i );
                 std::unique_ptr<BOARD_ITEM> clone( static_cast<BOARD_ITEM*> ( item->Clone() ) );
 
+                // locked means "locked in place"; copied items therefore can't be locked
+                if( MODULE* module = dyn_cast<MODULE*>( clone.get() ) )
+                    module->SetLocked( false );
+                else if( TRACK* track = dyn_cast<TRACK*>( clone.get() ) )
+                    track->SetLocked( false );
+
                 // locate the reference point at (0, 0) in the copied items
-                clone->Move( wxPoint(-refPoint.x, -refPoint.y ) );
+                clone->Move( (wxPoint) -refPoint );
 
                 Format( clone.get(), 1 );
             }
-
         }
         m_formatter.Print( 0, "\n)" );
     }
-    if( wxTheClipboard->Open() )
+
+    // These are placed at the end to minimize the open time of the clipboard
+    auto clipboard = wxTheClipboard;
+    wxClipboardLocker clipboardLock( clipboard );
+
+    if( !clipboardLock || !clipboard->IsOpened() )
+        return;
+
+    clipboard->SetData( new wxTextDataObject(
+                wxString( m_formatter.GetString().c_str(), wxConvUTF8 ) ) );
+
+    clipboard->Flush();
+
+    // This section exists to return the clipboard data, ensuring it has fully
+    // been processed by the system clipboard.  This appears to be needed for
+    // extremely large clipboard copies on asynchronous linux clipboard managers
+    // such as KDE's Klipper
     {
-        wxTheClipboard->SetData( new wxTextDataObject(
-                    wxString( m_formatter.GetString().c_str(), wxConvUTF8 ) ) );
-        wxTheClipboard->Close();
+        wxTextDataObject data;
+        clipboard->GetData( data );
+        ( void )data.GetText(); // Keep unused variable
     }
 }
 
 
 BOARD_ITEM* CLIPBOARD_IO::Parse()
 {
-    std::string result;
+    BOARD_ITEM* item;
+    wxString result;
 
-    if( wxTheClipboard->Open() )
+    auto clipboard = wxTheClipboard;
+    wxClipboardLocker clipboardLock( clipboard );
+
+    if( !clipboardLock )
+        return nullptr;
+
+
+    if( clipboard->IsSupported( wxDF_TEXT ) )
     {
-        if( wxTheClipboard->IsSupported( wxDF_TEXT ) )
-        {
-            wxTextDataObject data;
-            wxTheClipboard->GetData( data );
-
-            result = data.GetText().mb_str();
-        }
-
-        wxTheClipboard->Close();
+        wxTextDataObject data;
+        clipboard->GetData( data );
+        result = data.GetText();
     }
 
-    BOARD_ITEM *item;
     try
     {
         item = PCB_IO::Parse( result );
-    } catch (...) {
+    }
+    catch (...)
+    {
         item = nullptr;
     }
 
@@ -217,8 +246,6 @@ BOARD_ITEM* CLIPBOARD_IO::Parse()
 void CLIPBOARD_IO::Save( const wxString& aFileName, BOARD* aBoard,
                 const PROPERTIES* aProperties )
 {
-    LOCALE_IO   toggle;     // toggles on, then off, the C locale.
-
     init( aProperties );
 
     m_board = aBoard;       // after init()
@@ -237,13 +264,25 @@ void CLIPBOARD_IO::Save( const wxString& aFileName, BOARD* aBoard,
 
     m_out->Print( 0, ")\n" );
 
-    if( wxTheClipboard->Open() )
-    {
-        wxTheClipboard->SetData( new wxTextDataObject(
-                    wxString( m_formatter.GetString().c_str(), wxConvUTF8 ) ) );
-        wxTheClipboard->Close();
-    }
+    auto clipboard = wxTheClipboard;
+    wxClipboardLocker clipboardLock( clipboard );
 
+    if( !clipboardLock )
+        return;
+
+    clipboard->SetData( new wxTextDataObject(
+                wxString( m_formatter.GetString().c_str(), wxConvUTF8 ) ) );
+    clipboard->Flush();
+
+    // This section exists to return the clipboard data, ensuring it has fully
+    // been processed by the system clipboard.  This appears to be needed for
+    // extremely large clipboard copies on asynchronous linux clipboard managers
+    // such as KDE's Klipper
+    {
+        wxTextDataObject data;
+        clipboard->GetData( data );
+        ( void )data.GetText(); // Keep unused variable
+    }
 }
 
 
@@ -252,17 +291,18 @@ BOARD* CLIPBOARD_IO::Load( const wxString& aFileName,
 {
     std::string result;
 
-    if( wxTheClipboard->Open() )
+    auto clipboard = wxTheClipboard;
+    wxClipboardLocker clipboardLock( clipboard );
+
+    if( !clipboardLock )
+        return nullptr;
+
+    if( clipboard->IsSupported( wxDF_TEXT ) )
     {
-        if( wxTheClipboard->IsSupported( wxDF_TEXT ) )
-        {
-            wxTextDataObject data;
-            wxTheClipboard->GetData( data );
+        wxTextDataObject data;
+        clipboard->GetData( data );
 
-            result = data.GetText().mb_str();
-        }
-
-        wxTheClipboard->Close();
+        result = data.GetText().mb_str();
     }
 
     STRING_LINE_READER    reader(result, wxT( "clipboard" ) );
@@ -295,7 +335,7 @@ BOARD* CLIPBOARD_IO::Load( const wxString& aFileName,
     if( item->Type() != PCB_T )
     {
         // The parser loaded something that was valid, but wasn't a board.
-        THROW_PARSE_ERROR( _( "Clipboard content is not Kicad compatible" ),
+        THROW_PARSE_ERROR( _( "Clipboard content is not KiCad compatible" ),
                 m_parser->CurSource(), m_parser->CurLine(),
                 m_parser->CurLineNumber(), m_parser->CurOffset() );
     }
@@ -303,8 +343,9 @@ BOARD* CLIPBOARD_IO::Load( const wxString& aFileName,
     {
         board = dynamic_cast<BOARD*>( item );
     }
+
     // Give the filename to the board if it's new
-    if( !aAppendToMe )
+    if( board && !aAppendToMe )
         board->SetFileName( aFileName );
 
     return board;

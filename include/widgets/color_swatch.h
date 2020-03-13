@@ -45,16 +45,25 @@ public:
      * @param aParent parent window
      * @param aColor initial swatch color
      * @param aID id to use when sending swatch events
-     * @param aArbitraryColors true to allow selection of any 32 bits color for GAL canvas,
-     * and false to allow a selection from a set of colors accepted by the legacy canvas.
      */
-    COLOR_SWATCH( wxWindow* aParent, KIGFX::COLOR4D aColor, int aID,
-                  bool aArbitraryColors );
+    COLOR_SWATCH( wxWindow* aParent, KIGFX::COLOR4D aColor, int aID, KIGFX::COLOR4D aBackground,
+                  const KIGFX::COLOR4D aDefault = KIGFX::COLOR4D::UNSPECIFIED );
+
+    /**
+     * constructor for wxFormBuilder
+     */
+    COLOR_SWATCH( wxWindow *aParent, wxWindowID aId, const wxPoint &aPos = wxDefaultPosition,
+                  const wxSize &aSize = wxDefaultSize, long aStyle = 0 );
 
     /**
      * Set the current swatch color directly.
      */
     void SetSwatchColor( KIGFX::COLOR4D aColor, bool sendEvent );
+
+    /**
+     * Set the swatch background color.
+     */
+    void SetSwatchBackground( KIGFX::COLOR4D aBackground );
 
     /**
      * @return the current swatch color
@@ -68,21 +77,29 @@ public:
      */
     void GetNewSwatchColor();
 
+    static wxBitmap MakeBitmap( KIGFX::COLOR4D aColor, KIGFX::COLOR4D aBackground, wxSize aSize );
+
 private:
+    void setupEvents();
 
     /**
      * Pass unwanted events on to listeners of this object
      */
     void rePostEvent( wxEvent& aEvt );
 
-    ///> Can the swatch have any color, or only preset ones for legacy canvas?
-    bool m_arbitraryColors;
-
     ///> The current colour of the swatch
     KIGFX::COLOR4D m_color;
 
+    ///> The background colour to show the swatch over
+    KIGFX::COLOR4D m_background;
+
+    ///> The default color for the swatch
+    KIGFX::COLOR4D m_default;
+
     ///> Handle of the actual swatch shown
     wxStaticBitmap* m_swatch;
+
+    wxSize          m_size;
 };
 
 

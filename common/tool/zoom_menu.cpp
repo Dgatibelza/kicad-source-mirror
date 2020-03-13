@@ -24,15 +24,17 @@
 
 #include <tool/zoom_menu.h>
 #include <id.h>
-#include <draw_frame.h>
-#include <class_base_screen.h>
+#include <eda_draw_frame.h>
+#include <base_screen.h>
 #include <tool/actions.h>
 #include <bitmaps.h>
 
 #include <functional>
 using namespace std::placeholders;
 
-ZOOM_MENU::ZOOM_MENU( EDA_DRAW_FRAME* aParent ) : m_parent( aParent )
+ZOOM_MENU::ZOOM_MENU( EDA_DRAW_FRAME* aParent ) :
+        ACTION_MENU( true ),
+        m_parent( aParent )
 {
     BASE_SCREEN* screen = aParent->GetScreen();
 
@@ -45,7 +47,7 @@ ZOOM_MENU::ZOOM_MENU( EDA_DRAW_FRAME* aParent ) : m_parent( aParent )
 
     for( int i = 0; i < maxZoomIds; ++i )
     {
-        Append( ID_POPUP_ZOOM_LEVEL_START + i,
+        Append( ID_POPUP_ZOOM_LEVEL_START+1 + i,   // ID_POPUP_ZOOM_LEVEL_START == Auto
             wxString::Format( _( "Zoom: %.2f" ), aParent->GetZoomLevelCoeff() / screen->m_ZoomList[i] ),
             wxEmptyString, wxITEM_CHECK );
     }
@@ -64,10 +66,18 @@ OPT_TOOL_EVENT ZOOM_MENU::eventHandler( const wxMenuEvent& aEvent )
 
 void ZOOM_MENU::update()
 {
-    double zoom = m_parent->GetScreen()->GetZoom();
+    BASE_SCREEN* screen = m_parent->GetScreen();
+    double zoom = screen->GetZoom();
     const std::vector<double>& zoomList = m_parent->GetScreen()->m_ZoomList;
 
     // Check the current zoom
-    for( unsigned int i = 0; i < GetMenuItemCount(); ++i )
-        Check( ID_POPUP_ZOOM_LEVEL_START + i, std::fabs( zoomList[i] - zoom ) < 1e-6 );
+    int maxZoomIds = std::min( ID_POPUP_ZOOM_LEVEL_END - ID_POPUP_ZOOM_LEVEL_START,
+                               (int) screen->m_ZoomList.size() );
+
+    for( int i = 0; i < maxZoomIds; ++i )
+    {
+        // Search for a value near the current zoom setting:
+        double rel_error = std::fabs( zoomList[i] - zoom )/zoom;
+        Check( ID_POPUP_ZOOM_LEVEL_START+1 + i, rel_error < 0.1 );
+    }
 }

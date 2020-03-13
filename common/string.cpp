@@ -1,7 +1,7 @@
 /*
  * This program source code file is part of KiCad, a free EDA CAD application.
  *
- * Copyright (C) 2004-2017 KiCad Developers, see AUTHORS.txt for contributors.
+ * Copyright (C) 2004-2019 KiCad Developers, see AUTHORS.txt for contributors.
  *
  * This program is free software; you can redistribute it and/or
  * modify it under the terms of the GNU General Public License
@@ -38,6 +38,118 @@
  * the illegal file name characters for Linux and OSX.
  */
 static const char illegalFileNameChars[] = "\\/:\"<>|";
+
+
+/**
+ * These Escape/Unescape routines use HTML-entity-reference-style encoding to handle
+ * characters which are:
+ *   (a) not legal in filenames
+ *   (b) used as control characters in LIB_IDs
+ *   (c) used to delineate hierarchical paths
+ */
+wxString EscapeString( const wxString& aSource, ESCAPE_CONTEXT aContext )
+{
+    wxString converted;
+
+    for( wxUniChar c: aSource )
+    {
+        if( aContext == CTX_NETNAME )
+        {
+            if( c == '/' )
+                converted += "{slash}";
+            else if( c == '\n' || c == '\r' )
+                converted += "";    // drop
+            else
+                converted += c;
+        }
+        else if( aContext == CTX_LIBID )
+        {
+            if( c == '{' )
+                converted += "{brace}";
+            else if( c == ':' )
+                converted += "{colon}";
+            else if( c == '\n' || c == '\r' )
+                converted += "";    // drop
+            else
+                converted += c;
+        }
+        else if( aContext == CTX_QUOTED_STR )
+        {
+            if( c == '{' )
+                converted += "{brace}";
+            else if( c == '\"' )
+                converted += "{dblquote}";
+            else
+                converted += c;
+        }
+        else if( aContext == CTX_DELIMITED_STR )
+        {
+            if( c == '{' )
+                converted += "{brace}";
+            else if( c == ' ' )
+                converted += "{space}";
+            else if( c == '\t' )
+                converted += "{tab}";
+            else if( c == '\n' || c == '\r' )
+                converted += "{return}";
+            else
+                converted += c;
+        }
+        else if( aContext == CTX_FILENAME )
+        {
+            if( c == '{' )
+                converted += "{brace}";
+            else if( c == '/' )
+                converted += "{slash}";
+            else if( c == '\\' )
+                converted += "{backslash}";
+            else if( c == '\"' )
+                converted += "{dblquote}";
+            else if( c == '<' )
+                converted += "{lt}";
+            else if( c == '>' )
+                converted += "{gt}";
+            else if( c == '|' )
+                converted += "{bar}";
+            else if( c == ':' )
+                converted += "{colon}";
+            else if( c == '\t' )
+                converted += "{tab}";
+            else if( c == '\n' || c == '\r' )
+                converted += "{return}";
+            else
+                converted += c;
+        }
+        else
+            converted += c;
+    }
+
+    return converted;
+}
+
+
+wxString UnescapeString( const wxString& aSource )
+{
+    wxString converted = aSource;
+
+    converted.Replace( wxS( "{dblquote}" ), wxS( "\"" ) );
+    converted.Replace( wxS( "{quote}" ), wxS( "'" ) );
+    converted.Replace( wxS( "{lt}" ), wxS( "<" ) );
+    converted.Replace( wxS( "{gt}" ), wxS( ">" ) );
+    converted.Replace( wxS( "{backslash}" ), wxS( "\\" ) );
+    converted.Replace( wxS( "{slash}" ), wxS( "/" ) );
+    converted.Replace( wxS( "{bar}" ), wxS( "|" ) );
+    converted.Replace( wxS( "{colon}" ), wxS( ":" ) );
+    converted.Replace( wxS( "{space}" ), wxS( " " ) );
+    converted.Replace( wxS( "{dollar}" ), wxS( "$" ) );
+    converted.Replace( wxS( "{tab}" ), wxS( "\t" ) );
+    converted.Replace( wxS( "{return}" ), wxS( "\n" ) );
+
+    // must be done last
+    converted.Replace( wxS( "{brace}" ), wxS( "{" ) );
+
+    return converted;
+}
 
 
 int ReadDelimitedText( wxString* aDest, const char* aSource )
@@ -134,8 +246,12 @@ int ReadDelimitedText( char* aDest, const char* aSource, int aDestSize )
 }
 
 
-std::string EscapedUTF8( const wxString& aString )
+std::string EscapedUTF8( wxString aString )
 {
+    // No new-lines allowed in quoted strings
+    aString.Replace( "\r\n", "\r" );
+    aString.Replace( "\n", "\r" );
+
     std::string utf8 = TO_UTF8( aString );
 
     std::string ret;
@@ -235,67 +351,79 @@ wxString DateAndTime()
 }
 
 
-int StrNumCmp( const wxString& aString1, const wxString& aString2, int aLength, bool aIgnoreCase )
+int StrNumCmp( const wxString& aString1, const wxString& aString2, bool aIgnoreCase )
 {
-    int i;
     int nb1 = 0, nb2 = 0;
 
-    wxString::const_iterator str1 = aString1.begin(), str2 = aString2.begin();
+    auto str1 = aString1.begin();
+    auto str2 = aString2.begin();
 
-    if( ( str1 == aString1.end() ) || ( str2 == aString2.end() ) )
-        return 0;
-
-    for( i = 0; i < aLength; i++ )
+    while( str1 != aString1.end() && str2 != aString2.end() )
     {
-        if( isdigit( *str1 ) && isdigit( *str2 ) ) /* digit found */
+        wxUniChar c1 = *str1;
+        wxUniChar c2 = *str2;
+
+        if( wxIsdigit( c1 ) && wxIsdigit( c2 ) ) // Both characters are digits, do numeric compare.
         {
             nb1 = 0;
             nb2 = 0;
 
-            while( isdigit( *str1 ) )
+            do
             {
-                nb1 = nb1 * 10 + (int) *str1 - '0';
+                c1 = *str1;
+                nb1 = nb1 * 10 + (int) c1 - '0';
                 ++str1;
-            }
+            } while( str1 != aString1.end() && wxIsdigit( *str1 ) );
 
-            while( isdigit( *str2 ) )
+            do
             {
-                nb2 = nb2 * 10 + (int) *str2 - '0';
+                c2 = *str2;
+                nb2 = nb2 * 10 + (int) c2 - '0';
                 ++str2;
-            }
+            } while( str2 != aString2.end() && wxIsdigit( *str2 ) );
 
             if( nb1 < nb2 )
                 return -1;
 
             if( nb1 > nb2 )
                 return 1;
+
+            c1 = ( str1 != aString1.end() ) ? *str1 : wxUniChar( 0 );
+            c2 = ( str2 != aString2.end() ) ? *str2 : wxUniChar( 0 );
         }
 
+        // Any numerical comparisons to here are identical.
         if( aIgnoreCase )
         {
-            if( toupper( *str1 ) < toupper( *str2 ) )
+            if( wxToupper( c1 ) < wxToupper( c2 ) )
                 return -1;
 
-            if( toupper( *str1 ) > toupper( *str2 ) )
+            if( wxToupper( c1 ) > wxToupper( c2 ) )
                 return 1;
-
-            if( ( *str1 == 0 ) && ( *str2 == 0 ) )
-                return 0;
         }
         else
         {
-            if( *str1 < *str2 )
+            if( c1 < c2 )
                 return -1;
 
-            if( *str1 > *str2 )
+            if( c1 > c2 )
                 return 1;
-
-            if( ( str1 == aString1.end() ) && ( str2 == aString2.end() ) )
-                return 0;
         }
 
-        ++str1;
-        ++str2;
+        if( str1 != aString1.end() )
+            ++str1;
+
+        if( str2 != aString2.end() )
+            ++str2;
+    }
+
+    if( str1 == aString1.end() && str2 != aString2.end() )
+    {
+        return -1;   // Identical to here but aString1 is longer.
+    }
+    else if( str1 != aString1.end() && str2 == aString2.end() )
+    {
+        return 1;    // Identical to here but aString2 is longer.
     }
 
     return 0;
@@ -362,56 +490,99 @@ bool WildCompareString( const wxString& pattern, const wxString& string_to_tst,
 }
 
 
-int RefDesStringCompare( const wxString& strFWord, const wxString& strSWord )
+bool ApplyModifier( double& value, const wxString& aString )
 {
-    // The different sections of the first string
+    static const wxString modifiers( wxT( "pnumkKM" ) );
+
+    if( !aString.length() )
+        return false;
+
+    wxChar   modifier;
+    wxString units;
+
+    if( modifiers.Find( aString[ 0 ] ) >= 0 )
+    {
+        modifier = aString[ 0 ];
+        units = aString.Mid( 1 ).Trim();
+    }
+    else
+    {
+        modifier = ' ';
+        units = aString.Mid( 0 ).Trim();
+    }
+
+    if( units.length()
+            && !units.CmpNoCase( wxT( "F" ) )
+            && !units.CmpNoCase( wxT( "hz" ) )
+            && !units.CmpNoCase( wxT( "W" ) )
+            && !units.CmpNoCase( wxT( "V" ) )
+            && !units.CmpNoCase( wxT( "H" ) ) )
+        return false;
+
+    if( modifier == 'p' )
+        value *= 1.0e-12;
+    if( modifier == 'n' )
+        value *= 1.0e-9;
+    else if( modifier == 'u' )
+        value *= 1.0e-6;
+    else if( modifier == 'm' )
+        value *= 1.0e-3;
+    else if( modifier == 'k' || modifier == 'K' )
+        value *= 1.0e3;
+    else if( modifier == 'M' )
+        value *= 1.0e6;
+    else if( modifier == 'G' )
+        value *= 1.0e9;
+
+    return true;
+}
+
+
+int ValueStringCompare( wxString strFWord, wxString strSWord )
+{
+    // Compare unescaped text
+    strFWord = UnescapeString( strFWord );
+    strSWord = UnescapeString( strSWord );
+
+    // The different sections of the two strings
     wxString strFWordBeg, strFWordMid, strFWordEnd;
-
-    // The different sections of the second string
     wxString strSWordBeg, strSWordMid, strSWordEnd;
-
-    int isEqual = 0;            // The numerical results of a string compare
-    int iReturn = 0;            // The variable that is being returned
-
-    long lFirstDigit  = 0;      // The converted middle section of the first string
-    long lSecondDigit = 0;      // The converted middle section of the second string
 
     // Split the two strings into separate parts
     SplitString( strFWord, &strFWordBeg, &strFWordMid, &strFWordEnd );
     SplitString( strSWord, &strSWordBeg, &strSWordMid, &strSWordEnd );
 
     // Compare the Beginning section of the strings
-    isEqual = strFWordBeg.CmpNoCase( strSWordBeg );
+    int isEqual = strFWordBeg.CmpNoCase( strSWordBeg );
 
     if( isEqual > 0 )
-        iReturn = 1;
+        return 1;
     else if( isEqual < 0 )
-        iReturn = -1;
+        return -1;
     else
     {
         // If the first sections are equal compare their digits
-        strFWordMid.ToLong( &lFirstDigit );
-        strSWordMid.ToLong( &lSecondDigit );
+        double lFirstNumber  = 0;
+        double lSecondNumber = 0;
+        bool   endingIsModifier = false;
 
-        if( lFirstDigit > lSecondDigit )
-            iReturn = 1;
-        else if( lFirstDigit < lSecondDigit )
-            iReturn = -1;
+        strFWordMid.ToDouble( &lFirstNumber );
+        strSWordMid.ToDouble( &lSecondNumber );
+
+        endingIsModifier |= ApplyModifier( lFirstNumber, strFWordEnd );
+        endingIsModifier |= ApplyModifier( lSecondNumber, strSWordEnd );
+
+        if( lFirstNumber > lSecondNumber )
+            return 1;
+        else if( lFirstNumber < lSecondNumber )
+            return -1;
+        // If the first two sections are equal and the endings are modifiers then compare them
+        else if( !endingIsModifier )
+            return strFWordEnd.CmpNoCase( strSWordEnd );
+        // Ran out of things to compare; they must match
         else
-        {
-            // If the first two sections are equal compare the endings
-            isEqual = strFWordEnd.CmpNoCase( strSWordEnd );
-
-            if( isEqual > 0 )
-                iReturn = 1;
-            else if( isEqual < 0 )
-                iReturn = -1;
-            else
-                iReturn = 0;
-        }
+            return 0;
     }
-
-    return iReturn;
 }
 
 
@@ -420,6 +591,8 @@ int SplitString( wxString  strToSplit,
                  wxString* strDigits,
                  wxString* strEnd )
 {
+    static const wxString separators( wxT( ".," ) );
+
     // Clear all the return strings
     strBeginning->Empty();
     strDigits->Empty();
@@ -434,7 +607,7 @@ int SplitString( wxString  strToSplit,
 
     for( ii = (strToSplit.length() - 1); ii >= 0; ii-- )
     {
-        if( isdigit( strToSplit[ii] ) )
+        if( wxIsdigit( strToSplit[ii] ) )
             break;
     }
 
@@ -453,7 +626,7 @@ int SplitString( wxString  strToSplit,
 
         for( ; ii >= 0; ii-- )
         {
-            if( !isdigit( strToSplit[ii] ) )
+            if( !wxIsdigit( strToSplit[ii] ) && separators.Find( strToSplit[ii] ) < 0 )
                 break;
         }
 
@@ -474,6 +647,30 @@ int SplitString( wxString  strToSplit,
 }
 
 
+int GetTrailingInt( const wxString& aStr )
+{
+    int number = 0;
+    int base = 1;
+
+    // Trim and extract the trailing numeric part
+    int index = aStr.Len() - 1;
+
+    while( index >= 0 )
+    {
+        const char chr = aStr.GetChar( index );
+
+        if( chr < '0' || chr > '9' )
+            break;
+
+        number += ( chr - '0' ) * base;
+        base *= 10;
+        index--;
+    }
+
+    return number;
+}
+
+
 wxString GetIllegalFileNameWxChars()
 {
     return FROM_UTF8( illegalFileNameChars );
@@ -482,8 +679,9 @@ wxString GetIllegalFileNameWxChars()
 
 bool ReplaceIllegalFileNameChars( std::string* aName, int aReplaceChar )
 {
-    bool              changed = false;
-    std::string       result;
+    bool changed = false;
+    std::string result;
+    result.reserve( aName->length() );
 
     for( std::string::iterator it = aName->begin();  it != aName->end();  ++it )
     {
@@ -503,7 +701,38 @@ bool ReplaceIllegalFileNameChars( std::string* aName, int aReplaceChar )
     }
 
     if( changed )
-        *aName =  result;
+        *aName = result;
+
+    return changed;
+}
+
+
+bool ReplaceIllegalFileNameChars( wxString& aName, int aReplaceChar )
+{
+    bool changed = false;
+    wxString result;
+    result.reserve( aName.Length() );
+    wxString illWChars = GetIllegalFileNameWxChars();
+
+    for( wxString::iterator it = aName.begin();  it != aName.end();  ++it )
+    {
+        if( illWChars.Find( *it ) != wxNOT_FOUND )
+        {
+            if( aReplaceChar )
+                result += aReplaceChar;
+            else
+                result += wxString::Format( "%%%02x", *it );
+
+            changed = true;
+        }
+        else
+        {
+            result += *it;
+        }
+    }
+
+    if( changed )
+        aName = result;
 
     return changed;
 }

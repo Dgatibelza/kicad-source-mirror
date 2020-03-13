@@ -3,7 +3,7 @@
  *
  * Copyright (C) 2017 Jean-Pierre Charras, jp.charras at wanadoo.fr
  * Copyright (C) 2012 SoftPLC Corporation, Dick Hollenbeck <dick@softplc.com>
- * Copyright (C) 1992-2017 KiCad Developers, see AUTHORS.txt for contributors.
+ * Copyright (C) 1992-2019 KiCad Developers, see AUTHORS.txt for contributors.
  *
  * This program is free software; you can redistribute it and/or
  * modify it under the terms of the GNU General Public License
@@ -23,90 +23,65 @@
  * 51 Franklin Street, Fifth Floor, Boston, MA  02110-1301, USA
  */
 
-/**
- * @file class_zone.cpp
- * @brief Implementation of class to handle copper zones.
- */
-
-#include <fctsys.h>
-#include <wxstruct.h>
-#include <trigo.h>
-#include <class_pcb_screen.h>
-#include <class_drawpanel.h>
-#include <kicad_string.h>
-#include <richio.h>
-#include <macros.h>
-#include <wxBasePcbFrame.h>
-#include <msgpanel.h>
 #include <bitmaps.h>
-
+#include <fctsys.h>
+#include <geometry/geometry_utils.h>
+#include <kicad_string.h>
+#include <macros.h>
+#include <msgpanel.h>
+#include <pcb_base_frame.h>
+#include <pcb_screen.h>
+#include <richio.h>
+#include <trigo.h>
 #include <convert_to_biu.h>
 #include <class_board.h>
 #include <class_zone.h>
-
 #include <pcbnew.h>
 #include <zones.h>
 #include <math_for_graphics.h>
-#include <polygon_test_point_inside.h>
+#include <geometry/polygon_test_point_inside.h>
+#include <math/util.h>      // for KiROUND
+#include <pgm_base.h>
+#include <settings/color_settings.h>
+#include <settings/settings_manager.h>
 
 
-ZONE_CONTAINER::ZONE_CONTAINER( BOARD* aBoard ) :
-    BOARD_CONNECTED_ITEM( aBoard, PCB_ZONE_AREA_T )
+ZONE_CONTAINER::ZONE_CONTAINER( BOARD_ITEM_CONTAINER* aParent, bool aInModule )
+        : BOARD_CONNECTED_ITEM( aParent, aInModule ? PCB_MODULE_ZONE_AREA_T : PCB_ZONE_AREA_T ),
+          m_area( 0.0 )
 {
     m_CornerSelection = nullptr;                // no corner is selected
     m_IsFilled = false;                         // fill status : true when the zone is filled
-    m_FillMode = 0;                             // How to fill areas: 0 = use filled polygons, != 0 fill with segments
+    m_FillMode = ZONE_FILL_MODE::POLYGONS;
+    m_hatchStyle = ZONE_HATCH_STYLE::DIAGONAL_EDGE;
+    m_hatchPitch = GetDefaultHatchPitch();
+    m_hv45 = false;
+    m_HatchFillTypeThickness = 0;
+    m_HatchFillTypeGap = 0;
+    m_HatchFillTypeOrientation = 0.0;
+    m_HatchFillTypeSmoothingLevel = 0;          // Grid pattern smoothing type. 0 = no smoothing
+    m_HatchFillTypeSmoothingValue = 0.1;        // Grid pattern chamfer value relative to the gap value
+                                                // used only if m_HatchFillTypeSmoothingLevel > 0
     m_priority = 0;
-    m_smoothedPoly = NULL;
     m_cornerSmoothingType = ZONE_SETTINGS::SMOOTHING_NONE;
-    SetIsKeepout( false );
+    SetIsKeepout( aInModule ? true : false );   // Zones living in modules have the keepout option.
     SetDoNotAllowCopperPour( false );           // has meaning only if m_isKeepout == true
     SetDoNotAllowVias( true );                  // has meaning only if m_isKeepout == true
     SetDoNotAllowTracks( true );                // has meaning only if m_isKeepout == true
     m_cornerRadius = 0;
     SetLocalFlags( 0 );                         // flags tempoarry used in zone calculations
     m_Poly = new SHAPE_POLY_SET();              // Outlines
-    aBoard->GetZoneSettings().ExportSetting( *this );
+    m_FilledPolysUseThickness = true;           // set the "old" way to build filled polygon areas (before 6.0.x)
+    aParent->GetZoneSettings().ExportSetting( *this );
+
+    m_needRefill = false;   // True only after some edition.
 }
 
 
-ZONE_CONTAINER::ZONE_CONTAINER( const ZONE_CONTAINER& aZone ) :
-    BOARD_CONNECTED_ITEM( aZone )
+ZONE_CONTAINER::ZONE_CONTAINER( const ZONE_CONTAINER& aZone )
+        : BOARD_CONNECTED_ITEM( aZone.GetParent(), PCB_ZONE_AREA_T )
 {
-    m_smoothedPoly = NULL;
-
-    // Should the copy be on the same net?
-    SetNetCode( aZone.GetNetCode() );
-    m_Poly = new SHAPE_POLY_SET( *aZone.m_Poly );
-
-    // For corner moving, corner index to drag, or nullptr if no selection
-    m_CornerSelection = nullptr;
-    m_IsFilled = aZone.m_IsFilled;
-    m_ZoneClearance = aZone.m_ZoneClearance;     // clearance value
-    m_ZoneMinThickness = aZone.m_ZoneMinThickness;
-    m_FillMode = aZone.m_FillMode;               // Filling mode (segments/polygons)
-    m_priority = aZone.m_priority;
-    m_ArcToSegmentsCount = aZone.m_ArcToSegmentsCount;
-    m_PadConnection = aZone.m_PadConnection;
-    m_ThermalReliefGap = aZone.m_ThermalReliefGap;
-    m_ThermalReliefCopperBridge = aZone.m_ThermalReliefCopperBridge;
-    m_FilledPolysList.Append( aZone.m_FilledPolysList );
-    m_FillSegmList = aZone.m_FillSegmList;      // vector <> copy
-
-    m_isKeepout = aZone.m_isKeepout;
-    m_doNotAllowCopperPour = aZone.m_doNotAllowCopperPour;
-    m_doNotAllowVias = aZone.m_doNotAllowVias;
-    m_doNotAllowTracks = aZone.m_doNotAllowTracks;
-
-    m_cornerSmoothingType = aZone.m_cornerSmoothingType;
-    m_cornerRadius = aZone.m_cornerRadius;
-
-    m_hatchStyle = aZone.m_hatchStyle;
-    m_hatchPitch = aZone.m_hatchPitch;
-    m_HatchLines = aZone.m_HatchLines;
-
-    SetLayerSet( aZone.GetLayerSet() );
-    SetLocalFlags( aZone.GetLocalFlags() );
+    initDataFromSrcInCopyCtor( aZone );
 }
 
 
@@ -118,11 +93,12 @@ ZONE_CONTAINER& ZONE_CONTAINER::operator=( const ZONE_CONTAINER& aOther )
     delete m_Poly;
     m_Poly = new SHAPE_POLY_SET( *aOther.m_Poly );
 
+    m_isKeepout = aOther.m_isKeepout;
     m_CornerSelection  = nullptr; // for corner moving, corner index to (null if no selection)
     m_ZoneClearance    = aOther.m_ZoneClearance;            // clearance value
     m_ZoneMinThickness = aOther.m_ZoneMinThickness;
+    m_FilledPolysUseThickness = aOther.m_FilledPolysUseThickness;
     m_FillMode = aOther.m_FillMode;                         // filling mode (segments/polygons)
-    m_ArcToSegmentsCount = aOther.m_ArcToSegmentsCount;
     m_PadConnection = aOther.m_PadConnection;
     m_ThermalReliefGap = aOther.m_ThermalReliefGap;
     m_ThermalReliefCopperBridge = aOther.m_ThermalReliefCopperBridge;
@@ -134,6 +110,12 @@ ZONE_CONTAINER& ZONE_CONTAINER::operator=( const ZONE_CONTAINER& aOther )
     m_FillSegmList.clear();
     m_FillSegmList = aOther.m_FillSegmList;
 
+    m_HatchFillTypeThickness = aOther.m_HatchFillTypeThickness;
+    m_HatchFillTypeGap = aOther.m_HatchFillTypeGap;
+    m_HatchFillTypeOrientation = aOther.m_HatchFillTypeOrientation;
+    m_HatchFillTypeSmoothingLevel = aOther.m_HatchFillTypeSmoothingLevel;
+    m_HatchFillTypeSmoothingValue = aOther.m_HatchFillTypeSmoothingValue;
+
     SetLayerSet( aOther.GetLayerSet() );
 
     return *this;
@@ -143,8 +125,59 @@ ZONE_CONTAINER& ZONE_CONTAINER::operator=( const ZONE_CONTAINER& aOther )
 ZONE_CONTAINER::~ZONE_CONTAINER()
 {
     delete m_Poly;
-    delete m_smoothedPoly;
     delete m_CornerSelection;
+}
+
+
+void ZONE_CONTAINER::initDataFromSrcInCopyCtor( const ZONE_CONTAINER& aZone )
+{
+    // members are expected non initialize in this.
+    // initDataFromSrcInCopyCtor() is expected to be called
+    // only from a copy constructor.
+    m_isKeepout = aZone.m_isKeepout;
+    SetLayerSet( aZone.GetLayerSet() );
+
+    m_Poly = new SHAPE_POLY_SET( *aZone.m_Poly );
+
+    // For corner moving, corner index to drag, or nullptr if no selection
+    m_CornerSelection = nullptr;
+    m_IsFilled = aZone.m_IsFilled;
+    m_ZoneClearance = aZone.m_ZoneClearance;     // clearance value
+    m_ZoneMinThickness = aZone.m_ZoneMinThickness;
+    m_FilledPolysUseThickness = aZone.m_FilledPolysUseThickness;
+    m_FillMode = aZone.m_FillMode;               // Filling mode (segments/polygons)
+    m_hv45 = aZone.m_hv45;
+    m_priority = aZone.m_priority;
+    m_PadConnection = aZone.m_PadConnection;
+    m_ThermalReliefGap = aZone.m_ThermalReliefGap;
+    m_ThermalReliefCopperBridge = aZone.m_ThermalReliefCopperBridge;
+    m_FilledPolysList.Append( aZone.m_FilledPolysList );
+    m_FillSegmList = aZone.m_FillSegmList;      // vector <> copy
+
+    m_doNotAllowCopperPour = aZone.m_doNotAllowCopperPour;
+    m_doNotAllowVias = aZone.m_doNotAllowVias;
+    m_doNotAllowTracks = aZone.m_doNotAllowTracks;
+
+    m_cornerSmoothingType = aZone.m_cornerSmoothingType;
+    m_cornerRadius = aZone.m_cornerRadius;
+
+    m_hatchStyle = aZone.m_hatchStyle;
+    m_hatchPitch = aZone.m_hatchPitch;
+    m_HatchLines = aZone.m_HatchLines;
+
+    m_HatchFillTypeThickness = aZone.m_HatchFillTypeThickness;
+    m_HatchFillTypeGap = aZone.m_HatchFillTypeGap;
+    m_HatchFillTypeOrientation = aZone.m_HatchFillTypeOrientation;
+    m_HatchFillTypeSmoothingLevel = aZone.m_HatchFillTypeSmoothingLevel;
+    m_HatchFillTypeSmoothingValue = aZone.m_HatchFillTypeSmoothingValue;
+
+    SetLocalFlags( aZone.GetLocalFlags() );
+
+    // Now zone type and layer are set, transfer net info
+    // (has meaning only for copper zones)
+    m_netinfo = aZone.m_netinfo;
+
+    SetNeedRefill( aZone.NeedRefill() );
 }
 
 
@@ -156,8 +189,7 @@ EDA_ITEM* ZONE_CONTAINER::Clone() const
 
 bool ZONE_CONTAINER::UnFill()
 {
-    bool change = ( !m_FilledPolysList.IsEmpty() ) ||
-                  ( m_FillSegmList.size() > 0 );
+    bool change = ( !m_FilledPolysList.IsEmpty() || m_FillSegmList.size() > 0 );
 
     m_FilledPolysList.RemoveAllContours();
     m_FillSegmList.clear();
@@ -167,15 +199,9 @@ bool ZONE_CONTAINER::UnFill()
 }
 
 
-const wxPoint& ZONE_CONTAINER::GetPosition() const
+const wxPoint ZONE_CONTAINER::GetPosition() const
 {
-    const WX_VECTOR_CONVERTER* pos;
-
-    // The retrieved vertex is a VECTOR2I. Casting it to a union WX_VECTOR_CONVERTER, we can later
-    // return the object shaped as a wxPoint. See the definition of the union in class_zone.h for
-    // more information on this hack.
-    pos = reinterpret_cast<const WX_VECTOR_CONVERTER*>( &GetCornerPosition( 0 ) );
-    return pos->wx;
+    return (wxPoint) GetCornerPosition( 0 );
 }
 
 
@@ -223,14 +249,23 @@ void ZONE_CONTAINER::SetLayerSet( LSET aLayerSet )
     }
 
     if( aLayerSet.count() == 0 )
-    {
         return;
-    }
+
+    if( m_layerSet != aLayerSet )
+        SetNeedRefill( true );
 
     m_layerSet = aLayerSet;
 
-    // Set the single layer to the first selected layer
+    // Set the single layer parameter.
+    // For keepout zones that can be on many layers, this parameter does not have
+    // really meaning and is a bit arbitrary if more than one layer is set.
+    // But many functions are using it.
+    // So we need to initialize it to a reasonable value.
+    // Priority is F_Cu then B_Cu then to the first selected layer
     m_Layer = aLayerSet.Seq()[0];
+
+    if( m_Layer != F_Cu && aLayerSet[B_Cu] )
+        m_Layer = B_Cu;
 }
 
 
@@ -255,9 +290,7 @@ void ZONE_CONTAINER::ViewGetLayers( int aLayers[], int& aCount ) const
         LSEQ layers = m_layerSet.Seq();
 
         for( unsigned int idx = 0; idx < layers.size(); idx++ )
-        {
             aLayers[idx] = layers[idx];
-        }
 
         aCount = layers.size();
     }
@@ -272,35 +305,27 @@ void ZONE_CONTAINER::ViewGetLayers( int aLayers[], int& aCount ) const
 bool ZONE_CONTAINER::IsOnLayer( PCB_LAYER_ID aLayer ) const
 {
     if( GetIsKeepout() )
-    {
         return m_layerSet.test( aLayer );
-    }
 
     return BOARD_ITEM::IsOnLayer( aLayer );
 }
 
 
-void ZONE_CONTAINER::Draw( EDA_DRAW_PANEL* panel, wxDC* DC, GR_DRAWMODE aDrawMode,
-                           const wxPoint& offset )
+void ZONE_CONTAINER::Print( PCB_BASE_FRAME* aFrame, wxDC* DC, const wxPoint& offset )
 {
     if( !DC )
         return;
 
-    wxPoint     seg_start, seg_end;
-    PCB_LAYER_ID    curr_layer = ( (PCB_SCREEN*) panel->GetScreen() )->m_Active_Layer;
-    BOARD*      brd   = GetBoard();
-
-    auto frame = static_cast<PCB_BASE_FRAME*> ( panel->GetParent() );
-
+    wxPoint      seg_start, seg_end;
+    PCB_LAYER_ID curr_layer = aFrame->GetActiveLayer();
+    BOARD*       brd   = GetBoard();
     PCB_LAYER_ID draw_layer = UNDEFINED_LAYER;
 
     LSET layers = GetLayerSet() & brd->GetVisibleLayers();
 
-    // If there are no visible layers and the zone is not highlighted, return
-    if( layers.count() == 0 && !( aDrawMode & GR_HIGHLIGHT ) )
-    {
+    // If there are no visible layers, return
+    if( layers.count() == 0 )
         return;
-    }
 
     /* Keepout zones can exist on multiple layers
      * Thus, determining which color to use to render them is a bit tricky.
@@ -320,10 +345,8 @@ void ZONE_CONTAINER::Draw( EDA_DRAW_PANEL* panel, wxDC* DC, GR_DRAWMODE aDrawMod
         assert( GetLayerSet().count() > 0 );
 
         // Not on any visible layer?
-        if( layers.count() == 0 && !( aDrawMode & GR_HIGHLIGHT ) )
-        {
+        if( layers.count() == 0 )
             return;
-        }
 
         // Is keepout zone present on the selected layer?
         if( layers.test( curr_layer ) )
@@ -348,32 +371,22 @@ void ZONE_CONTAINER::Draw( EDA_DRAW_PANEL* panel, wxDC* DC, GR_DRAWMODE aDrawMod
      */
     else
     {
-        if( brd->IsLayerVisible( GetLayer() ) == false && !( aDrawMode & GR_HIGHLIGHT ) )
-        {
+        if( brd->IsLayerVisible( GetLayer() ) == false )
             return;
-        }
 
         draw_layer = GetLayer();
     }
 
     assert( draw_layer != UNDEFINED_LAYER );
 
-    auto color = frame->Settings().Colors().GetLayerColor( draw_layer );
+    COLOR4D color = Pgm().GetSettingsManager().GetColorSettings()->GetColor( draw_layer );
 
-    GRSetDrawMode( DC, aDrawMode );
-    DISPLAY_OPTIONS* displ_opts = (DISPLAY_OPTIONS*)panel->GetDisplayOptions();
+    auto displ_opts = aFrame->GetDisplayOptions();
 
-    if( displ_opts->m_ContrastModeDisplay )
+    if( displ_opts.m_ContrastModeDisplay )
     {
         if( !IsOnLayer( curr_layer ) )
-        {
             color = COLOR4D( DARKDARKGRAY );
-        }
-    }
-
-    if( ( aDrawMode & GR_HIGHLIGHT ) && !( aDrawMode & GR_AND ) )
-    {
-        color.SetToLegacyHighlightColor();
     }
 
     color.a = 0.588;
@@ -392,7 +405,7 @@ void ZONE_CONTAINER::Draw( EDA_DRAW_PANEL* panel, wxDC* DC, GR_DRAWMODE aDrawMod
         lines.push_back( static_cast<wxPoint>( segment.B ) + offset );
     }
 
-    GRLineArray( panel->GetClipBox(), DC, lines, 0, color );
+    GRLineArray( nullptr, DC, lines, 0, color );
 
     // draw hatches
     lines.clear();
@@ -406,54 +419,34 @@ void ZONE_CONTAINER::Draw( EDA_DRAW_PANEL* panel, wxDC* DC, GR_DRAWMODE aDrawMod
         lines.push_back( seg_end );
     }
 
-    GRLineArray( panel->GetClipBox(), DC, lines, 0, color );
+    GRLineArray( nullptr, DC, lines, 0, color );
 }
 
 
-void ZONE_CONTAINER::DrawFilledArea( EDA_DRAW_PANEL* panel,
-                                     wxDC* DC, GR_DRAWMODE aDrawMode, const wxPoint& offset )
+void ZONE_CONTAINER::PrintFilledArea( PCB_BASE_FRAME* aFrame, wxDC* DC, const wxPoint& offset )
 {
-
     static std::vector <wxPoint> CornersBuffer;
-    DISPLAY_OPTIONS* displ_opts = (DISPLAY_OPTIONS*)panel->GetDisplayOptions();
 
-    // outline_mode is false to show filled polys,
-    // and true to show polygons outlines only (test and debug purposes)
-    bool outline_mode = displ_opts->m_DisplayZonesMode == 2 ? true : false;
+    BOARD*  brd          = GetBoard();
+    COLOR4D color        = Pgm().GetSettingsManager().GetColorSettings()->GetColor( GetLayer() );
+    auto&   displ_opts   = aFrame->GetDisplayOptions();
+    bool    outline_mode = displ_opts.m_DisplayZonesMode == 2;
 
     if( DC == NULL )
         return;
 
-    if( displ_opts->m_DisplayZonesMode == 1 )     // Do not show filled areas
+    if( displ_opts.m_DisplayZonesMode == 1 )     // Do not show filled areas
         return;
 
     if( m_FilledPolysList.IsEmpty() )  // Nothing to draw
         return;
 
-    BOARD*      brd = GetBoard();
-    PCB_LAYER_ID    curr_layer = ( (PCB_SCREEN*) panel->GetScreen() )->m_Active_Layer;
-
-    auto frame = static_cast<PCB_BASE_FRAME*> ( panel->GetParent() );
-    auto color = frame->Settings().Colors().GetLayerColor( GetLayer() );
-
-    if( brd->IsLayerVisible( GetLayer() ) == false && !( aDrawMode & GR_HIGHLIGHT ) )
+    if( brd->IsLayerVisible( GetLayer() ) == false )
         return;
-
-    GRSetDrawMode( DC, aDrawMode );
-
-    if( displ_opts->m_ContrastModeDisplay )
-    {
-        if( !IsOnLayer( curr_layer ) )
-            color = COLOR4D( DARKDARKGRAY );
-    }
-
-    if( ( aDrawMode & GR_HIGHLIGHT ) && !( aDrawMode & GR_AND ) )
-        color.SetToLegacyHighlightColor();
 
     color.a = 0.588;
 
-
-    for ( int ic = 0; ic < m_FilledPolysList.OutlineCount(); ic++ )
+    for( int ic = 0; ic < m_FilledPolysList.OutlineCount(); ic++ )
     {
         const SHAPE_LINE_CHAIN& path = m_FilledPolysList.COutline( ic );
 
@@ -476,48 +469,31 @@ void ZONE_CONTAINER::DrawFilledArea( EDA_DRAW_PANEL* panel,
         CornersBuffer.push_back( p0 );
 
         // Draw outlines:
-        if( ( m_ZoneMinThickness > 1 ) || outline_mode )
+        int outline_thickness = GetFilledPolysUseThickness() ? GetMinThickness() : 0;
+
+        if( ( outline_thickness > 1 ) || outline_mode )
         {
             int ilim = CornersBuffer.size() - 1;
 
             for( int is = 0, ie = ilim; is <= ilim; ie = is, is++ )
             {
-                int x0 = CornersBuffer[is].x;
-                int y0 = CornersBuffer[is].y;
-                int x1 = CornersBuffer[ie].x;
-                int y1 = CornersBuffer[ie].y;
-
                 // Draw only basic outlines, not extra segments.
-                if( !displ_opts->m_DisplayPcbTrackFill || GetState( FORCE_SKETCH ) )
-                    GRCSegm( panel->GetClipBox(), DC,
-                             x0, y0, x1, y1,
-                             m_ZoneMinThickness, color );
+                if( !displ_opts.m_DisplayPcbTrackFill || GetState( FORCE_SKETCH ) )
+                {
+                    GRCSegm( nullptr, DC, CornersBuffer[is], CornersBuffer[ie],
+                             outline_thickness, color );
+                }
                 else
-                    GRFillCSegm( panel->GetClipBox(), DC,
-                                 x0, y0, x1, y1, m_ZoneMinThickness, color );
+                {
+                    GRFilledSegment( nullptr, DC, CornersBuffer[is], CornersBuffer[ie],
+                                     outline_thickness, color );
+                }
             }
         }
 
-        // Draw areas:
-        if( m_FillMode == 0 && !outline_mode )
-            GRPoly( panel->GetClipBox(), DC, CornersBuffer.size(), &CornersBuffer[0],
-                    true, 0, color, color );
-    }
-
-    if( m_FillMode == 1  && !outline_mode )     // filled with segments
-    {
-        for( unsigned ic = 0; ic < m_FillSegmList.size(); ic++ )
-        {
-            wxPoint start = m_FillSegmList[ic].m_Start + offset;
-            wxPoint end   = m_FillSegmList[ic].m_End + offset;
-
-            if( !displ_opts->m_DisplayPcbTrackFill || GetState( FORCE_SKETCH ) )
-                GRCSegm( panel->GetClipBox(), DC, start.x, start.y, end.x, end.y,
-                         m_ZoneMinThickness, color );
-            else
-                GRFillCSegm( panel->GetClipBox(), DC, start.x, start.y, end.x, end.y,
-                             m_ZoneMinThickness, color );
-        }
+        // Draw fill:
+        if( !outline_mode )
+            GRPoly( nullptr, DC, CornersBuffer.size(), &CornersBuffer[0], true, 0, color, color );
     }
 }
 
@@ -549,89 +525,6 @@ const EDA_RECT ZONE_CONTAINER::GetBoundingBox() const
 }
 
 
-void ZONE_CONTAINER::DrawWhileCreateOutline( EDA_DRAW_PANEL* panel, wxDC* DC,
-                                             GR_DRAWMODE draw_mode )
-{
-    GR_DRAWMODE current_gr_mode  = draw_mode;
-    bool    is_close_segment = false;
-
-    if( !DC )
-        return;
-
-    PCB_LAYER_ID    curr_layer = ( (PCB_SCREEN*) panel->GetScreen() )->m_Active_Layer;
-
-    auto frame = static_cast<PCB_BASE_FRAME*> ( panel->GetParent() );
-    auto color = frame->Settings().Colors().GetLayerColor( GetLayer() );
-
-    DISPLAY_OPTIONS* displ_opts = (DISPLAY_OPTIONS*)panel->GetDisplayOptions();
-
-    if( displ_opts->m_ContrastModeDisplay )
-    {
-        if( !IsOnLayer( curr_layer ) )
-            color = COLOR4D( DARKDARKGRAY );
-    }
-
-    // Object to iterate through the corners of the outlines
-    SHAPE_POLY_SET::ITERATOR iterator = m_Poly->Iterate();
-
-    // Segment start and end
-    VECTOR2I seg_start, seg_end;
-
-    // Remember the first point of this contour
-    VECTOR2I contour_first_point = *iterator;
-
-    // Iterate through all the corners of the outlines and build the segments to draw
-    while( iterator )
-    {
-        // Get the first point of the current segment
-        seg_start = *iterator;
-
-        // Get the last point of the current segment, handling the case where the end of the
-        // contour is reached, when the last point of the segment is the first point of the
-        // contour
-        if( !iterator.IsEndContour() )
-        {
-            // Set GR mode to default
-            current_gr_mode = draw_mode;
-
-            SHAPE_POLY_SET::ITERATOR iterator_copy = iterator;
-            iterator_copy++;
-            if( iterator_copy.IsEndContour() )
-                current_gr_mode = GR_XOR;
-
-            is_close_segment = false;
-
-            iterator++;
-            seg_end = *iterator;
-        }
-        else
-        {
-            is_close_segment = true;
-
-            seg_end = contour_first_point;
-
-            // Reassign first point of the contour to the next contour start
-            iterator++;
-
-            if( iterator )
-                contour_first_point = *iterator;
-
-            // Set GR mode to XOR
-            current_gr_mode = GR_XOR;
-        }
-
-        GRSetDrawMode( DC, current_gr_mode );
-
-        if( is_close_segment )
-            GRLine( panel->GetClipBox(), DC, seg_start.x, seg_start.y, seg_end.x, seg_end.y, 0,
-                    WHITE );
-        else
-            GRLine( panel->GetClipBox(), DC, seg_start.x, seg_start.y, seg_end.x, seg_end.y, 0,
-                    color );
-    }
-}
-
-
 int ZONE_CONTAINER::GetThermalReliefGap( D_PAD* aPad ) const
 {
     if( aPad == NULL || aPad->GetThermalGap() == 0 )
@@ -652,24 +545,30 @@ int ZONE_CONTAINER::GetThermalReliefCopperBridge( D_PAD* aPad ) const
 
 void ZONE_CONTAINER::SetCornerRadius( unsigned int aRadius )
 {
+    if( m_cornerRadius != aRadius )
+        SetNeedRefill( true );
+
     m_cornerRadius = aRadius;
-    if( m_cornerRadius > (unsigned int) Mils2iu( MAX_ZONE_CORNER_RADIUS_MILS ) )
-        m_cornerRadius = Mils2iu( MAX_ZONE_CORNER_RADIUS_MILS );
-};
-
-
-bool ZONE_CONTAINER::HitTest( const wxPoint& aPosition ) const
-{
-    return HitTestForCorner( aPosition ) || HitTestForEdge( aPosition );
 }
 
 
-void ZONE_CONTAINER::SetSelectedCorner( const wxPoint& aPosition )
+bool ZONE_CONTAINER::HitTest( const wxPoint& aPosition, int aAccuracy ) const
+{
+    // Normally accuracy is zoom-relative, but for the generic HitTest we just use
+    // a fixed (small) value.
+    int accuracy = std::max( aAccuracy, Millimeter2iu( 0.1 ) );
+
+    return HitTestForCorner( aPosition, accuracy * 2 ) || HitTestForEdge( aPosition, accuracy );
+}
+
+
+void ZONE_CONTAINER::SetSelectedCorner( const wxPoint& aPosition, int aAccuracy )
 {
     SHAPE_POLY_SET::VERTEX_INDEX corner;
 
     // If there is some corner to be selected, assign it to m_CornerSelection
-    if( HitTestForCorner( aPosition, corner ) || HitTestForEdge( aPosition, corner ) )
+    if( HitTestForCorner( aPosition, aAccuracy * 2, corner )
+        || HitTestForEdge( aPosition, aAccuracy, corner ) )
     {
         if( m_CornerSelection == nullptr )
             m_CornerSelection = new SHAPE_POLY_SET::VERTEX_INDEX;
@@ -678,40 +577,31 @@ void ZONE_CONTAINER::SetSelectedCorner( const wxPoint& aPosition )
     }
 }
 
-// Zones outlines have no thickness, so it Hit Test functions
-// we must have a default distance between the test point
-// and a corner or a zone edge:
-#define MAX_DIST_IN_MM 0.25
-
-bool ZONE_CONTAINER::HitTestForCorner( const wxPoint& refPos,
+bool ZONE_CONTAINER::HitTestForCorner( const wxPoint& refPos, int aAccuracy,
                                        SHAPE_POLY_SET::VERTEX_INDEX& aCornerHit ) const
 {
-    int distmax = Millimeter2iu( MAX_DIST_IN_MM );
-
-    return m_Poly->CollideVertex( VECTOR2I( refPos ), aCornerHit, distmax );
+    return m_Poly->CollideVertex( VECTOR2I( refPos ), aCornerHit, aAccuracy );
 }
 
 
-bool ZONE_CONTAINER::HitTestForCorner( const wxPoint& refPos ) const
+bool ZONE_CONTAINER::HitTestForCorner( const wxPoint& refPos, int aAccuracy ) const
 {
     SHAPE_POLY_SET::VERTEX_INDEX dummy;
-    return HitTestForCorner( refPos, dummy );
+    return HitTestForCorner( refPos, aAccuracy, dummy );
 }
 
 
-bool ZONE_CONTAINER::HitTestForEdge( const wxPoint& refPos,
+bool ZONE_CONTAINER::HitTestForEdge( const wxPoint& refPos, int aAccuracy,
                                      SHAPE_POLY_SET::VERTEX_INDEX& aCornerHit ) const
 {
-    int distmax = Millimeter2iu( MAX_DIST_IN_MM );
-
-    return m_Poly->CollideEdge( VECTOR2I( refPos ), aCornerHit, distmax );
+    return m_Poly->CollideEdge( VECTOR2I( refPos ), aCornerHit, aAccuracy );
 }
 
 
-bool ZONE_CONTAINER::HitTestForEdge( const wxPoint& refPos ) const
+bool ZONE_CONTAINER::HitTestForEdge( const wxPoint& refPos, int aAccuracy ) const
 {
     SHAPE_POLY_SET::VERTEX_INDEX dummy;
-    return HitTestForEdge( refPos, dummy );
+    return HitTestForEdge( refPos, aAccuracy, dummy );
 }
 
 
@@ -732,39 +622,16 @@ bool ZONE_CONTAINER::HitTest( const EDA_RECT& aRect, bool aContained, int aAccur
     else    // Test for intersection between aBox and the polygon
             // For a polygon, using its bounding box has no sense here
     {
-        // Fast test: if aBox is outside the polygon bounding box,
-        // rectangles cannot intersect
+        // Fast test: if aBox is outside the polygon bounding box, rectangles cannot intersect
         if( !arect.Intersects( bbox ) )
             return false;
 
-        // aBox is inside the polygon bounding box,
-        // and can intersect the polygon: use a fine test.
-        // aBox intersects the polygon if at least one aBox corner
-        // is inside the polygon
-
-        /*
-        wxPoint origin = arect.GetOrigin();
-
-        int w = arect.GetWidth();
-        int h = arect.GetHeight();
-
-
-        if ( HitTestInsideZone( origin ) ||
-             HitTestInsideZone( origin + wxPoint( w, 0 ) ) ||
-             HitTestInsideZone( origin + wxPoint( w, h ) ) ||
-             HitTestInsideZone( origin + wxPoint( 0, h ) ) )
-        {
-            return true;
-        }
-        */
-
-        // No corner inside aBox, but outlines can intersect aBox
-        // if one of outline corners is inside aBox
         int count = m_Poly->TotalVertices();
-        for( int ii =0; ii < count; ii++ )
+
+        for( int ii = 0; ii < count; ii++ )
         {
-            auto vertex = m_Poly->Vertex( ii );
-            auto vertexNext = m_Poly->Vertex( ( ii + 1 ) % count );
+            auto vertex = m_Poly->CVertex( ii );
+            auto vertexNext = m_Poly->CVertex( ( ii + 1 ) % count );
 
             // Test if the point is within the rect
             if( arect.Contains( ( wxPoint ) vertex ) )
@@ -786,21 +653,19 @@ bool ZONE_CONTAINER::HitTest( const EDA_RECT& aRect, bool aContained, int aAccur
 
 int ZONE_CONTAINER::GetClearance( BOARD_CONNECTED_ITEM* aItem ) const
 {
-    int         myClearance = m_ZoneClearance;
+    int myClearance = m_ZoneClearance;
 
-#if 1   // Maybe the netclass clearance should not come into play for a zone?
-        // At least the policy decision can be controlled by the zone
-        // itself, i.e. here.  On reasons of insufficient documentation,
-        // the user will be less bewildered if we simply respect the
-        // "zone clearance" setting in the zone properties dialog.  (At least
-        // until there is a UI boolean for this.)
+    // The actual zone clearance is the biggest of the zone netclass clearance
+    // and the zone clearance setting in the zone properties dialog.
+    if( !m_isKeepout )  // Net class has no meaning for a keepout area.
+    {
+        NETCLASSPTR myClass  = GetNetClass();
 
-    NETCLASSPTR   myClass  = GetNetClass();
+        if( myClass )
+            myClearance = std::max( myClearance, myClass->GetClearance() );
+    }
 
-    if( myClass )
-        myClearance = std::max( myClearance, myClass->GetClearance() );
-#endif
-
+    // Get the final clearance between me and aItem
     if( aItem )
     {
         int hisClearance = aItem->GetClearance( NULL );
@@ -817,7 +682,7 @@ bool ZONE_CONTAINER::HitTestFilledArea( const wxPoint& aRefPos ) const
 }
 
 
-void ZONE_CONTAINER::GetMsgPanelInfo( std::vector< MSG_PANEL_ITEM >& aList )
+void ZONE_CONTAINER::GetMsgPanelInfo( EDA_UNITS aUnits, std::vector<MSG_PANEL_ITEM>& aList )
 {
     wxString msg;
 
@@ -829,7 +694,7 @@ void ZONE_CONTAINER::GetMsgPanelInfo( std::vector< MSG_PANEL_ITEM >& aList )
     if( m_CornerSelection != nullptr && m_CornerSelection->m_contour > 0 )
         msg << wxT( " " ) << _( "(Cutout)" );
 
-    aList.push_back( MSG_PANEL_ITEM( _( "Type" ), msg, DARKCYAN ) );
+    aList.emplace_back( MSG_PANEL_ITEM( _( "Type" ), msg, DARKCYAN ) );
 
     if( GetIsKeepout() )
     {
@@ -844,7 +709,7 @@ void ZONE_CONTAINER::GetMsgPanelInfo( std::vector< MSG_PANEL_ITEM >& aList )
         if( GetDoNotAllowCopperPour() )
             AccumulateDescription( msg, _("No copper pour") );
 
-        aList.push_back( MSG_PANEL_ITEM( _( "Keepout" ), msg, RED ) );
+        aList.emplace_back( MSG_PANEL_ITEM( _( "Keepout" ), msg, RED ) );
     }
     else if( IsOnCopperLayer() )
     {
@@ -853,48 +718,56 @@ void ZONE_CONTAINER::GetMsgPanelInfo( std::vector< MSG_PANEL_ITEM >& aList )
             NETINFO_ITEM* net = GetNet();
 
             if( net )
-                msg = net->GetNetname();
+                msg = UnescapeString( net->GetNetname() );
             else    // Should not occur
                 msg = _( "<unknown>" );
         }
         else    // a netcode < 0 is an error
             msg = wxT( "<error>" );
 
-        aList.push_back( MSG_PANEL_ITEM( _( "NetName" ), msg, RED ) );
+        aList.emplace_back( MSG_PANEL_ITEM( _( "NetName" ), msg, RED ) );
 
         // Display net code : (useful in test or debug)
         msg.Printf( wxT( "%d" ), GetNetCode() );
-        aList.push_back( MSG_PANEL_ITEM( _( "NetCode" ), msg, RED ) );
+        aList.emplace_back( MSG_PANEL_ITEM( _( "NetCode" ), msg, RED ) );
 
         // Display priority level
         msg.Printf( wxT( "%d" ), GetPriority() );
-        aList.push_back( MSG_PANEL_ITEM( _( "Priority" ), msg, BLUE ) );
+        aList.emplace_back( MSG_PANEL_ITEM( _( "Priority" ), msg, BLUE ) );
     }
     else
     {
-        aList.push_back( MSG_PANEL_ITEM( _( "Non Copper Zone" ), wxEmptyString, RED ) );
+        aList.emplace_back( MSG_PANEL_ITEM( _( "Non Copper Zone" ), wxEmptyString, RED ) );
     }
 
-    aList.push_back( MSG_PANEL_ITEM( _( "Layer" ), GetLayerName(), BROWN ) );
+    aList.emplace_back( MSG_PANEL_ITEM( _( "Layer" ), GetLayerName(), BROWN ) );
 
     msg.Printf( wxT( "%d" ), (int) m_Poly->TotalVertices() );
-    aList.push_back( MSG_PANEL_ITEM( _( "Corners" ), msg, BLUE ) );
+    aList.emplace_back( MSG_PANEL_ITEM( _( "Vertices" ), msg, BLUE ) );
 
-    if( m_FillMode )
-        msg = _( "Segments" );
-    else
-        msg = _( "Polygons" );
+    switch( m_FillMode )
+    {
+    case ZONE_FILL_MODE::POLYGONS:
+        msg = _( "Solid" ); break;
+    case ZONE_FILL_MODE::HATCH_PATTERN:
+        msg = _( "Hatched" ); break;
+    default:
+        msg = _( "Unknown" ); break;
+    }
 
-    aList.push_back( MSG_PANEL_ITEM( _( "Fill Mode" ), msg, BROWN ) );
+    aList.emplace_back( MSG_PANEL_ITEM( _( "Fill Mode" ), msg, BROWN ) );
+
+    msg = MessageTextFromValue( aUnits, m_area, false, EDA_DATA_TYPE::AREA );
+    aList.emplace_back( MSG_PANEL_ITEM( _( "Filled Area" ), msg, BLUE ) );
 
     // Useful for statistics :
     msg.Printf( wxT( "%d" ), (int) m_HatchLines.size() );
-    aList.push_back( MSG_PANEL_ITEM( _( "Hatch Lines" ), msg, BLUE ) );
+    aList.emplace_back( MSG_PANEL_ITEM( _( "Hatch Lines" ), msg, BLUE ) );
 
     if( !m_FilledPolysList.IsEmpty() )
     {
         msg.Printf( wxT( "%d" ), m_FilledPolysList.TotalVertices() );
-        aList.push_back( MSG_PANEL_ITEM( _( "Corner Count" ), msg, BLUE ) );
+        aList.emplace_back( MSG_PANEL_ITEM( _( "Corner Count" ), msg, BLUE ) );
     }
 }
 
@@ -904,16 +777,16 @@ void ZONE_CONTAINER::GetMsgPanelInfo( std::vector< MSG_PANEL_ITEM >& aList )
 void ZONE_CONTAINER::Move( const wxPoint& offset )
 {
     /* move outlines */
-    m_Poly->Move( VECTOR2I( offset ) );
+    m_Poly->Move( offset );
 
     Hatch();
 
-    m_FilledPolysList.Move( VECTOR2I( offset.x, offset.y ) );
+    m_FilledPolysList.Move( offset );
 
-    for( unsigned ic = 0; ic < m_FillSegmList.size(); ic++ )
+    for( SEG& seg : m_FillSegmList )
     {
-        m_FillSegmList[ic].m_Start += offset;
-        m_FillSegmList[ic].m_End   += offset;
+        seg.A += VECTOR2I( offset );
+        seg.B += VECTOR2I( offset );
     }
 }
 
@@ -924,9 +797,11 @@ void ZONE_CONTAINER::MoveEdge( const wxPoint& offset, int aEdge )
 
     if( m_Poly->GetNeighbourIndexes( aEdge, nullptr, &next_corner ) )
     {
-        m_Poly->Vertex( aEdge ) += VECTOR2I( offset );
-        m_Poly->Vertex( next_corner ) += VECTOR2I( offset );
+        m_Poly->SetVertex( aEdge, m_Poly->CVertex( aEdge ) + VECTOR2I( offset ) );
+        m_Poly->SetVertex( next_corner, m_Poly->CVertex( next_corner ) + VECTOR2I( offset ) );
         Hatch();
+
+        SetNeedRefill( true );
     }
 }
 
@@ -935,31 +810,29 @@ void ZONE_CONTAINER::Rotate( const wxPoint& centre, double angle )
 {
     wxPoint pos;
 
-    for( auto iterator = m_Poly->IterateWithHoles(); iterator; iterator++ )
-    {
-        pos = static_cast<wxPoint>( *iterator );
-        RotatePoint( &pos, centre, angle );
-        iterator->x = pos.x;
-        iterator->y = pos.y;
-    }
+    angle = -DECIDEG2RAD( angle );
 
+    m_Poly->Rotate( angle, VECTOR2I( centre ) );
     Hatch();
 
     /* rotate filled areas: */
-    for( auto ic = m_FilledPolysList.Iterate(); ic; ++ic )
-        RotatePoint( &ic->x, &ic->y, centre.x, centre.y, angle );
+    m_FilledPolysList.Rotate( angle, VECTOR2I( centre ) );
 
     for( unsigned ic = 0; ic < m_FillSegmList.size(); ic++ )
     {
-        RotatePoint( &m_FillSegmList[ic].m_Start, centre, angle );
-        RotatePoint( &m_FillSegmList[ic].m_End, centre, angle );
+        wxPoint a( m_FillSegmList[ic].A );
+        RotatePoint( &a, centre, angle );
+        m_FillSegmList[ic].A = a;
+        wxPoint b( m_FillSegmList[ic].B );
+        RotatePoint( &b, centre, angle );
+        m_FillSegmList[ic].B = a;
     }
 }
 
 
-void ZONE_CONTAINER::Flip( const wxPoint& aCentre )
+void ZONE_CONTAINER::Flip( const wxPoint& aCentre, bool aFlipLeftRight )
 {
-    Mirror( aCentre );
+    Mirror( aCentre, aFlipLeftRight );
     int copperLayerCount = GetBoard()->GetCopperLayerCount();
 
     if( GetIsKeepout() )
@@ -973,36 +846,51 @@ void ZONE_CONTAINER::Flip( const wxPoint& aCentre )
 }
 
 
-void ZONE_CONTAINER::Mirror( const wxPoint& mirror_ref )
+void ZONE_CONTAINER::Mirror( const wxPoint& aMirrorRef, bool aMirrorLeftRight )
 {
-    for( auto iterator = m_Poly->IterateWithHoles(); iterator; iterator++ )
-    {
-        int py = mirror_ref.y - iterator->y;
-        iterator->y = py + mirror_ref.y;
-    }
+    // ZONE_CONTAINERs mirror about the x-axis (why?!?)
+    m_Poly->Mirror( aMirrorLeftRight, !aMirrorLeftRight, VECTOR2I( aMirrorRef ) );
 
     Hatch();
 
-    for( auto ic = m_FilledPolysList.Iterate(); ic; ++ic )
-    {
-        int py = mirror_ref.y - ic->y;
-        ic->y = py + mirror_ref.y;
-    }
+    m_FilledPolysList.Mirror( aMirrorLeftRight, !aMirrorLeftRight, VECTOR2I( aMirrorRef ) );
 
-    for( unsigned ic = 0; ic < m_FillSegmList.size(); ic++ )
+    for( SEG& seg : m_FillSegmList )
     {
-        MIRROR( m_FillSegmList[ic].m_Start.y, mirror_ref.y );
-        MIRROR( m_FillSegmList[ic].m_End.y,   mirror_ref.y );
+        if( aMirrorLeftRight )
+        {
+            MIRROR( seg.A.x, aMirrorRef.x );
+            MIRROR( seg.B.x, aMirrorRef.x );
+        }
+        else
+        {
+            MIRROR( seg.A.y, aMirrorRef.y );
+            MIRROR( seg.B.y, aMirrorRef.y );
+        }
     }
 }
 
 
-ZoneConnection ZONE_CONTAINER::GetPadConnection( D_PAD* aPad ) const
+ZONE_CONNECTION ZONE_CONTAINER::GetPadConnection( D_PAD* aPad ) const
 {
-    if( aPad == NULL || aPad->GetZoneConnection() == PAD_ZONE_CONN_INHERITED )
+    if( aPad == NULL || aPad->GetZoneConnection() == ZONE_CONNECTION::INHERITED )
         return m_PadConnection;
     else
         return aPad->GetZoneConnection();
+}
+
+
+void ZONE_CONTAINER::AddPolygon( const SHAPE_LINE_CHAIN& aPolygon )
+{
+    wxASSERT( aPolygon.IsClosed() );
+
+    // Add the outline as a new polygon in the polygon set
+    if( m_Poly->OutlineCount() == 0 )
+        m_Poly->AddOutline( aPolygon );
+    else
+        m_Poly->AddHole( aPolygon );
+
+    SetNeedRefill( true );
 }
 
 
@@ -1026,6 +914,8 @@ void ZONE_CONTAINER::AddPolygon( std::vector< wxPoint >& aPolygon )
         m_Poly->AddOutline( outline );
     else
         m_Poly->AddHole( outline );
+
+    SetNeedRefill( true );
 }
 
 
@@ -1043,57 +933,26 @@ bool ZONE_CONTAINER::AppendCorner( wxPoint aPosition, int aHoleIdx, bool aAllowD
 
     m_Poly->Append( aPosition.x, aPosition.y, -1, aHoleIdx, aAllowDuplication );
 
+    SetNeedRefill( true );
+
     return true;
 }
 
 
-wxString ZONE_CONTAINER::GetSelectMenuText() const
+wxString ZONE_CONTAINER::GetSelectMenuText( EDA_UNITS aUnits ) const
 {
     wxString text;
-    NETINFO_ITEM* net;
-    BOARD* board = GetBoard();
 
     // Check whether the selected contour is a hole (contour index > 0)
     if( m_CornerSelection != nullptr &&  m_CornerSelection->m_contour > 0 )
-            text << wxT( " " ) << _( "(Cutout)" );
+        text << wxT( " " ) << _( "(Cutout)" );
 
     if( GetIsKeepout() )
         text << wxT( " " ) << _( "(Keepout)" );
+    else
+        text << GetNetnameMsg();
 
-    text << wxString::Format( wxT( " (%08lX)" ), m_TimeStamp );
-
-    // Display net name for copper zones
-    if( !GetIsKeepout() )
-    {
-        if( GetNetCode() >= 0 )
-        {
-            if( board )
-            {
-                net = GetNet();
-
-                if( net )
-                {
-                    text << wxT( " [" ) << net->GetNetname() << wxT( "]" );
-                }
-            }
-            else
-            {
-                text << _( "** NO BOARD DEFINED **" );
-            }
-        }
-        else
-        {   // A netcode < 0 is an error:
-            // Netname not found or area not initialised
-            text << wxT( " [" ) << GetNetname() << wxT( "]" );
-            text << wxT( " <" ) << _( "Not Found" ) << wxT( ">" );
-        }
-    }
-
-    wxString msg;
-    msg.Printf( _( "Zone Outline %s on %s" ), GetChars( text ),
-                 GetChars( GetLayerName() ) );
-
-    return msg;
+    return wxString::Format( _( "Zone Outline %s on %s" ), text, GetLayerName() );
 }
 
 
@@ -1103,10 +962,10 @@ int ZONE_CONTAINER::GetHatchPitch() const
 }
 
 
-void ZONE_CONTAINER::SetHatch( int aHatchStyle, int aHatchPitch, bool aRebuildHatch )
+void ZONE_CONTAINER::SetHatch( ZONE_HATCH_STYLE aHatchStyle, int aHatchPitch, bool aRebuildHatch )
 {
     SetHatchPitch( aHatchPitch );
-    m_hatchStyle = (ZONE_CONTAINER::HATCH_STYLE) aHatchStyle;
+    m_hatchStyle = aHatchStyle;
 
     if( aRebuildHatch )
         Hatch();
@@ -1137,14 +996,14 @@ void ZONE_CONTAINER::Hatch()
 {
     UnHatch();
 
-    if( m_hatchStyle == NO_HATCH || m_hatchPitch == 0 || m_Poly->IsEmpty() )
+    if( m_hatchStyle == ZONE_HATCH_STYLE::NO_HATCH || m_hatchPitch == 0 || m_Poly->IsEmpty() )
         return;
 
     // define range for hatch lines
-    int min_x = m_Poly->Vertex( 0 ).x;
-    int max_x = m_Poly->Vertex( 0 ).x;
-    int min_y = m_Poly->Vertex( 0 ).y;
-    int max_y = m_Poly->Vertex( 0 ).y;
+    int min_x = m_Poly->CVertex( 0 ).x;
+    int max_x = m_Poly->CVertex( 0 ).x;
+    int min_y = m_Poly->CVertex( 0 ).y;
+    int max_y = m_Poly->CVertex( 0 ).y;
 
     for( auto iterator = m_Poly->IterateWithHoles(); iterator; iterator++ )
     {
@@ -1164,7 +1023,7 @@ void ZONE_CONTAINER::Hatch()
     // Calculate spacing between 2 hatch lines
     int spacing;
 
-    if( m_hatchStyle == DIAGONAL_EDGE )
+    if( m_hatchStyle == ZONE_HATCH_STYLE::DIAGONAL_EDGE )
         spacing = m_hatchPitch;
     else
         spacing = m_hatchPitch * 2;
@@ -1267,9 +1126,10 @@ void ZONE_CONTAINER::Hatch()
             // Push only one line for diagonal hatch,
             // or for small lines < twice the line length
             // else push 2 small lines
-            if( m_hatchStyle == DIAGONAL_FULL || fabs( dx ) < 2 * hatch_line_len )
+            if( m_hatchStyle == ZONE_HATCH_STYLE::DIAGONAL_FULL
+                    || std::abs( dx ) < 2 * hatch_line_len )
             {
-                m_HatchLines.push_back( SEG( pointbuffer[ip], pointbuffer[ip + 1] ) );
+                m_HatchLines.emplace_back( SEG( pointbuffer[ip], pointbuffer[ip + 1] ) );
             }
             else
             {
@@ -1286,9 +1146,9 @@ void ZONE_CONTAINER::Hatch()
                 int y1 = KiROUND( pointbuffer[ip].y + dx * slope );
                 int y2 = KiROUND( pointbuffer[ip + 1].y - dx * slope );
 
-                m_HatchLines.push_back(SEG(pointbuffer[ip].x, pointbuffer[ip].y, x1, y1));
+                m_HatchLines.emplace_back( SEG( pointbuffer[ip].x, pointbuffer[ip].y, x1, y1 ) );
 
-                m_HatchLines.push_back( SEG( pointbuffer[ip+1].x, pointbuffer[ip+1].y, x2, y2 ) );
+                m_HatchLines.emplace_back( SEG( pointbuffer[ip+1].x, pointbuffer[ip+1].y, x2, y2 ) );
             }
         }
     }
@@ -1304,4 +1164,225 @@ int ZONE_CONTAINER::GetDefaultHatchPitch()
 BITMAP_DEF ZONE_CONTAINER::GetMenuImage() const
 {
     return add_zone_xpm;
+}
+
+
+void ZONE_CONTAINER::SwapData( BOARD_ITEM* aImage )
+{
+    assert( aImage->Type() == PCB_ZONE_AREA_T );
+
+    std::swap( *((ZONE_CONTAINER*) this), *((ZONE_CONTAINER*) aImage) );
+}
+
+
+void ZONE_CONTAINER::CacheTriangulation()
+{
+    m_FilledPolysList.CacheTriangulation();
+}
+
+
+/*
+ * Some intersecting zones, despite being on the same layer with the same net, cannot be
+ * merged due to other parameters such as fillet radius.  The copper pour will end up
+ * effectively merged though, so we want to keep the corners of such intersections sharp.
+ */
+void ZONE_CONTAINER::GetColinearCorners( BOARD* aBoard, std::set<VECTOR2I>& aCorners )
+{
+    int epsilon = Millimeter2iu( 0.001 );
+
+    // Things get messy when zone of different nets intersect.  To do it right we'd need to
+    // run our colinear test with the final filled regions rather than the outline regions.
+    // However, since there's no order dependance the only way to do that is to iterate
+    // through successive zone fills until the results are no longer changing -- and that's
+    // not going to happen.  So we punt and ignore any "messy" corners.
+    std::set<VECTOR2I> colinearCorners;
+    std::set<VECTOR2I> messyCorners;
+
+    for( ZONE_CONTAINER* candidate : aBoard->Zones() )
+    {
+        if( candidate == this )
+            continue;
+
+        if( candidate->GetLayerSet() != GetLayerSet() )
+            continue;
+
+        if( candidate->GetIsKeepout() != GetIsKeepout() )
+            continue;
+
+        for( auto iter = m_Poly->CIterate(); iter; iter++ )
+        {
+            if( candidate->m_Poly->Collide( iter.Get(), epsilon ) )
+            {
+                if( candidate->GetNetCode() == GetNetCode() )
+                    colinearCorners.insert( VECTOR2I( iter.Get() ) );
+                else
+                    messyCorners.insert( VECTOR2I( iter.Get() ) );
+            }
+        }
+    }
+
+    for( VECTOR2I corner : colinearCorners )
+    {
+        if( messyCorners.count( corner ) == 0 )
+            aCorners.insert( corner );
+    }
+}
+
+
+bool ZONE_CONTAINER::BuildSmoothedPoly( SHAPE_POLY_SET& aSmoothedPoly,
+                                        std::set<VECTOR2I>* aPreserveCorners ) const
+{
+    if( GetNumCorners() <= 2 )  // malformed zone. polygon calculations do not like it ...
+        return false;
+
+    // Make a smoothed polygon out of the user-drawn polygon if required
+    switch( m_cornerSmoothingType )
+    {
+    case ZONE_SETTINGS::SMOOTHING_CHAMFER:
+        aSmoothedPoly = m_Poly->Chamfer( m_cornerRadius, aPreserveCorners );
+        break;
+
+    case ZONE_SETTINGS::SMOOTHING_FILLET:
+    {
+        auto board = GetBoard();
+        int maxError = ARC_HIGH_DEF;
+
+        if( board )
+            maxError = board->GetDesignSettings().m_MaxError;
+
+        aSmoothedPoly = m_Poly->Fillet( m_cornerRadius, maxError, aPreserveCorners );
+        break;
+    }
+    default:
+        // Acute angles between adjacent edges can create issues in calculations,
+        // in inflate/deflate outlines transforms, especially when the angle is very small.
+        // We can avoid issues by creating a very small chamfer which remove acute angles,
+        // or left it without chamfer and use only CPOLYGONS_LIST::InflateOutline to create
+        // clearance areas
+        aSmoothedPoly = m_Poly->Chamfer( Millimeter2iu( 0.0 ), aPreserveCorners );
+        break;
+    }
+
+    return true;
+};
+
+
+double ZONE_CONTAINER::CalculateFilledArea()
+{
+    m_area = 0.0;
+
+    // Iterate over each outline polygon in the zone and then iterate over
+    // each hole it has to compute the total area.
+    for( int i = 0; i < m_FilledPolysList.OutlineCount(); i++ )
+    {
+        m_area += m_FilledPolysList.Outline( i ).Area();
+
+        for( int j = 0; m_FilledPolysList.HoleCount( i ); j++ )
+        {
+            m_area -= m_FilledPolysList.Hole( i, j ).Area();
+        }
+    }
+
+    return m_area;
+}
+
+
+/* Function TransformOutlinesShapeWithClearanceToPolygon
+ * Convert the zone filled areas polygons to polygons
+ * inflated (optional) by max( aClearanceValue, the zone clearance)
+ * and copy them in aCornerBuffer
+ * @param aMinClearanceValue the min clearance around outlines
+ * @param aUseNetClearance   true to use a clearance which is the max value between
+ *                           aMinClearanceValue and the net clearance
+ *                           false to use aMinClearanceValue only
+ * @param aPreserveCorners   an optional set of corners which should not be chamfered/filleted
+ */
+void ZONE_CONTAINER::TransformOutlinesShapeWithClearanceToPolygon( SHAPE_POLY_SET& aCornerBuffer,
+                                                   int aMinClearanceValue,
+                                                   bool aUseNetClearance,
+                                                   std::set<VECTOR2I>* aPreserveCorners ) const
+{
+    // Creates the zone outline polygon (with holes if any)
+    SHAPE_POLY_SET polybuffer;
+    BuildSmoothedPoly( polybuffer, aPreserveCorners );
+
+    // add clearance to outline
+    int clearance = aMinClearanceValue;
+
+    if( aUseNetClearance && IsOnCopperLayer() )
+    {
+        clearance = GetClearance();
+
+        if( aMinClearanceValue > clearance )
+            clearance = aMinClearanceValue;
+    }
+
+    // Calculate the polygon with clearance
+    // holes are linked to the main outline, so only one polygon is created.
+    if( clearance )
+    {
+        BOARD* board = GetBoard();
+        int maxError = ARC_HIGH_DEF;
+
+        if( board )
+            maxError = board->GetDesignSettings().m_MaxError;
+
+        int segCount = std::max( GetArcToSegmentCount( clearance, maxError, 360.0 ), 3 );
+        polybuffer.Inflate( clearance, segCount );
+    }
+
+    polybuffer.Fracture( SHAPE_POLY_SET::PM_FAST );
+    aCornerBuffer.Append( polybuffer );
+}
+
+//
+/********* MODULE_ZONE_CONTAINER **************/
+//
+MODULE_ZONE_CONTAINER::MODULE_ZONE_CONTAINER( BOARD_ITEM_CONTAINER* aParent ) :
+                        ZONE_CONTAINER( aParent, true )
+{
+    // in a footprint, net classes are not managed.
+    // so set the net to NETINFO_LIST::ORPHANED_ITEM
+    SetNetCode( -1, true );
+}
+
+
+MODULE_ZONE_CONTAINER::MODULE_ZONE_CONTAINER( const MODULE_ZONE_CONTAINER& aZone )
+        : ZONE_CONTAINER( aZone.GetParent(), true )
+{
+    initDataFromSrcInCopyCtor( aZone );
+}
+
+
+MODULE_ZONE_CONTAINER& MODULE_ZONE_CONTAINER::operator=( const MODULE_ZONE_CONTAINER& aOther )
+{
+    ZONE_CONTAINER::operator=( aOther );
+    return *this;
+}
+
+
+EDA_ITEM* MODULE_ZONE_CONTAINER::Clone() const
+{
+    return new MODULE_ZONE_CONTAINER( *this );
+}
+
+
+unsigned int MODULE_ZONE_CONTAINER::ViewGetLOD( int aLayer, KIGFX::VIEW* aView ) const
+{
+    const int HIDE = std::numeric_limits<unsigned int>::max();
+
+    if( !aView )
+        return 0;
+
+    bool flipped = GetParent() && GetParent()->GetLayer() == B_Cu;
+
+    // Handle Render tab switches
+    if( !flipped && !aView->IsLayerVisible( LAYER_MOD_FR ) )
+        return HIDE;
+
+    if( flipped && !aView->IsLayerVisible( LAYER_MOD_BK ) )
+        return HIDE;
+
+    // Other layers are shown without any conditions
+    return 0;
 }

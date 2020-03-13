@@ -31,7 +31,7 @@
  * Because we are before wx, we must explicitly define we are building with unicode.
  * wxWidgets defaults to supporting unicode now, so this should be safe.
  */
-#if defined(WIN32)
+#if defined(_WIN32)
     #ifndef UNICODE
     #    define UNICODE
     #endif
@@ -58,7 +58,7 @@ struct DYN_LOOKUP;
 
 
 /**
- * Class KICAD_CURL
+ * KICAD_CURL
  * simple wrapper class to call curl_global_init and curl_global_cleanup for KiCad.
  */
 class KICAD_CURL

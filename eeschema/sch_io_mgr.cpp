@@ -2,7 +2,7 @@
  * This program source code file is part of KiCad, a free EDA CAD application.
  *
  * Copyright (C) 2016 CERN
- * Copyright (C) 2016 KiCad Developers, see change_log.txt for contributors.
+ * Copyright (C) 2016-2020 KiCad Developers, see change_log.txt for contributors.
  *
  * @author Wayne Stambaugh <stambaughw@gmail.com>
  *
@@ -26,11 +26,12 @@
 #include <sch_io_mgr.h>
 #include <sch_legacy_plugin.h>
 #include <sch_eagle_plugin.h>
+#include <sch_sexpr_plugin.h>
 
 #include <wildcards_and_files_ext.h>
 
-#define FMT_UNIMPLEMENTED   _( "Plugin '%s' does not implement the '%s' function." )
-#define FMT_NOTFOUND        _( "Plugin type '%s' is not found." )
+#define FMT_UNIMPLEMENTED   _( "Plugin \"%s\" does not implement the \"%s\" function." )
+#define FMT_NOTFOUND        _( "Plugin type \"%s\" is not found." )
 
 
 
@@ -55,10 +56,10 @@ SCH_PLUGIN* SCH_IO_MGR::FindPlugin( SCH_FILE_T aFileType )
     {
     case SCH_LEGACY:
         return new SCH_LEGACY_PLUGIN();
+    case SCH_KICAD:
+        return new SCH_SEXPR_PLUGIN();
     case SCH_EAGLE:
         return new SCH_EAGLE_PLUGIN();
-    case SCH_KICAD:
-        return NULL;
     }
 
     return NULL;
@@ -89,6 +90,9 @@ const wxString SCH_IO_MGR::ShowType( SCH_FILE_T aType )
     case SCH_LEGACY:
         return wxString( wxT( "Legacy" ) );
 
+    case SCH_KICAD:
+        return wxString( wxT( "KiCad" ) );
+
     case SCH_EAGLE:
 	   return wxString( wxT( "EAGLE" ) );
     }
@@ -103,6 +107,8 @@ SCH_IO_MGR::SCH_FILE_T SCH_IO_MGR::EnumFromStr( const wxString& aType )
 
     if( aType == wxT( "Legacy" ) )
         return SCH_LEGACY;
+    else if( aType == wxT( "KiCad" ) )
+        return SCH_KICAD;
     else if( aType == wxT( "EAGLE" ) )
         return SCH_EAGLE;
 
@@ -127,14 +133,33 @@ const wxString SCH_IO_MGR::GetFileExtension( SCH_FILE_T aFileType )
 }
 
 
+const wxString SCH_IO_MGR::GetLibraryFileExtension( SCH_FILE_T aFileType )
+{
+    wxString ext = wxEmptyString;
+    SCH_PLUGIN* plugin = FindPlugin( aFileType );
+
+    if( plugin != NULL )
+    {
+        ext = plugin->GetLibraryFileExtension();
+        ReleasePlugin( plugin );
+    }
+
+    return ext;
+}
+
+
 SCH_IO_MGR::SCH_FILE_T SCH_IO_MGR::GuessPluginTypeFromLibPath( const wxString& aLibPath )
 {
     SCH_FILE_T  ret = SCH_LEGACY;        // default guess, unless detected otherwise.
     wxFileName  fn( aLibPath );
 
-    if( fn.GetExt() == SchematicFileWildcard )
+    if( fn.GetExt() == SchematicLibraryFileExtension )
     {
         ret = SCH_LEGACY;
+    }
+    else if( fn.GetExt() == KiCadSymbolLibFileExtension )
+    {
+        ret = SCH_KICAD;
     }
 
     return ret;
@@ -172,4 +197,4 @@ void SCH_IO_MGR::Save( SCH_FILE_T aFileType, const wxString& aFileName,
 }
 
 
-DECLARE_ENUM_VECTOR( SCH_IO_MGR, SCH_FILE_T );
+DECLARE_ENUM_VECTOR( SCH_IO_MGR, SCH_FILE_T )

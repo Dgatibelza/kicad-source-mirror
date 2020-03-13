@@ -3,7 +3,7 @@
  *
  * Copyright (C) 1992-2013 jp.charras at wanadoo.fr
  * Copyright (C) 2013 SoftPLC Corporation, Dick Hollenbeck <dick@softplc.com>
- * Copyright (C) 1992-2015 KiCad Developers
+ * Copyright (C) 1992-2018 KiCad Developers
  *
  * This program is free software; you can redistribute it and/or
  * modify it under the terms of the GNU General Public License
@@ -28,7 +28,13 @@
 
 #include <netlist_exporter.h>
 
+#include <project.h>
 #include <xnode.h>      // also nests: <wx/xml/xml.h>
+
+#include <sch_edit_frame.h>
+
+class CONNECTION_GRAPH;
+class SYMBOL_LIB_TABLE;
 
 #define GENERIC_INTERMEDIATE_NETLIST_EXT wxT( "xml" )
 
@@ -47,17 +53,28 @@ enum GNL_T
 
 
 /**
- * Class NETLIST_EXPORTER_GENERIC
+ * NETLIST_EXPORTER_GENERIC
  * generates a generic XML based netlist file. This allows using XSLT or other methods to
  * transform the XML to other netlist formats outside of the C++ codebase.
  */
 class NETLIST_EXPORTER_GENERIC : public NETLIST_EXPORTER
 {
+private:
+    std::set< wxString >  m_libraries;    ///< Set of library nicknames.
+
+    SYMBOL_LIB_TABLE*     m_libTable;
+
+protected:
+    CONNECTION_GRAPH*     m_graph;
+
 public:
-    NETLIST_EXPORTER_GENERIC( NETLIST_OBJECT_LIST* aMasterList, PART_LIBS* aLibs ) :
-        NETLIST_EXPORTER( aMasterList, aLibs )
-    {
-    }
+    NETLIST_EXPORTER_GENERIC( SCH_EDIT_FRAME* aFrame,
+                              NETLIST_OBJECT_LIST* aMasterList,
+                              CONNECTION_GRAPH* aGraph = nullptr  ) :
+        NETLIST_EXPORTER( aMasterList ),
+        m_libTable( aFrame->Prj().SchSymbolLibTable() ),
+        m_graph( aGraph )
+    {}
 
     /**
      * Function WriteNetlist
@@ -114,7 +131,7 @@ protected:
      * fills out an XML node with a list of nets and returns it.
      * @return XNODE* - the list of nets nodes
      */
-    XNODE* makeListOfNets();
+    XNODE* makeListOfNets( bool aUseGraph = true );
 
     /**
      * Function makeLibraries

@@ -5,11 +5,11 @@
  * This program source code file is part of KICAD, a free EDA CAD application.
  *
  * Copyright (C) 1992-2011 jean-pierre.charras
- * Copyright (C) 1992-2011 Kicad Developers, see change_log.txt for contributors.
+ * Copyright (C) 1992-2011 Kicad Developers, see AUTHORS.txt for contributors.
  *
  * This program is free software; you can redistribute it and/or
  * modify it under the terms of the GNU General Public License
- * as published by the Free Software Foundation; either version 2
+ * as published by the Free Software Foundation; either version 3
  * of the License, or (at your option) any later version.
  *
  * This program is distributed in the hope that it will be useful,
@@ -17,15 +17,10 @@
  * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
  * GNU General Public License for more details.
  *
- * You should have received a copy of the GNU General Public License
- * along with this program; if not, you may find one here:
- * http://www.gnu.org/licenses/old-licenses/gpl-2.0.html
- * or you may search the http://www.gnu.org website for the version 2 license,
- * or you may write to the Free Software Foundation, Inc.,
- * 51 Franklin Street, Fifth Floor, Boston, MA  02110-1301, USA
+ * You should have received a copy of the GNU General Public License along
+ * with this program.  If not, see <http://www.gnu.org/licenses/>.
  */
 #include <wx/wx.h>
-#include <wx/config.h>
 
 #include <macros.h>
 #include <pcb_calculator.h>
@@ -44,6 +39,11 @@ public:
         m_textCtrlName->SetValue( aRegName );
         m_textCtrlName->Enable( aRegName.IsEmpty() );
         UpdateDialog();
+
+        m_sdbSizerOK->SetDefault();
+
+        // Now all widgets have the size fixed, call FinishDialogSettings
+        FinishDialogSettings();
     }
 
     ~DIALOG_EDITOR_DATA() {};
@@ -156,6 +156,19 @@ void PCB_CALCULATOR_FRAME::OnRegulatorCalcButtonClick( wxCommandEvent& event )
     RegulatorsSolve();
 }
 
+void PCB_CALCULATOR_FRAME::OnRegulatorResetButtonClick( wxCommandEvent& event )
+{
+    m_RegulR1Value->SetValue( wxT( "10" ) );
+    m_RegulR2Value->SetValue( wxT( "10" ) );
+    m_RegulVrefValue->SetValue( wxT( "3" ) );
+    m_RegulVoutValue->SetValue( wxT( "12" ) );
+    m_choiceRegType->SetSelection( 0 );
+    m_rbRegulR1->SetValue(1);
+    m_rbRegulR2->SetValue(0);
+    m_rbRegulVout->SetValue(0);
+    RegulatorPageUpdate();
+}
+
 void PCB_CALCULATOR_FRAME::RegulatorPageUpdate()
 {
     switch( m_choiceRegType->GetSelection() )
@@ -224,12 +237,11 @@ void PCB_CALCULATOR_FRAME::OnDataFileSelection( wxCommandEvent& event )
     wxString fullfilename = GetDataFilename();
 
     wxString wildcard;
-    wildcard.Printf( _("PCB Calculator data  file (*.%s)|*.%s"),
-                     GetChars( DataFileNameExt ),
-                     GetChars( DataFileNameExt ) );
+    wildcard.Printf( _("PCB Calculator data file (*.%s)|*.%s"),
+                     DataFileNameExt, DataFileNameExt );
 
     wxFileDialog dlg( m_panelRegulators,
-                      _("Select a PCB Calculator data file"),
+                      _("Select PCB Calculator Data File"),
                       wxEmptyString, fullfilename,
                       wildcard, wxFD_OPEN );
 
@@ -260,7 +272,7 @@ void PCB_CALCULATOR_FRAME::OnDataFileSelection( wxCommandEvent& event )
     else
     {
         wxString msg;
-        msg.Printf( _("Unable to read data file <%s>"), GetChars( fullfilename ) );
+        msg.Printf( _("Unable to read data file \"%s\""), fullfilename );
         wxMessageBox( msg );
     }
 }

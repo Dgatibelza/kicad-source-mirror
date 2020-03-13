@@ -3,7 +3,7 @@
 /*
  * This program source code file is part of KiCad, a free EDA CAD application.
  *
- * Copyright (C) 1992-2015 KiCad Developers, see change_log.txt for contributors.
+ * Copyright (C) 1992-2018 KiCad Developers, see AUTHORS.txt for contributors.
  *
  * This program is free software; you can redistribute it and/or
  * modify it under the terms of the GNU General Public License
@@ -25,13 +25,14 @@
 
 #include <wx/wx.h>
 #include <eda_text.h>                // EDA_DRAW_MODE_T
-#include <plot_common.h>
+#include <plotter.h>
 #include <layers_id_colors_and_visibility.h>
 
+class COLOR_SETTINGS;
 class PCB_PLOT_PARAMS_PARSER;
 
 /**
- * Class PCB_PLOT_PARAMS
+ * PCB_PLOT_PARAMS
  * handles plot parameters and options when plotting/printing a board.
  */
 class PCB_PLOT_PARAMS
@@ -60,14 +61,19 @@ private:
      */
     bool        m_DXFplotPolygonMode;
 
+    /**
+     * DXF format: Units to use when plotting the DXF
+     */
+    DXF_PLOTTER::DXF_UNITS m_DXFplotUnits;
+
     /// Plot format type (chooses the driver to be used)
-    PlotFormat  m_format;
+    PLOT_FORMAT m_format;
 
     /// Holes can be not plotted, have a small mark or plotted in actual size
     DrillMarksType m_drillMarks;
 
     /// Choose how represent text with PS, PDF and DXF drivers
-    PlotTextMode m_textMode;
+    PLOT_TEXT_MODE m_textMode;
 
     /// The default line width (used to draw items having no defined width)
     int         m_lineWidth;
@@ -103,7 +109,7 @@ private:
     bool        m_useGerberProtelExtensions;
 
     /// Include attributes from the Gerber X2 format (chapter 5 in revision J2)
-    bool        m_useGerberAttributes;
+    bool        m_useGerberX2format;
 
     /// Include netlist info (only in Gerber X2 format) (chapter ? in revision ?)
     bool        m_includeGerberNetlistInfo;
@@ -162,8 +168,12 @@ private:
 
     int         m_HPGLPenNum;           ///< HPGL only: pen number selection(1 to 9)
     int         m_HPGLPenSpeed;         ///< HPGL only: pen speed, always in cm/s (1 to 99 cm/s)
-    int         m_HPGLPenDiam;          ///< HPGL only: pen diameter in MILS, useful to fill areas
+    double      m_HPGLPenDiam;          ///< HPGL only: pen diameter in MILS, useful to fill areas
+                                        ///< However, it is in mm in hpgl files.
     COLOR4D     m_color;                ///< Color for plotting the current layer. Provided, but not really used
+
+    /// Pointer to active color settings to be used for plotting
+    COLOR_SETTINGS* m_colors;
 
 public:
     PCB_PLOT_PARAMS();
@@ -186,14 +196,35 @@ public:
     void        SetColor( COLOR4D aVal ) { m_color = aVal; }
     COLOR4D     GetColor() const { return m_color; }
 
-    void        SetTextMode( PlotTextMode aVal ) { m_textMode = aVal; }
-    PlotTextMode GetTextMode() const { return m_textMode; }
+    void SetColorSettings( COLOR_SETTINGS* aSettings ) { m_colors = aSettings; }
+
+    COLOR_SETTINGS* ColorSettings() const { return m_colors; }
+
+    void SetTextMode( PLOT_TEXT_MODE aVal )
+    {
+        m_textMode = aVal;
+    }
+
+    PLOT_TEXT_MODE GetTextMode() const
+    {
+        return m_textMode;
+    }
 
     void        SetPlotMode( EDA_DRAW_MODE_T aPlotMode ) { m_plotMode = aPlotMode; }
     EDA_DRAW_MODE_T GetPlotMode() const { return m_plotMode; }
 
     void        SetDXFPlotPolygonMode( bool aFlag ) { m_DXFplotPolygonMode = aFlag; }
     bool        GetDXFPlotPolygonMode() const { return m_DXFplotPolygonMode; }
+
+    void SetDXFPlotUnits( DXF_PLOTTER::DXF_UNITS aUnit )
+    {
+        m_DXFplotUnits = aUnit;
+    }
+
+    DXF_PLOTTER::DXF_UNITS GetDXFPlotUnits() const
+    {
+        return m_DXFplotUnits;
+    }
 
     void        SetDrillMarksType( DrillMarksType aVal ) { m_drillMarks = aVal; }
     DrillMarksType GetDrillMarksType() const { return m_drillMarks; }
@@ -236,14 +267,21 @@ public:
     void        SetExcludeEdgeLayer( bool aFlag ) { m_excludeEdgeLayer = aFlag; }
     bool        GetExcludeEdgeLayer() const { return m_excludeEdgeLayer; }
 
-    void        SetFormat( PlotFormat aFormat ) { m_format = aFormat; }
-    PlotFormat  GetFormat() const { return m_format; }
+    void SetFormat( PLOT_FORMAT aFormat )
+    {
+        m_format = aFormat;
+    }
+
+    PLOT_FORMAT GetFormat() const
+    {
+        return m_format;
+    }
 
     void        SetOutputDirectory( wxString aDir ) { m_outputDirectory = aDir; }
     wxString    GetOutputDirectory() const { return m_outputDirectory; }
 
-    void        SetUseGerberAttributes( bool aUse ) { m_useGerberAttributes = aUse; }
-    bool        GetUseGerberAttributes() const { return m_useGerberAttributes; }
+    void        SetUseGerberX2format( bool aUse ) { m_useGerberX2format = aUse; }
+    bool        GetUseGerberX2format() const { return m_useGerberX2format; }
 
     void        SetIncludeGerberNetlistInfo( bool aUse ) { m_includeGerberNetlistInfo = aUse; }
     bool        GetIncludeGerberNetlistInfo() const { return m_includeGerberNetlistInfo; }
@@ -278,10 +316,15 @@ public:
     void        SetA4Output( int aForce ) { m_A4Output = aForce; };
     bool        GetA4Output() const { return m_A4Output; };
 
-    int         GetHPGLPenDiameter() const { return m_HPGLPenDiam; };
-    bool        SetHPGLPenDiameter( int aValue );
+    // For historical reasons, this parameter is stored in mils
+    // (but is in mm in hpgl files...)
+    double      GetHPGLPenDiameter() const { return m_HPGLPenDiam; };
+    bool        SetHPGLPenDiameter( double aValue );
+
+    // This parameter is always in cm, due to hpgl file format constraint
     int         GetHPGLPenSpeed() const { return m_HPGLPenSpeed; };
     bool        SetHPGLPenSpeed( int aValue );
+
     void        SetHPGLPenNum( int aVal ) { m_HPGLPenNum = aVal; }
     int         GetHPGLPenNum() const { return m_HPGLPenNum; }
 

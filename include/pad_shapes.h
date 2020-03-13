@@ -35,6 +35,7 @@ enum PAD_SHAPE_T
     PAD_SHAPE_OVAL,
     PAD_SHAPE_TRAPEZOID,
     PAD_SHAPE_ROUNDRECT,
+    PAD_SHAPE_CHAMFERED_RECT,   // Rectangle with a champered corner ( and with rounded other corners)
     PAD_SHAPE_CUSTOM            // A shape defined by user, using a set of basic shapes
                                 // (thick segments, circles, arcs, polygons
 };
@@ -64,6 +65,23 @@ enum PAD_ATTR_T
                                     ///< Used for edgecard connectors for instance
     PAD_ATTRIB_HOLE_NOT_PLATED,     ///< like PAD_STANDARD, but not plated
                                     ///< mechanical use only, no connection allowed
+};
+
+
+/**
+ * Enum PAD_PROP_T
+ * is the set of pad properties used in Gerber files (Draw files, and P&P files)
+ * to define some properties in fabrication or test files
+ */
+enum PAD_PROP_T
+{
+    PAD_PROP_NONE,                  ///< no special fabrication property
+    PAD_PROP_BGA,                   ///< Smd pad, used in BGA footprints
+    PAD_PROP_FIDUCIAL_GLBL,         ///< a fiducial (usually a smd) for the full board
+    PAD_PROP_FIDUCIAL_LOCAL,        ///< a fiducial (usually a smd) local to the parent footprint
+    PAD_PROP_TESTPOINT,             ///< a test point pad
+    PAD_PROP_HEATSINK,              ///< a pad used as heat sink, usually in SMD footprints
+    PAD_PROP_CASTELLATED            ///< a pad with a castellated through hole
 };
 
 

@@ -2,7 +2,7 @@
  * This program source code file is part of KiCad, a free EDA CAD application.
  *
  * Copyright (C) 2015-2016 Mario Luzeiro <mrluzeiro@ua.pt>
- * Copyright (C) 1992-2016 KiCad Developers, see AUTHORS.txt for contributors.
+ * Copyright (C) 1992-2019 KiCad Developers, see AUTHORS.txt for contributors.
  *
  * This program is free software; you can redistribute it and/or
  * modify it under the terms of the GNU General Public License
@@ -36,21 +36,28 @@
 #include "3d_rendering/3d_render_ogl_legacy/c3d_render_ogl_legacy.h"
 #include "3d_rendering/3d_render_raytracing/c3d_render_raytracing.h"
 #include "3d_cache/3d_cache.h"
+#include <gal/hidpi_gl_canvas.h>
 #include <wx/clipbrd.h>
 #include <wx/dataobj.h>
-#include <wx/glcanvas.h>
 #include <wx/image.h>
 #include <wx/wupdlock.h>
 #include <wx/timer.h>
 #include <wx/statusbr.h>
-#include <wxBasePcbFrame.h>
+#include <pcb_base_frame.h>
+
+// Flag for special keys
+// TODO Remove these when Action-ifying 3d viewer
+#define GR_KB_RIGHTSHIFT    ( 0x01000000U )
+#define GR_KB_LEFTSHIFT     ( 0x02000000U )
+#define GR_KB_CTRL          ( 0x04000000U )
+#define GR_KB_ALT           ( 0x08000000U )
+#define GR_KB_SHIFT         ( GR_KB_LEFTSHIFT | GR_KB_RIGHTSHIFT )
 
 
 /**
- *  Class EDA_3D_CANVAS
  *  Implement a canvas based on a wxGLCanvas
  */
-class EDA_3D_CANVAS : public wxGLCanvas
+class EDA_3D_CANVAS : public HIDPI_GL_CANVAS
 {
 
  public:
@@ -100,9 +107,11 @@ class EDA_3D_CANVAS : public wxGLCanvas
 
     /**
      * @brief SetView3D - Helper function to call view commands
-     * @param keycode: ascii key commands
+     * @param aKeycode: ascii key commands
+     * @return true if the key code was handled,
+     *  false if no command found for this code.
      */
-    void SetView3D( int keycode );
+    bool SetView3D( int aKeycode );
 
     /**
      * @brief RenderEngineChanged - Notify that the render engine was changed
@@ -121,7 +130,13 @@ class EDA_3D_CANVAS : public wxGLCanvas
      */
     void Request_refresh( bool aRedrawImmediately = true );
 
- private:
+    void OnKeyEvent( wxKeyEvent& event );
+
+    bool SupportsRayTracing() const { return m_opengl_supports_raytracing; }
+
+    bool IsOpenGLInitialized() const { return m_is_opengl_initialized; }
+
+private:
 
     void OnPaint( wxPaintEvent &event );
 
@@ -149,8 +164,6 @@ class EDA_3D_CANVAS : public wxGLCanvas
 
     void OnCharHook( wxKeyEvent& event );
 
-    void OnKeyEvent( wxKeyEvent& event );
-
     void OnTimerTimeout_Editing( wxTimerEvent& event );
 
     /**
@@ -159,9 +172,11 @@ class EDA_3D_CANVAS : public wxGLCanvas
      */
     void OnCloseWindow( wxCloseEvent &event );
 
+    void OnResize( wxSizeEvent &event );
+
     void OnTimerTimeout_Redraw( wxTimerEvent& event );
 
-    DECLARE_EVENT_TABLE();
+    DECLARE_EVENT_TABLE()
 
  private:
 
@@ -265,6 +280,8 @@ class EDA_3D_CANVAS : public wxGLCanvas
 
     /// Flags that the user requested the current view to be render with raytracing
     bool m_render_raytracing_was_requested;
+
+    bool m_opengl_supports_raytracing;
 
     /**
      *  Trace mask used to enable or disable the trace output of this class.

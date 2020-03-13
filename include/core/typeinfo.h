@@ -28,19 +28,7 @@
 
 
 #ifndef SWIG
-#include <cstdio>
-
-template<typename T>
-struct remove_pointer
-{
-    typedef T type;
-};
-
-template<typename T>
-struct remove_pointer<T*>
-{
-    typedef typename remove_pointer<T>::type type;
-};
+#include <type_traits>
 
 /**
  * Function IsA()
@@ -52,13 +40,13 @@ struct remove_pointer<T*>
 template <class T, class I>
 bool IsA( const I* aObject )
 {
-    return aObject && remove_pointer<T>::type::ClassOf( aObject );
+    return aObject && std::remove_pointer<T>::type::ClassOf( aObject );
 }
 
 template <class T, class I>
 bool IsA( const I& aObject )
 {
-    return remove_pointer<T>::type::ClassOf( &aObject );
+    return std::remove_pointer<T>::type::ClassOf( &aObject );
 }
 
 /**
@@ -72,10 +60,10 @@ bool IsA( const I& aObject )
 template<class Casted, class From>
 Casted dyn_cast( From aObject )
 {
-    if( remove_pointer<Casted>::type::ClassOf ( aObject ) )
+    if( std::remove_pointer<Casted>::type::ClassOf ( aObject ) )
         return static_cast<Casted>( aObject );
 
-    return NULL;
+    return nullptr;
 }
 
 class EDA_ITEM;
@@ -89,13 +77,13 @@ class EDA_ITEM;
  */
 enum KICAD_T
 {
-    NOT_USED = -1,          ///< the 3d code uses this value
+    NOT_USED = -1, ///< the 3d code uses this value
 
-    EOT = 0,                ///< search types array terminator (End Of Types)
+    EOT = 0, ///< search types array terminator (End Of Types)
 
     TYPE_NOT_INIT = 0,
     PCB_T,
-    SCREEN_T,               ///< not really an item, used to identify a screen
+    SCREEN_T, ///< not really an item, used to identify a screen
 
     // Items in pcb
     PCB_MODULE_T,           ///< class MODULE, a footprint
@@ -104,10 +92,10 @@ enum KICAD_T
     PCB_TEXT_T,             ///< class TEXTE_PCB, text on a layer
     PCB_MODULE_TEXT_T,      ///< class TEXTE_MODULE, text in a footprint
     PCB_MODULE_EDGE_T,      ///< class EDGE_MODULE, a footprint edge
+    PCB_MODULE_ZONE_AREA_T, ///< class ZONE_CONTAINER, managed by a footprint
     PCB_TRACE_T,            ///< class TRACK, a track segment (segment on a copper layer)
     PCB_VIA_T,              ///< class VIA, a via (like a track segment on a copper layer)
-    PCB_ZONE_T,             ///< class SEGZONE, a segment used to fill a zone area (segment on a
-                            ///< copper layer)
+    PCB_ARC_T,              ///< class ARC, an arc track segment on a copper layer
     PCB_MARKER_T,           ///< class MARKER_PCB, a marker used to show something
     PCB_DIMENSION_T,        ///< class DIMENSION, a dimension (graphic item)
     PCB_TARGET_T,           ///< class PCB_TARGET, a target (graphic item)
@@ -128,18 +116,33 @@ enum KICAD_T
     SCH_TEXT_T,
     SCH_LABEL_T,
     SCH_GLOBAL_LABEL_T,
-    SCH_HIERARCHICAL_LABEL_T,
+    SCH_HIER_LABEL_T,
     SCH_FIELD_T,
     SCH_COMPONENT_T,
     SCH_SHEET_PIN_T,
     SCH_SHEET_T,
+    SCH_PIN_T,
 
-    // Be prudent with these 3 types:
+    // Be prudent with these types:
     // they should be used only to locate a specific field type
     // among SCH_FIELD_T items types
+    // N.B. If you add a type here, be sure to add it below to the BaseType()
     SCH_FIELD_LOCATE_REFERENCE_T,
     SCH_FIELD_LOCATE_VALUE_T,
     SCH_FIELD_LOCATE_FOOTPRINT_T,
+    SCH_FIELD_LOCATE_DATASHEET_T,
+
+    // Same for picking wires and busses from SCH_LINE_T items
+    SCH_LINE_LOCATE_WIRE_T,
+    SCH_LINE_LOCATE_BUS_T,
+    SCH_LINE_LOCATE_GRAPHIC_LINE_T,
+
+    // Same for picking labels attached to wires and/or busses
+    SCH_LABEL_LOCATE_WIRE_T,
+    SCH_LABEL_LOCATE_BUS_T,
+
+    // matches any type
+    SCH_LOCATE_ANY_T,
 
     // General
     SCH_SCREEN_T,
@@ -169,20 +172,67 @@ enum KICAD_T
     LIB_FIELD_T,
 
     /*
-     * For GerbView: items type:
+     * For GerbView: item types:
      */
     GERBER_LAYOUT_T,
     GERBER_DRAW_ITEM_T,
-    GERBER_IMAGE_LIST_T,
     GERBER_IMAGE_T,
 
     /*
-     * for Pl_Editor, in undo/redo commands
+     * For Pl_Editor: item types:
      */
-    TYPE_PL_EDITOR_LAYOUT,
+    WSG_LINE_T,
+    WSG_RECT_T,
+    WSG_POLY_T,
+    WSG_TEXT_T,
+    WSG_BITMAP_T,
+    WSG_PAGE_T,
+
+    // serialized layout used in undo/redo commands
+    WS_PROXY_UNDO_ITEM_T,      // serialized layout used in undo/redo commands
+    WS_PROXY_UNDO_ITEM_PLUS_T, // serialized layout plus page and title block settings
+
+    /*
+     * FOR PROJECT::_ELEMs
+     */
+    SYMBOL_LIB_TABLE_T,
+    FP_LIB_TABLE_T,
+    PART_LIBS_T,
+    SEARCH_STACK_T,
+    S3D_CACHE_T,
 
     // End value
     MAX_STRUCT_TYPE_ID
 };
+
+/**
+ * Returns the underlying type of the given type.  This is useful for finding the
+ * element type given one of the "non-type" types such as SCH_LINE_LOCATE_WIRE_T
+ * @param aType Given type to resolve
+ * @return Base type
+ */
+constexpr KICAD_T BaseType( const KICAD_T aType )
+{
+    switch( aType )
+    {
+    case SCH_FIELD_LOCATE_REFERENCE_T:
+    case SCH_FIELD_LOCATE_VALUE_T:
+    case SCH_FIELD_LOCATE_FOOTPRINT_T:
+    case SCH_FIELD_LOCATE_DATASHEET_T:
+        return SCH_FIELD_T;
+
+    case SCH_LINE_LOCATE_WIRE_T:
+    case SCH_LINE_LOCATE_BUS_T:
+    case SCH_LINE_LOCATE_GRAPHIC_LINE_T:
+        return SCH_LINE_T;
+
+    case SCH_LABEL_LOCATE_WIRE_T:
+    case SCH_LABEL_LOCATE_BUS_T:
+        return SCH_LABEL_T;
+
+    default:
+        return aType;
+    }
+}
 
 #endif // __KICAD_TYPEINFO_H

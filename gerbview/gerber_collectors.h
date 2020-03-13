@@ -20,10 +20,10 @@
 #ifndef GERBER_COLLECTORS_H
 #define GERBER_COLLECTORS_H
 
-#include <class_collector.h>
+#include <collector.h>
 
 /**
- * Class GERBER_COLLECTOR
+ * GERBER_COLLECTOR
  * is intended for use when the right click button is pressed, or when the
  * plain "arrow" tool is in effect.
  */
@@ -92,7 +92,7 @@ public:
      * @param ndx The index into the list.
      * @return EDA_ITEM* - or something derived from it, or NULL.
      */
-    EDA_ITEM* operator[]( int ndx ) const
+    EDA_ITEM* operator[]( int ndx ) const override
     {
         if( (unsigned)ndx < (unsigned)GetCount() )
             return (EDA_ITEM*) m_List[ ndx ];

@@ -24,6 +24,7 @@
  */
 
 #include "sim_plot_panel.h"
+#include "sim_plot_frame.h"
 
 #include <algorithm>
 #include <limits>
@@ -217,7 +218,7 @@ public:
 
     void formatLabels() override
     {
-        formatSILabels( this, wxT( "dB" ), 3 );
+        formatSILabels( this, wxT( "dBV" ), 3 );
     }
 
 };
@@ -331,7 +332,8 @@ void CURSOR::Plot( wxDC& aDC, mpWindow& aWindow )
     wxCoord topPx    = m_drawOutsideMargins ? 0 : aWindow.GetMarginTop();
     wxCoord bottomPx = m_drawOutsideMargins ? aWindow.GetScrY() : aWindow.GetScrY() - aWindow.GetMarginBottom();
 
-    aDC.SetPen( wxPen( *wxWHITE, 1, m_continuous ? wxPENSTYLE_SOLID : wxPENSTYLE_LONG_DASH ) );
+    aDC.SetPen( wxPen( m_plotPanel->GetPlotColor( SIM_CURSOR_COLOR ), 1,
+                       m_continuous ? wxPENSTYLE_SOLID : wxPENSTYLE_LONG_DASH ) );
 
     if( topPx < cursorPos.y && cursorPos.y < bottomPx )
         aDC.DrawLine( leftPx, cursorPos.y, rightPx, cursorPos.y );
@@ -361,42 +363,49 @@ void CURSOR::UpdateReference()
 }
 
 
-SIM_PLOT_PANEL::SIM_PLOT_PANEL( SIM_TYPE aType, wxWindow* parent, wxWindowID id, const wxPoint& pos,
-                const wxSize& size, long style, const wxString& name )
-    : mpWindow( parent, id, pos, size, style ), m_colorIdx( 0 ),
-        m_axis_x( nullptr ), m_axis_y1( nullptr ), m_axis_y2( nullptr ), m_type( aType )
+SIM_PLOT_PANEL::SIM_PLOT_PANEL( SIM_TYPE aType, wxWindow* parent, SIM_PLOT_FRAME* aMainFrame,
+                                wxWindowID id, const wxPoint& pos,
+        const wxSize& size, long style, const wxString& name )
+        : mpWindow( parent, id, pos, size, style ),
+          m_colorIdx( 0 ),
+          m_axis_x( nullptr ),
+          m_axis_y1( nullptr ),
+          m_axis_y2( nullptr ),
+          m_dotted_cp( false ),
+          m_type( aType ),
+          m_masterFrame( aMainFrame )
 {
     LimitView( true );
     SetMargins( 50, 80, 50, 80 );
 
-    wxColour grey( 96, 96, 96 );
-    SetColourTheme( *wxBLACK, *wxWHITE, grey );
-    EnableDoubleBuffer( true );
-    UpdateAll();
+    SetColourTheme( GetPlotColor( SIM_BG_COLOR ),
+                    GetPlotColor( SIM_FG_COLOR ),
+                    GetPlotColor( SIM_AXIS_COLOR ) );
 
     switch( m_type )
     {
         case ST_AC:
-            m_axis_x = new FREQUENCY_LOG_SCALE( wxT( "Frequency" ), mpALIGN_BOTTOM );
-            m_axis_y1 = new GAIN_SCALE( wxT( "Gain" ), mpALIGN_LEFT );
-            m_axis_y2 = new PHASE_SCALE( wxT( "Phase" ), mpALIGN_RIGHT );
+            m_axis_x = new FREQUENCY_LOG_SCALE( _( "Frequency" ), mpALIGN_BOTTOM );
+            m_axis_y1 = new GAIN_SCALE( _( "Gain" ), mpALIGN_LEFT );
+            m_axis_y2 = new PHASE_SCALE( _( "Phase" ), mpALIGN_RIGHT );
             m_axis_y2->SetMasterScale( m_axis_y1 );
             break;
 
         case ST_DC:
-            m_axis_x = new VOLTAGE_SCALE_X( wxT( "Voltage (sweeped)" ), mpALIGN_BOTTOM );
-            m_axis_y1 = new VOLTAGE_SCALE_Y( wxT( "Voltage (measured)" ), mpALIGN_LEFT );
+            m_axis_x = new VOLTAGE_SCALE_X( _( "Voltage (swept)" ), mpALIGN_BOTTOM );
+            m_axis_y1 = new VOLTAGE_SCALE_Y( _( "Voltage (measured)" ), mpALIGN_LEFT );
+            m_axis_y2 = new CURRENT_SCALE( _( "Current" ), mpALIGN_RIGHT );
             break;
 
         case ST_NOISE:
-            m_axis_x = new FREQUENCY_LOG_SCALE( wxT( "Frequency" ), mpALIGN_BOTTOM );
-            m_axis_y1 = new mpScaleY( wxT( "noise [(V or A)^2/Hz]" ), mpALIGN_LEFT );
+            m_axis_x = new FREQUENCY_LOG_SCALE( _( "Frequency" ), mpALIGN_BOTTOM );
+            m_axis_y1 = new mpScaleY( _( "noise [(V or A)^2/Hz]" ), mpALIGN_LEFT );
             break;
 
         case ST_TRANSIENT:
-            m_axis_x = new TIME_SCALE( wxT( "Time" ), mpALIGN_BOTTOM );
-            m_axis_y1 = new VOLTAGE_SCALE_Y( wxT( "Voltage" ), mpALIGN_LEFT );
-            m_axis_y2 = new CURRENT_SCALE( wxT( "Current" ), mpALIGN_RIGHT );
+            m_axis_x = new TIME_SCALE( _( "Time" ), mpALIGN_BOTTOM );
+            m_axis_y1 = new VOLTAGE_SCALE_Y( _( "Voltage" ), mpALIGN_LEFT );
+            m_axis_y2 = new CURRENT_SCALE( _( "Current" ), mpALIGN_RIGHT );
             m_axis_y2->SetMasterScale( m_axis_y1 );
             break;
 
@@ -427,11 +436,10 @@ SIM_PLOT_PANEL::SIM_PLOT_PANEL( SIM_TYPE aType, wxWindow* parent, wxWindowID id,
         AddLayer( m_axis_y2 );
     }
 
+    // a mpInfoLegend displays le name of traces on the left top panel corner:
     m_legend = new mpInfoLegend( wxRect( 0, 40, 200, 40 ), wxTRANSPARENT_BRUSH );
     m_legend->SetVisible( false );
     AddLayer( m_legend );
-    m_topLevel.push_back( m_legend );
-    SetColourTheme( *wxBLACK, *wxWHITE, grey );
 
     EnableDoubleBuffer( true );
     UpdateAll();
@@ -441,6 +449,23 @@ SIM_PLOT_PANEL::SIM_PLOT_PANEL( SIM_TYPE aType, wxWindow* parent, wxWindowID id,
 SIM_PLOT_PANEL::~SIM_PLOT_PANEL()
 {
     // ~mpWindow destroys all the added layers, so there is no need to destroy m_traces contents
+}
+
+
+void SIM_PLOT_PANEL::UpdatePlotColors()
+{
+    // Update bg and fg colors:
+    SetColourTheme( GetPlotColor( SIM_BG_COLOR ),
+                    GetPlotColor( SIM_FG_COLOR ),
+                    GetPlotColor( SIM_AXIS_COLOR ) );
+
+    UpdateAll();
+}
+
+
+wxColour SIM_PLOT_PANEL::GetPlotColor( int aIndex )
+{
+    return m_masterFrame->GetPlotColor( aIndex );
 }
 
 
@@ -459,6 +484,16 @@ bool SIM_PLOT_PANEL::IsPlottable( SIM_TYPE aSimType )
 }
 
 
+void SIM_PLOT_PANEL::UpdateTraceStyle( TRACE* trace )
+{
+    int        flags    = trace->GetFlags();
+    wxPenStyle penStyle = ( ( flags & SPT_AC_PHASE || flags & SPT_CURRENT ) && m_dotted_cp ) ?
+                                  wxPENSTYLE_DOT :
+                                  wxPENSTYLE_SOLID;
+    trace->SetPen( wxPen( trace->GetTraceColour(), 2, penStyle ) );
+}
+
+
 bool SIM_PLOT_PANEL::AddTrace( const wxString& aName, int aPoints,
         const double* aX, const double* aY, SIM_PLOT_TYPE aFlags )
 {
@@ -474,7 +509,7 @@ bool SIM_PLOT_PANEL::AddTrace( const wxString& aName, int aPoints,
         {
             bool hasVoltageTraces = false;
 
-            for( auto tr : m_traces )
+            for( const auto& tr : m_traces )
             {
                 if( !( tr.second->GetFlags() & SPT_CURRENT ) )
                 {
@@ -492,7 +527,7 @@ bool SIM_PLOT_PANEL::AddTrace( const wxString& aName, int aPoints,
         // New entry
         trace = new TRACE( aName );
         trace->SetTraceColour( generateColor() );
-        trace->SetPen( wxPen( trace->GetTraceColour(), 2, wxPENSTYLE_SOLID ) );
+        UpdateTraceStyle( trace );
         m_traces[aName] = trace;
 
         // It is a trick to keep legend & coords always on the top
@@ -591,7 +626,7 @@ void SIM_PLOT_PANEL::EnableCursor( const wxString& aName, bool aEnable )
 
     if( aEnable )
     {
-        CURSOR* c = new CURSOR( t );
+        CURSOR* c = new CURSOR( t, this );
         int plotCenter = GetMarginLeft() + ( GetXScreen() - GetMarginLeft() - GetMarginRight() ) / 2;
         c->SetX( plotCenter );
         t->SetCursor( c );
@@ -627,24 +662,31 @@ void SIM_PLOT_PANEL::ResetScales()
 
 wxColour SIM_PLOT_PANEL::generateColor()
 {
-    /// @todo have a look at:
-    /// http://stanford.edu/~mwaskom/software/seaborn/tutorial/color_palettes.html
-    /// https://github.com/Gnuplotting/gnuplot-palettes
+    const unsigned int colorCount = m_masterFrame->GetPlotColorCount() - SIM_TRACE_COLOR;
 
-    const unsigned long colors[] = { 0x0000ff, 0x00ff00, 0xff0000, 0x00ffff, 0xff00ff, 0xffff000, 0xffffff };
+    for( int i = 0; i < (int)colorCount - 1; i++ )
+    {
+        const wxColour color = GetPlotColor( i+SIM_TRACE_COLOR );
+        bool hasColor = false;
 
-    //const unsigned long colors[] = { 0xe3cea6, 0xb4781f, 0x8adfb2, 0x2ca033, 0x999afb, 0x1c1ae3, 0x6fbffd, 0x007fff, 0xd6b2ca, 0x9a3d6a };
+        for( auto& t : m_traces )
+        {
+            TRACE* trace = t.second;
 
-    // hls
-    //const unsigned long colors[] = { 0x0f1689, 0x0f7289, 0x35890f, 0x0f8945, 0x89260f, 0x890f53, 0x89820f, 0x630f89 };
+            if( trace->GetTraceColour() == color )
+            {
+                hasColor = true;
+                break;
+            }
+        }
 
-    // pastels, good for dark background
-    //const unsigned long colors[] = { 0x2fd8fe, 0x628dfa, 0x53d8a6, 0xa5c266, 0xb3b3b3, 0x94c3e4, 0xca9f8d, 0xac680e };
+        if( !hasColor )
+            return color;
+    }
 
-    const unsigned int colorCount = sizeof(colors) / sizeof(unsigned long);
-
-    /// @todo generate shades to avoid repeating colors
-    return wxColour( colors[m_colorIdx++ % colorCount] );
+    // If all colors are in use, choose a suitable color in list
+    int idx = m_traces.size() % colorCount;
+    return wxColour( GetPlotColor( idx + SIM_TRACE_COLOR ) );
 }
 
 wxDEFINE_EVENT( EVT_SIM_CURSOR_UPDATE, wxCommandEvent );

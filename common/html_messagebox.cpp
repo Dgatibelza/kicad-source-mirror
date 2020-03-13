@@ -2,7 +2,7 @@
  * This program source code file is part of KiCad, a free EDA CAD application.
  *
  * Copyright (C) 2014 Jean-Pierre Charras, jp.charras at wanadoo.fr
- * Copyright (C) 2014 KiCad Developers, see CHANGELOG.TXT for contributors.
+ * Copyright (C) 2014-2018 KiCad Developers, see AUTHORS.txt for contributors.
  *
  * This program is free software; you can redistribute it and/or
  * modify it under the terms of the GNU General Public License
@@ -28,22 +28,39 @@
 #include <common.h>
 
 
-HTML_MESSAGE_BOX::HTML_MESSAGE_BOX( wxWindow* parent, const wxString& aTitle,
-        wxPoint aPos, wxSize aSize) :
-    DIALOG_DISPLAY_HTML_TEXT_BASE( parent, wxID_ANY, aTitle, aPos, aSize )
+HTML_MESSAGE_BOX::HTML_MESSAGE_BOX( wxWindow* aParent, const wxString& aTitle,
+                                    const wxPoint& aPosition, const wxSize& aSize ) :
+    DIALOG_DISPLAY_HTML_TEXT_BASE( aParent, wxID_ANY, aTitle, aPosition, aSize )
 {
     m_htmlWindow->SetLayoutDirection( wxLayout_LeftToRight );
     ListClear();
+
+    // Gives a default logical size (the actual size depends on the display definition)
+    if( aSize != wxDefaultSize )
+        SetSizeInDU( aSize.x, aSize.y );
+
     Center();
+
+    m_sdbSizer1OK->SetDefault();
 }
 
 
-void HTML_MESSAGE_BOX::OnCloseButtonClick( wxCommandEvent& event )
+HTML_MESSAGE_BOX::~HTML_MESSAGE_BOX()
 {
-    // the dialog can be shown modal or not modal.
+    // Prevent wxWidgets bug which fails to release when closing the window on an <esc>.
+    if( m_htmlWindow->HasCapture() )
+        m_htmlWindow->ReleaseMouse();
+}
+
+
+void HTML_MESSAGE_BOX::OnOKButtonClick( wxCommandEvent& event )
+{
+    // the dialog can be shown quasi-model, modal, or not modeless.
     // therefore, use the right way to close it.
-    if( IsModal() )
-        EndModal( 0 );
+    if( IsQuasiModal() )
+        EndQuasiModal( wxID_OK );
+    else if( IsModal() )
+        EndModal( wxID_OK );
     else
         Destroy();
 }

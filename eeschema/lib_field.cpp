@@ -1,8 +1,8 @@
 /*
  * This program source code file is part of KiCad, a free EDA CAD application.
  *
- * Copyright (C) 2012 Jean-Pierre Charras, jp.charras at wanadoo.fr
- * Copyright (C) 2004-2017 KiCad Developers, see AUTHORS.txt for contributors.
+ * Copyright (C) 2018 Jean-Pierre Charras, jp.charras at wanadoo.fr
+ * Copyright (C) 2004-2020 KiCad Developers, see AUTHORS.txt for contributors.
  *
  * This program is free software; you can redistribute it and/or
  * modify it under the terms of the GNU General Public License
@@ -22,29 +22,24 @@
  * 51 Franklin Street, Fifth Floor, Boston, MA  02110-1301, USA
  */
 
-/**
- * @file lib_field.cpp
- */
-
 #include <fctsys.h>
 #include <pgm_base.h>
 #include <gr_basic.h>
-#include <macros.h>
 #include <base_struct.h>
-#include <drawtxt.h>
+#include <gr_text.h>
 #include <kicad_string.h>
-#include <class_drawpanel.h>
-#include <plot_common.h>
+#include <sch_draw_panel.h>
+#include <plotter.h>
 #include <trigo.h>
 #include <base_units.h>
 #include <msgpanel.h>
 #include <bitmaps.h>
-
 #include <general.h>
 #include <class_libentry.h>
 #include <transform.h>
 #include <lib_field.h>
 #include <template_fieldnames.h>
+#include <settings/color_settings.h>
 
 
 LIB_FIELD::LIB_FIELD(LIB_PART * aParent, int idfield ) :
@@ -61,19 +56,29 @@ LIB_FIELD::LIB_FIELD( int idfield ) :
 }
 
 
+LIB_FIELD::LIB_FIELD( int aID, const wxString& aName ) :
+    LIB_ITEM( LIB_FIELD_T, NULL )
+{
+    Init( aID );
+    m_name = aName;
+}
+
+
 LIB_FIELD::~LIB_FIELD()
 {
 }
 
 
-void LIB_FIELD::operator=( const LIB_FIELD& field )
+LIB_FIELD& LIB_FIELD::operator=( const LIB_FIELD& field )
 {
     m_id = field.m_id;
-    m_Text = field.m_Text;
     m_name = field.m_name;
     m_Parent = field.m_Parent;
 
+    SetText( field.GetText() );
     SetEffects( field );
+
+    return *this;
 }
 
 
@@ -84,308 +89,81 @@ void LIB_FIELD::Init( int id )
     SetTextWidth( GetDefaultTextSize() );
     SetTextHeight( GetDefaultTextSize() );
 
-    m_typeName = _( "Field" );
-
     SetTextAngle( TEXT_ANGLE_HORIZ );    // constructor already did this.
 
-    m_rotate = false;
-    m_updateText = false;
-
-    // fields in RAM must always have names, because we are trying to get
-    // less dependent on field ids and more dependent on names.
-    // Plus assumptions are made in the field editors.
+    // Fields in RAM must always have names, because we are trying to get less dependent on
+    // field ids and more dependent on names. Plus assumptions are made in the field editors.
     m_name = TEMPLATE_FIELDNAME::GetDefaultFieldName( id );
 
-    switch( id )
-    {
-    case DATASHEET:
-    case FOOTPRINT:
-        // by contrast, VALUE and REFERENCE are are always constructed as
-        // initially visible, and template fieldsnames' initial visibility
-        // is controlled by the template fieldname configuration record.
+    // By contrast, VALUE and REFERENCE are are always constructed as initially visible, and
+    // template fieldsnames' initial visibility is controlled by the template fieldname config.
+    if( id == DATASHEET || id == FOOTPRINT )
         SetVisible( false );
-        break;
-    }
-}
-
-
-bool LIB_FIELD::Save( OUTPUTFORMATTER& aFormatter )
-{
-    int      hjustify, vjustify;
-    wxString text = m_Text;
-
-    hjustify = 'C';
-
-    if( GetHorizJustify() == GR_TEXT_HJUSTIFY_LEFT )
-        hjustify = 'L';
-    else if( GetHorizJustify() == GR_TEXT_HJUSTIFY_RIGHT )
-        hjustify = 'R';
-
-    vjustify = 'C';
-
-    if( GetVertJustify() == GR_TEXT_VJUSTIFY_BOTTOM )
-        vjustify = 'B';
-    else if( GetVertJustify() == GR_TEXT_VJUSTIFY_TOP )
-        vjustify = 'T';
-
-    aFormatter.Print( 0, "F%d %s %d %d %d %c %c %c %c%c%c",
-                      m_id,
-                      EscapedUTF8( text ).c_str(),       // wraps in quotes
-                      GetTextPos().x, GetTextPos().y, GetTextWidth(),
-                      GetTextAngle() == 0 ? 'H' : 'V',
-                      IsVisible() ? 'V' : 'I',
-                      hjustify, vjustify,
-                      IsItalic() ? 'I' : 'N',
-                      IsBold() ? 'B' : 'N' );
-
-    /* Save field name, if necessary
-     * Field name is saved only if it is not the default name.
-     * Just because default name depends on the language and can change from
-     * a country to an other
-     */
-    wxString defName = TEMPLATE_FIELDNAME::GetDefaultFieldName( m_id );
-
-    if( m_id >= FIELD1 && !m_name.IsEmpty() && m_name != defName )
-        aFormatter.Print( 0, " %s", EscapedUTF8( m_name ).c_str() );
-
-    aFormatter.Print( 0, "\n" );
-
-    return true;
-}
-
-
-bool LIB_FIELD::Load( LINE_READER& aLineReader, wxString& errorMsg )
-{
-    int     cnt;
-    int     x, y, size;
-    char    textOrient;
-    char    textVisible;
-    char    textHJustify;
-    char    textVJustify[256];
-
-    char*   line = (char*) aLineReader;
-    char*   limit = line + aLineReader.Length();
-
-    if( sscanf( line + 1, "%d", &m_id ) != 1 || m_id < 0 )
-    {
-        errorMsg = wxT( "invalid field header" );
-        return false;
-    }
-
-    // Caller did a strtok(), which inserts a nul, so next few bytes are ugly:
-    // digit(s), a nul, some whitespace, then a double quote.
-    while( line < limit && *line != '"' )
-        line++;
-
-    if( line == limit )
-        return false;
-
-    line += ReadDelimitedText( &m_Text, line );
-
-    // Doctor the *.lib file field which has a "~" in blank fields.  New saves will
-    // not save like this, and eventually these two lines can be removed.
-    if( m_Text.size() == 1 && m_Text[0] == wxChar( '~' ) )
-        m_Text.clear();
-
-    memset( textVJustify, 0, sizeof( textVJustify ) );
-
-    cnt = sscanf( line, " %d %d %d %c %c %c %255s", &x, &y, &size,
-                  &textOrient, &textVisible, &textHJustify, textVJustify );
-
-    if( cnt < 5 )
-    {
-        errorMsg.Printf( wxT( "field %d does not have the correct number of parameters" ),
-                         m_id );
-        return false;
-    }
-
-    SetTextPos( wxPoint( x, y ) );
-    SetTextSize( wxSize( size, size ) );
-
-    if( textOrient == 'H' )
-        SetTextAngle( TEXT_ANGLE_HORIZ );
-    else if( textOrient == 'V' )
-        SetTextAngle( TEXT_ANGLE_VERT );
-    else
-    {
-        errorMsg.Printf( wxT( "field %d text orientation parameter <%c> is not valid" ),
-                         textOrient );
-        return false;
-    }
-
-    if( textVisible == 'V' )
-        SetVisible( true );
-    else if( textVisible == 'I' )
-        SetVisible( false );
-    else
-    {
-        errorMsg.Printf( wxT( "field %d text visible parameter <%c> is not valid" ),
-                         textVisible );
-        return false;
-    }
-
-    SetHorizJustify( GR_TEXT_HJUSTIFY_CENTER );
-    SetVertJustify( GR_TEXT_VJUSTIFY_CENTER );
-
-    if( cnt >= 6 )
-    {
-        if( textHJustify == 'C' )
-            SetHorizJustify( GR_TEXT_HJUSTIFY_CENTER );
-        else if( textHJustify == 'L' )
-            SetHorizJustify( GR_TEXT_HJUSTIFY_LEFT );
-        else if( textHJustify == 'R' )
-            SetHorizJustify( GR_TEXT_HJUSTIFY_RIGHT );
-        else
-        {
-            errorMsg.Printf(
-                wxT( "field %d text horizontal justification parameter <%c> is not valid" ),
-                textHJustify );
-            return false;
-        }
-
-        if( textVJustify[0] == 'C' )
-            SetVertJustify( GR_TEXT_VJUSTIFY_CENTER );
-        else if( textVJustify[0] == 'B' )
-            SetVertJustify( GR_TEXT_VJUSTIFY_BOTTOM );
-        else if( textVJustify[0] == 'T' )
-            SetVertJustify( GR_TEXT_VJUSTIFY_TOP );
-        else
-        {
-            errorMsg.Printf(
-                wxT( "field %d text vertical justification parameter <%c> is not valid" ),
-                textVJustify[0] );
-            return false;
-        }
-
-        if( textVJustify[1] == 'I' )  // Italic
-            SetItalic( true );
-        if( textVJustify[2] == 'B' )  // Bold
-            SetBold( true );
-    }
-
-    // fields in RAM must always have names.
-    if( m_id < MANDATORY_FIELDS )
-    {
-        // Fields in RAM must always have names, because we are trying to get
-        // less dependent on field ids and more dependent on names.
-        // Plus assumptions are made in the field editors.
-        m_name = TEMPLATE_FIELDNAME::GetDefaultFieldName( m_id );
-    }
-    else
-    {
-        ReadDelimitedText( &m_name, line );
-    }
-
-    return true;
 }
 
 
 int LIB_FIELD::GetPenSize() const
 {
-    return GetThickness() == 0 ? GetDefaultLineThickness() : GetThickness();
+    int pensize = GetThickness();
+
+    if( pensize == 0 )   // Use default values for pen size
+    {
+        if( IsBold() )
+            pensize = GetPenSizeForBold( GetTextWidth() );
+        else
+            pensize = GetDefaultLineThickness();
+    }
+
+    // Clip pen size for small texts:
+    pensize = Clamp_Text_PenSize( pensize, GetTextSize(), IsBold() );
+    return pensize;
 }
 
 
-void LIB_FIELD::drawGraphic( EDA_DRAW_PANEL* aPanel, wxDC* aDC, const wxPoint& aOffset,
-                             COLOR4D aColor, GR_DRAWMODE aDrawMode, void* aData,
-                             const TRANSFORM& aTransform )
+void LIB_FIELD::print( wxDC* aDC, const wxPoint& aOffset, void* aData,
+                       const TRANSFORM& aTransform )
 {
-    wxPoint  text_pos;
-    COLOR4D color = COLOR4D::UNSPECIFIED;
+    COLOR4D  color = IsVisible() ? GetDefaultColor() : GetInvisibleItemColor();
     int      linewidth = GetPenSize();
+    wxPoint  text_pos = aTransform.TransformCoordinate( GetTextPos() ) + aOffset;
+    wxString text = aData ? *static_cast<wxString*>( aData ) : GetText();
 
-    if( IsBold() )
-        linewidth = GetPenSizeForBold( GetTextWidth() );
-    else
-        linewidth = Clamp_Text_PenSize( linewidth, GetTextSize(), IsBold() );
-
-    if( !IsVisible() && ( aColor == COLOR4D::UNSPECIFIED ) )
-    {
-        color = GetInvisibleItemColor();
-    }
-    else if( IsSelected() && ( aColor == COLOR4D::UNSPECIFIED ) )
-    {
-        color = GetItemSelectedColor();
-    }
-    else
-    {
-        color = aColor;
-    }
-
-    if( color == COLOR4D::UNSPECIFIED )
-        color = GetDefaultColor();
-
-    text_pos = aTransform.TransformCoordinate( GetTextPos() ) + aOffset;
-
-    wxString text;
-
-    if( aData )
-        text = *(wxString*)aData;
-    else
-        text = m_Text;
-
-    GRSetDrawMode( aDC, aDrawMode );
-    EDA_RECT* clipbox = aPanel? aPanel->GetClipBox() : NULL;
-
-    DrawGraphicText( clipbox, aDC, text_pos, color, text,
-                     GetTextAngle(), GetTextSize(),
-                     GetHorizJustify(), GetVertJustify(),
-                     linewidth, IsItalic(), IsBold() );
-
-    /* Set to one (1) to draw bounding box around field text to validate
-     * bounding box calculation. */
-#if 0
-    EDA_RECT bBox = GetBoundingBox();
-    bBox.RevertYAxis();
-    bBox = aTransform.TransformCoordinate( bBox );
-    bBox.Move( aOffset );
-    GRRect( clipbox, aDC, bBox, 0, LIGHTMAGENTA );
-#endif
+    GRText( aDC, text_pos, color, text, GetTextAngle(), GetTextSize(), GetHorizJustify(),
+            GetVertJustify(), linewidth, IsItalic(), IsBold() );
 }
 
 
-bool LIB_FIELD::HitTest( const wxPoint& aPosition ) const
+bool LIB_FIELD::HitTest( const wxPoint& aPosition, int aAccuracy ) const
 {
-    // Because HitTest is mainly used to select the field
-    // return always false if this field is void
-    if( IsVoid() )
+    // Because HitTest is mainly used to select the field return false if it is empty
+    if( GetText().IsEmpty() )
         return false;
-
-    return HitTest( aPosition, 0, DefaultTransform );
-}
-
-
-bool LIB_FIELD::HitTest( const wxPoint &aPosition, int aThreshold, const TRANSFORM& aTransform ) const
-{
-    if( aThreshold < 0 )
-        aThreshold = 0;
 
     // Build a temporary copy of the text for hit testing
     EDA_TEXT tmp_text( *this );
 
-    // Reference designator text has one or 2 additional character (displays
-    // U? or U?A)
+    // Reference designator text has one or 2 additional character (displays U? or U?A)
     if( m_id == REFERENCE )
     {
+        const LIB_PART*  parent = dynamic_cast<const LIB_PART*>( m_Parent );
+
         wxString extended_text = tmp_text.GetText();
         extended_text.Append('?');
-        const LIB_PART*      parent = static_cast<const LIB_PART*>( m_Parent );
 
-        if ( parent && ( parent->GetUnitCount() > 1 ) )
+        if ( parent && parent->GetUnitCount() > 1 )
             extended_text.Append('A');
+
         tmp_text.SetText( extended_text );
     }
 
-    tmp_text.SetTextPos( aTransform.TransformCoordinate( GetTextPos() ) );
+    tmp_text.SetTextPos( DefaultTransform.TransformCoordinate( GetTextPos() ) );
 
-    /* The text orientation may need to be flipped if the
-     *  transformation matrix causes xy axes to be flipped.
-     * this simple algo works only for schematic matrix (rot 90 or/and mirror)
-     */
-    bool t1 = ( aTransform.x1 != 0 ) ^ ( GetTextAngle() != 0 );
+    // The text orientation may need to be flipped if the transformation matrix causes xy axes
+    // to be flipped.  This simple algo works only for schematic matrix (rot 90 or/and mirror)
+    bool t1 = ( DefaultTransform.x1 != 0 ) ^ ( GetTextAngle() != 0 );
     tmp_text.SetTextAngle( t1 ? TEXT_ANGLE_HORIZ : TEXT_ANGLE_VERT );
 
-    return tmp_text.TextHitTest( aPosition );
+    return tmp_text.TextHitTest( aPosition, aAccuracy );
 }
 
 
@@ -401,24 +179,29 @@ EDA_ITEM* LIB_FIELD::Clone() const
 
 void LIB_FIELD::Copy( LIB_FIELD* aTarget ) const
 {
-    aTarget->m_Text = m_Text;
     aTarget->m_name = m_name;
 
+    aTarget->CopyText( *this );
     aTarget->SetEffects( *this );
     aTarget->SetParent( m_Parent );
 }
 
 
-int LIB_FIELD::compare( const LIB_ITEM& other ) const
+int LIB_FIELD::compare( const LIB_ITEM& aOther, LIB_ITEM::COMPARE_FLAGS aCompareFlags ) const
 {
-    wxASSERT( other.Type() == LIB_FIELD_T );
+    wxASSERT( aOther.Type() == LIB_FIELD_T );
 
-    const LIB_FIELD* tmp = ( LIB_FIELD* ) &other;
+    int retv = LIB_ITEM::compare( aOther, aCompareFlags );
+
+    if( retv )
+        return retv;
+
+    const LIB_FIELD* tmp = ( LIB_FIELD* ) &aOther;
 
     if( m_id != tmp->m_id )
         return m_id - tmp->m_id;
 
-    int result = m_Text.CmpNoCase( tmp->m_Text );
+    int result = GetText().CmpNoCase( tmp->GetText() );
 
     if( result != 0 )
         return result;
@@ -439,7 +222,7 @@ int LIB_FIELD::compare( const LIB_ITEM& other ) const
 }
 
 
-void LIB_FIELD::SetOffset( const wxPoint& aOffset )
+void LIB_FIELD::Offset( const wxPoint& aOffset )
 {
     EDA_TEXT::Offset( aOffset );
 }
@@ -451,7 +234,7 @@ bool LIB_FIELD::Inside( EDA_RECT& rect ) const
 }
 
 
-void LIB_FIELD::Move( const wxPoint& newPosition )
+void LIB_FIELD::MoveTo( const wxPoint& newPosition )
 {
     EDA_TEXT::SetTextPos( newPosition );
 }
@@ -496,12 +279,11 @@ void LIB_FIELD::Rotate( const wxPoint& center, bool aRotateCCW )
 void LIB_FIELD::Plot( PLOTTER* aPlotter, const wxPoint& aOffset, bool aFill,
                       const TRANSFORM& aTransform )
 {
-    if( IsVoid() )
+    if( GetText().IsEmpty() )
         return;
 
-    /* Calculate the text orientation, according to the component
-     * orientation/mirror */
-    int orient = GetTextAngle();
+    // Calculate the text orientation, according to the component orientation/mirror
+    int orient = (int) GetTextAngle();
 
     if( aTransform.y1 )  // Rotate component 90 deg.
     {
@@ -516,13 +298,17 @@ void LIB_FIELD::Plot( PLOTTER* aPlotter, const wxPoint& aOffset, bool aFill,
 
     EDA_TEXT_HJUSTIFY_T hjustify = GR_TEXT_HJUSTIFY_CENTER;
     EDA_TEXT_VJUSTIFY_T vjustify = GR_TEXT_VJUSTIFY_CENTER;
-    wxPoint textpos = aTransform.TransformCoordinate( BoundaryBox.Centre() )
-                      + aOffset;
+    wxPoint textpos = aTransform.TransformCoordinate( BoundaryBox.Centre() ) + aOffset;
 
-    aPlotter->Text( textpos, GetDefaultColor(), GetShownText(),
-                    orient, GetTextSize(),
-                    hjustify, vjustify,
-                    GetPenSize(), IsItalic(), IsBold() );
+    COLOR4D color;
+
+    if( aPlotter->GetColorMode() )
+        color = aPlotter->ColorSettings()->GetColor( GetDefaultLayer() );
+    else
+        color = COLOR4D::BLACK;
+
+    aPlotter->Text( textpos, color, GetShownText(), orient, GetTextSize(),
+                    hjustify, vjustify, GetPenSize(), IsItalic(), IsBold() );
 }
 
 
@@ -546,7 +332,7 @@ const EDA_RECT LIB_FIELD::GetBoundingBox() const
     /* Y coordinates for LIB_ITEMS are bottom to top, so we must invert the Y position when
      * calling GetTextBox() that works using top to bottom Y axis orientation.
      */
-    EDA_RECT rect = GetTextBox( -1, -1, true );
+    EDA_RECT rect = GetTextBox( -1, -1, true, GetTextMarkupFlags() );
     rect.RevertYAxis();
 
     // We are using now a bottom to top Y axis.
@@ -566,89 +352,54 @@ const EDA_RECT LIB_FIELD::GetBoundingBox() const
 }
 
 
-COLOR4D LIB_FIELD::GetDefaultColor()
+void LIB_FIELD::ViewGetLayers( int aLayers[], int& aCount ) const
 {
-    COLOR4D color;
+    aCount      = 2;
 
     switch( m_id )
     {
-    case REFERENCE:
-        color = GetLayerColor( LAYER_REFERENCEPART );
-        break;
-
-    case VALUE:
-        color = GetLayerColor( LAYER_VALUEPART );
-        break;
-
-    default:
-        color = GetLayerColor( LAYER_FIELDS );
-        break;
+    case REFERENCE: aLayers[0] = LAYER_REFERENCEPART; break;
+    case VALUE:     aLayers[0] = LAYER_VALUEPART;     break;
+    default:        aLayers[0] = LAYER_FIELDS;        break;
     }
 
-    return color;
+    aLayers[1] = LAYER_SELECTION_SHADOWS;
 }
 
 
-void LIB_FIELD::Rotate()
+SCH_LAYER_ID LIB_FIELD::GetDefaultLayer()
 {
-    if( InEditMode() )
+    switch( m_id )
     {
-        m_rotate = true;
+    case REFERENCE: return LAYER_REFERENCEPART;
+    case VALUE:     return LAYER_VALUEPART;
+    default:        return LAYER_FIELDS;
     }
-    else
-    {
-        SetTextAngle( GetTextAngle() == TEXT_ANGLE_VERT ? TEXT_ANGLE_HORIZ : TEXT_ANGLE_VERT );
-    }
+}
+
+
+COLOR4D LIB_FIELD::GetDefaultColor()
+{
+    return GetLayerColor( GetDefaultLayer() );
 }
 
 
 wxString LIB_FIELD::GetName( bool aTranslate ) const
 {
-    wxString name;
-
     switch( m_id )
     {
-    case REFERENCE:
-        if( aTranslate )
-            name = _( "Reference" );
-        else
-            name = wxT( "Reference" );
-        break;
-
-    case VALUE:
-        if( aTranslate )
-            name = _( "Value" );
-        else
-            name = wxT( "Value" );
-        break;
-
-    case FOOTPRINT:
-        if( aTranslate )
-            name = _( "Footprint" );
-        else
-            name = wxT( "Footprint" );
-        break;
-
-    case DATASHEET:
-        if( aTranslate )
-           name = _( "Datasheet" );
-        else
-           name = wxT( "Datasheet" );
-        break;
+    case REFERENCE: return aTranslate ? _( "Reference" ) : wxT( "Reference" );
+    case VALUE:     return aTranslate ? _( "Value" ) : wxT( "Value" );
+    case FOOTPRINT: return aTranslate ? _( "Footprint" ) : wxT( "Footprint" );
+    case DATASHEET: return aTranslate ? _( "Datasheet" ) : wxT( "Datasheet" );
 
     default:
         if( m_name.IsEmpty() )
-        {
-            if( aTranslate )
-                name.Printf( _( "Field%d" ), m_id );
-            else
-                name.Printf( wxT( "Field%d" ), m_id );
-        }
+            return aTranslate ? wxString::Format( _( "Field%d" ), m_id )
+                              : wxString::Format( wxT( "Field%d" ), m_id );
         else
-            name = m_name;
+            return m_name;
     }
-
-    return name;
 }
 
 
@@ -672,128 +423,43 @@ void LIB_FIELD::SetName( const wxString& aName )
 }
 
 
-void LIB_FIELD::SetText( const wxString& aText )
+wxString LIB_FIELD::GetSelectMenuText( EDA_UNITS aUnits ) const
 {
-    if( aText == GetText() )
-        return;
-
-    wxString oldName = m_Text;
-
-    if( m_id == VALUE && m_Parent != NULL )
-    {
-        LIB_PART*      parent = GetParent();
-
-        // Set the parent component and root alias to the new name.
-        if( parent->GetName().CmpNoCase( aText ) != 0 )
-            parent->SetName( aText );
-    }
-
-    if( InEditMode() )
-    {
-        m_Text = oldName;
-        m_savedText = aText;
-        m_updateText = true;
-    }
-    else
-    {
-        m_Text = aText;
-    }
+    return wxString::Format( _( "Field %s \"%s\"" ), GetName( TRANSLATE_FIELD_NAME ),
+                             ShortenedShownText() );
 }
 
 
-wxString LIB_FIELD::GetSelectMenuText() const
+void LIB_FIELD::BeginEdit( const wxPoint aPosition )
 {
-    return wxString::Format( _( "Field %s %s" ),
-                             GetChars( GetName() ),
-                             GetChars( ShortenedShownText() ) );
+    SetTextPos( aPosition );
 }
 
 
-void LIB_FIELD::BeginEdit( STATUS_FLAGS aEditMode, const wxPoint aPosition )
+void LIB_FIELD::CalcEdit( const wxPoint& aPosition )
 {
-    wxCHECK_RET( ( aEditMode & ( IS_NEW | IS_MOVED ) ) != 0,
-                 wxT( "Invalid edit mode for LIB_FIELD object." ) );
-
-    if( aEditMode == IS_MOVED )
-    {
-        m_initialPos = GetTextPos();
-        m_initialCursorPos = aPosition;
-        SetEraseLastDrawItem();
-    }
-    else
-    {
-        SetTextPos( aPosition );
-    }
-
-    m_Flags = aEditMode;
+    SetTextPos( aPosition );
 }
 
 
-bool LIB_FIELD::ContinueEdit( const wxPoint aPosition )
-{
-    wxCHECK_MSG( ( m_Flags & ( IS_NEW | IS_MOVED ) ) != 0, false,
-                   wxT( "Bad call to ContinueEdit().  Text is not being edited." ) );
-
-    return false;
-}
-
-
-void LIB_FIELD::EndEdit( const wxPoint& aPosition, bool aAbort )
-{
-    wxCHECK_RET( ( m_Flags & ( IS_NEW | IS_MOVED ) ) != 0,
-                   wxT( "Bad call to EndEdit().  Text is not being edited." ) );
-
-    m_Flags = 0;
-    m_rotate = false;
-    m_updateText = false;
-    SetEraseLastDrawItem( false );
-}
-
-
-void LIB_FIELD::calcEdit( const wxPoint& aPosition )
-{
-    if( m_rotate )
-    {
-        SetTextAngle( GetTextAngle() == TEXT_ANGLE_VERT ? TEXT_ANGLE_HORIZ : TEXT_ANGLE_VERT );
-        m_rotate = false;
-    }
-
-    if( m_updateText )
-    {
-        std::swap( m_Text, m_savedText );
-        m_updateText = false;
-    }
-
-    if( m_Flags == IS_NEW )
-    {
-        SetTextPos( aPosition );
-    }
-    else if( m_Flags == IS_MOVED )
-    {
-        Move( m_initialPos + aPosition - m_initialCursorPos );
-    }
-}
-
-
-void LIB_FIELD::GetMsgPanelInfo( MSG_PANEL_ITEMS& aList )
+void LIB_FIELD::GetMsgPanelInfo( EDA_UNITS aUnits, MSG_PANEL_ITEMS& aList )
 {
     wxString msg;
 
-    LIB_ITEM::GetMsgPanelInfo( aList );
+    LIB_ITEM::GetMsgPanelInfo( aUnits, aList );
 
     // Display style:
     msg = GetTextStyleName();
     aList.push_back( MSG_PANEL_ITEM( _( "Style" ), msg, MAGENTA ) );
 
-    msg = StringFromValue( g_UserUnit, GetTextWidth(), true );
+    msg = MessageTextFromValue( aUnits, GetTextWidth(), true );
     aList.push_back( MSG_PANEL_ITEM( _( "Width" ), msg, BLUE ) );
 
-    msg = StringFromValue( g_UserUnit, GetTextHeight(), true );
+    msg = MessageTextFromValue( aUnits, GetTextHeight(), true );
     aList.push_back( MSG_PANEL_ITEM( _( "Height" ), msg, BLUE ) );
 
     // Display field name (ref, value ...)
-    msg = GetName();
-    aList.push_back( MSG_PANEL_ITEM( _( "Field" ), msg, BROWN ) );
+    aList.push_back( MSG_PANEL_ITEM( _( "Field" ), GetName( TRANSLATE_FIELD_NAME ), BROWN ) );
 
     // Display field text:
     aList.push_back( MSG_PANEL_ITEM( _( "Value" ), GetShownText(), BROWN ) );
@@ -803,4 +469,10 @@ void LIB_FIELD::GetMsgPanelInfo( MSG_PANEL_ITEMS& aList )
 BITMAP_DEF LIB_FIELD::GetMenuImage() const
 {
     return move_xpm;
+}
+
+
+bool LIB_FIELD::IsMandatory() const
+{
+    return m_id < MANDATORY_FIELDS;
 }

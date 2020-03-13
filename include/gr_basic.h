@@ -3,24 +3,20 @@
  *
  * Copyright (C) 2015 Jean-Pierre Charras, jp.charras at wanadoo.fr
  * Copyright (C) 2011 Wayne Stambaugh <stambaughw@verizon.net>
- * Copyright (C) 1992-2015 KiCad Developers, see AUTHORS.txt for contributors.
+ * Copyright (C) 1992-2018 KiCad Developers, see AUTHORS.txt for contributors.
  *
- * This program is free software; you can redistribute it and/or
- * modify it under the terms of the GNU General Public License
- * as published by the Free Software Foundation; either version 2
- * of the License, or (at your option) any later version.
+ * This program is free software: you can redistribute it and/or modify it
+ * under the terms of the GNU General Public License as published by the
+ * Free Software Foundation, either version 3 of the License, or (at your
+ * option) any later version.
  *
- * This program is distributed in the hope that it will be useful,
- * but WITHOUT ANY WARRANTY; without even the implied warranty of
- * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
- * GNU General Public License for more details.
+ * This program is distributed in the hope that it will be useful, but
+ * WITHOUT ANY WARRANTY; without even the implied warranty of
+ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the GNU
+ * General Public License for more details.
  *
- * You should have received a copy of the GNU General Public License
- * along with this program; if not, you may find one here:
- * http://www.gnu.org/licenses/old-licenses/gpl-2.0.html
- * or you may search the http://www.gnu.org website for the version 2 license,
- * or you may write to the Free Software Foundation, Inc.,
- * 51 Franklin Street, Fifth Floor, Boston, MA  02110-1301, USA
+ * You should have received a copy of the GNU General Public License along
+ * with this program.  If not, see <http://www.gnu.org/licenses/>.
  */
 
 /**
@@ -32,7 +28,7 @@
 
 #include <gal/color4d.h>
 #include <vector>
-class EDA_RECT;
+#include <eda_rect.h>
 
 using KIGFX::COLOR4D;
 
@@ -91,10 +87,6 @@ typedef enum {
 } GRLineStypeType;
 
 
-class EDA_DRAW_PANEL;
-
-void GRSetDrawMode( wxDC* DC, GR_DRAWMODE mode );
-GR_DRAWMODE  GRGetDrawMode( wxDC* DC );
 void GRResetPenAndBrush( wxDC* DC );
 void GRSetColorPen( wxDC* DC, COLOR4D Color, int width = 1, wxPenStyle stype = wxPENSTYLE_SOLID );
 void GRSetBrush( wxDC* DC, COLOR4D Color, bool fill = false );
@@ -112,24 +104,20 @@ void GRForceBlackPen( bool flagforce );
 bool GetGRForceBlackPenState( void );
 
 void GRLine( EDA_RECT* aClipBox, wxDC* aDC,
-             wxPoint aStart, wxPoint aEnd, int aWidth, COLOR4D aColor );
+             wxPoint aStart, wxPoint aEnd, int aWidth, COLOR4D aColor, wxPenStyle aStyle = wxPENSTYLE_SOLID );
 void GRLine( EDA_RECT* ClipBox, wxDC* DC,
-             int x1, int y1, int x2, int y2, int width, COLOR4D Color );
-void GRMixedLine( EDA_RECT* ClipBox, wxDC* DC, int x1, int y1, int x2, int y2,
-                  int width, COLOR4D Color );
-void GRDashedLine( EDA_RECT* ClipBox, wxDC* DC, int x1, int y1, int x2, int  y2,
-                   int width, COLOR4D Color );
+             int x1, int y1, int x2, int y2, int width, COLOR4D Color, wxPenStyle aStyle = wxPENSTYLE_SOLID );
 void GRMoveTo( int x, int y );
 void GRLineTo( EDA_RECT* ClipBox, wxDC* DC,
                int x, int y, int width, COLOR4D Color );
 
-void GRPoly( EDA_RECT* ClipBox, wxDC* DC, int n, wxPoint Points[], bool Fill,
-             int width, COLOR4D Color, COLOR4D BgColor );
+void GRPoly( EDA_RECT* ClipBox, wxDC* DC, int n, const wxPoint* Points, bool Fill, int width,
+        COLOR4D Color, COLOR4D BgColor );
 
-void GRBezier( EDA_RECT* ClipBox, wxDC* DC, int x1, int y1, int x2, int y2,
-               int x3, int y3, int width, COLOR4D Color );
-void GRBezier( EDA_RECT* ClipBox, wxDC* DC, int x1, int y1, int x2, int y2,
-               int x3, int y3, int x4, int y4, int width, COLOR4D Color );
+/** Draw cubic (4 points: start control1, control2, end) bezier curve
+ */
+void GRBezier( EDA_RECT* aClipBox, wxDC* aDC, std::vector<wxPoint>& aPoints,
+               int aWidth, COLOR4D aColor );
 
 /**
  * Function GRClosedPoly
@@ -143,13 +131,8 @@ void GRBezier( EDA_RECT* ClipBox, wxDC* DC, int x1, int y1, int x2, int y2,
  * @param aPenColor the color of the border.
  * @param aFillColor the fill color of the polygon's interior.
  */
-void GRClosedPoly( EDA_RECT* ClipBox,
-                   wxDC  *   aDC,
-                   int       aPointCount,
-                   wxPoint   aPoints[],
-                   bool      doFill,
-                   COLOR4D   aPenColor,
-                   COLOR4D   aFillColor );
+void GRClosedPoly( EDA_RECT* ClipBox, wxDC* aDC, int aPointCount, const wxPoint* aPoints,
+        bool doFill, COLOR4D aPenColor, COLOR4D aFillColor );
 
 // @todo could make these 2 closed polygons calls a single function and default
 // the aPenWidth argument
@@ -167,14 +150,8 @@ void GRClosedPoly( EDA_RECT* ClipBox,
  * @param aPenColor the color of the border.
  * @param aFillColor the fill color of the polygon's interior.
  */
-void GRClosedPoly( EDA_RECT* ClipBox,
-                   wxDC*     aDC,
-                   int       aPointCount,
-                   wxPoint   aPoints[],
-                   bool      doFill,
-                   int       aPenWidth,
-                   COLOR4D   aPenColor,
-                   COLOR4D   aFillColor );
+void GRClosedPoly( EDA_RECT* ClipBox, wxDC* aDC, int aPointCount, const wxPoint* aPoints,
+        bool doFill, int aPenWidth, COLOR4D aPenColor, COLOR4D aFillColor );
 
 
 /**
@@ -256,5 +233,12 @@ void GRLineArray(  EDA_RECT* aClipBox, wxDC* aDC,std::vector<wxPoint>& aLines,
 
 void GRDrawAnchor( EDA_RECT* aClipBox, wxDC *aDC, int x, int y, int aSize,
                    COLOR4D aColor );
+
+/**
+ * Draw text centered on a wxDC with wrapping.
+ * @param aDC wxDC instance onto which the text will be drawn
+ * @param aText the text to draw
+ */
+void GRDrawWrappedText( wxDC& aDC, wxString const& aText );
 
 #endif      /* define GR_BASIC */

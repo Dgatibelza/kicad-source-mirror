@@ -21,12 +21,15 @@
  * 51 Franklin Street, Fifth Floor, Boston, MA  02110-1301, USA
  */
 
+#include "kicadcurve.h"
+
+#include <sexpr/sexpr.h>
+
 #include <wx/log.h>
+
+#include <cmath>
 #include <iostream>
 #include <sstream>
-#include <math.h>
-#include "sexpr/sexpr.h"
-#include "kicadcurve.h"
 
 
 KICADCURVE::KICADCURVE()
@@ -115,22 +118,46 @@ bool KICADCURVE::Read( SEXPR::SEXPR* aEntry, CURVE_TYPE aCurveType )
         }
         else if( text == "layer" )
         {
-            if( child->GetNumberOfChildren() < 2
-                || !child->GetChild( 1 )->IsSymbol() )
+            const OPT<std::string> layer = GetLayerName( *child );
+
+            if( !layer )
             {
                 std::ostringstream ostr;
-                ostr << "* bad layer data";
+                ostr << "* bad layer data: " << child->AsString();
                 wxLogMessage( "%s\n", ostr.str().c_str() );
                 return false;
             }
 
-            text = child->GetChild( 1 )->GetSymbol();
-
             // NOTE: for the moment we only process Edge.Cuts
-            if( text == "Edge.Cuts" )
+            if( *layer == "Edge.Cuts" )
                 m_layer = LAYER_EDGE;
         }
     }
 
     return true;
+}
+
+
+std::string KICADCURVE::Describe() const
+{
+    std::ostringstream desc;
+
+    switch( m_form )
+    {
+        case CURVE_LINE:
+            desc << "line start: " << m_start << " end: " << m_end;
+            break;
+        case CURVE_ARC:
+            desc << "arc center: " << m_start << " radius: " << m_radius
+                 << " angle: " << 180.0 * m_angle / M_PI;
+            break;
+        case CURVE_CIRCLE:
+            desc << "circle center: " << m_start << " radius: " << m_radius;
+            break;
+        default:
+            desc << "<invalid curve type>";
+            break;
+    }
+
+    return desc.str();
 }

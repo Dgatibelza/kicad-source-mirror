@@ -1,8 +1,8 @@
 ///////////////////////////////////////////////////////////////////////////
-// C++ code generated with wxFormBuilder (version May  6 2016)
+// C++ code generated with wxFormBuilder (version Oct 17 2018)
 // http://www.wxformbuilder.org/
 //
-// PLEASE DO "NOT" EDIT THIS FILE!
+// PLEASE DO *NOT* EDIT THIS FILE!
 ///////////////////////////////////////////////////////////////////////////
 
 #include "dialog_pns_settings_base.h"
@@ -11,19 +11,19 @@
 
 DIALOG_PNS_SETTINGS_BASE::DIALOG_PNS_SETTINGS_BASE( wxWindow* parent, wxWindowID id, const wxString& title, const wxPoint& pos, const wxSize& size, long style ) : DIALOG_SHIM( parent, id, title, pos, size, style )
 {
-	this->SetSizeHints( wxSize( 350,-1 ), wxDefaultSize );
+	this->SetSizeHints( wxSize( -1,-1 ), wxDefaultSize );
 	
 	wxBoxSizer* bMainSizer;
 	bMainSizer = new wxBoxSizer( wxVERTICAL );
 	
-	wxString m_modeChoices[] = { _("Highlight collisions"), _("Shove"), _("Walk around"), _("Figure out what's best") };
+	wxString m_modeChoices[] = { _("Highlight collisions"), _("Shove"), _("Walk around") };
 	int m_modeNChoices = sizeof( m_modeChoices ) / sizeof( wxString );
-	m_mode = new wxRadioBox( this, wxID_ANY, _("Mode"), wxDefaultPosition, wxDefaultSize, m_modeNChoices, m_modeChoices, 1, wxRA_SPECIFY_COLS );
+	m_mode = new wxRadioBox( this, wxID_ANY, _("Mode:"), wxDefaultPosition, wxDefaultSize, m_modeNChoices, m_modeChoices, 1, wxRA_SPECIFY_COLS );
 	m_mode->SetSelection( 0 );
 	bMainSizer->Add( m_mode, 0, wxALL|wxEXPAND, 5 );
 	
 	wxStaticBoxSizer* bOptions;
-	bOptions = new wxStaticBoxSizer( new wxStaticBox( this, wxID_ANY, _("Options") ), wxVERTICAL );
+	bOptions = new wxStaticBoxSizer( new wxStaticBox( this, wxID_ANY, _("Options:") ), wxVERTICAL );
 	
 	wxFlexGridSizer* fgSizer1;
 	fgSizer1 = new wxFlexGridSizer( 0, 2, 0, 0 );
@@ -31,7 +31,7 @@ DIALOG_PNS_SETTINGS_BASE::DIALOG_PNS_SETTINGS_BASE( wxWindow* parent, wxWindowID
 	fgSizer1->SetFlexibleDirection( wxBOTH );
 	fgSizer1->SetNonFlexibleGrowMode( wxFLEX_GROWMODE_SPECIFIED );
 	
-	m_staticText4 = new wxStaticText( bOptions->GetStaticBox(), wxID_ANY, _("Mouse drag behaviour:"), wxDefaultPosition, wxDefaultSize, 0 );
+	m_staticText4 = new wxStaticText( bOptions->GetStaticBox(), wxID_ANY, _("Mouse drag behavior:"), wxDefaultPosition, wxDefaultSize, 0 );
 	m_staticText4->Wrap( -1 );
 	fgSizer1->Add( m_staticText4, 0, wxTOP|wxRIGHT|wxLEFT|wxALIGN_CENTER_VERTICAL, 5 );
 	
@@ -63,10 +63,10 @@ DIALOG_PNS_SETTINGS_BASE::DIALOG_PNS_SETTINGS_BASE( wxWindow* parent, wxWindowID
 	
 	bOptions->Add( m_removeLoops, 0, wxTOP|wxRIGHT|wxLEFT, 5 );
 	
-	m_autoNeckdown = new wxCheckBox( bOptions->GetStaticBox(), wxID_ANY, _("Automatic neckdown"), wxDefaultPosition, wxDefaultSize, 0 );
-	m_autoNeckdown->SetToolTip( _("When enabled, the router tries to break out pads/vias in a clean way, avoiding acute angles and jagged breakout traces.") );
+	m_smartPads = new wxCheckBox( bOptions->GetStaticBox(), wxID_ANY, _("Optimize pad connections"), wxDefaultPosition, wxDefaultSize, 0 );
+	m_smartPads->SetToolTip( _("When enabled, the router tries to break out pads/vias in a clean way, avoiding acute angles and jagged breakout traces.") );
 	
-	bOptions->Add( m_autoNeckdown, 0, wxTOP|wxRIGHT|wxLEFT, 5 );
+	bOptions->Add( m_smartPads, 0, wxTOP|wxRIGHT|wxLEFT, 5 );
 	
 	m_smoothDragged = new wxCheckBox( bOptions->GetStaticBox(), wxID_ANY, _("Smooth dragged segments"), wxDefaultPosition, wxDefaultSize, 0 );
 	m_smoothDragged->SetToolTip( _("When enabled, the router attempts to merge several jagged segments into a single straight one (dragging mode).") );
@@ -74,7 +74,7 @@ DIALOG_PNS_SETTINGS_BASE::DIALOG_PNS_SETTINGS_BASE( wxWindow* parent, wxWindowID
 	bOptions->Add( m_smoothDragged, 0, wxTOP|wxRIGHT|wxLEFT, 5 );
 	
 	m_violateDrc = new wxCheckBox( bOptions->GetStaticBox(), wxID_ANY, _("Allow DRC violations"), wxDefaultPosition, wxDefaultSize, 0 );
-	m_violateDrc->SetToolTip( _("(Highlight collisions mode only) - allows to establish a track even if is violating the DRC rules.") );
+	m_violateDrc->SetToolTip( _("(Highlight collisions mode only) - allows one to establish a track even if is violating the DRC rules.") );
 	
 	bOptions->Add( m_violateDrc, 0, wxTOP|wxRIGHT|wxLEFT, 5 );
 	
@@ -83,13 +83,16 @@ DIALOG_PNS_SETTINGS_BASE::DIALOG_PNS_SETTINGS_BASE( wxWindow* parent, wxWindowID
 	
 	bOptions->Add( m_suggestEnding, 0, wxALL, 5 );
 	
+	m_optimizeDraggedTrack = new wxCheckBox( bOptions->GetStaticBox(), wxID_ANY, _("Optimize track being dragged"), wxDefaultPosition, wxDefaultSize, 0 );
+	bOptions->Add( m_optimizeDraggedTrack, 0, wxALL, 5 );
+	
 	m_staticline1 = new wxStaticLine( bOptions->GetStaticBox(), wxID_ANY, wxDefaultPosition, wxDefaultSize, wxLI_HORIZONTAL );
 	bOptions->Add( m_staticline1, 0, wxEXPAND | wxALL, 5 );
 	
 	wxBoxSizer* bEffort;
 	bEffort = new wxBoxSizer( wxHORIZONTAL );
 	
-	m_effortLabel = new wxStaticText( bOptions->GetStaticBox(), wxID_ANY, _("Optimizer effort"), wxDefaultPosition, wxDefaultSize, 0 );
+	m_effortLabel = new wxStaticText( bOptions->GetStaticBox(), wxID_ANY, _("Optimizer effort:"), wxDefaultPosition, wxDefaultSize, 0 );
 	m_effortLabel->Wrap( -1 );
 	m_effortLabel->SetToolTip( _("Defines how much time the router shall spend optimizing the routed/shoved traces.\nMore effort means cleaner routing (but slower), less effort means faster routing but somewhat jagged traces.") );
 	
@@ -146,8 +149,10 @@ DIALOG_PNS_SETTINGS_BASE::DIALOG_PNS_SETTINGS_BASE( wxWindow* parent, wxWindowID
 	
 	this->SetSizer( bMainSizer );
 	this->Layout();
+	bMainSizer->Fit( this );
 	
 	// Connect Events
+	m_mode->Connect( wxEVT_COMMAND_RADIOBOX_SELECTED, wxCommandEventHandler( DIALOG_PNS_SETTINGS_BASE::onModeChange ), NULL, this );
 	m_freeAngleMode->Connect( wxEVT_COMMAND_CHECKBOX_CLICKED, wxCommandEventHandler( DIALOG_PNS_SETTINGS_BASE::onFreeAngleModeChange ), NULL, this );
 	m_stdButtonsOK->Connect( wxEVT_COMMAND_BUTTON_CLICKED, wxCommandEventHandler( DIALOG_PNS_SETTINGS_BASE::OnOkClick ), NULL, this );
 }
@@ -155,6 +160,7 @@ DIALOG_PNS_SETTINGS_BASE::DIALOG_PNS_SETTINGS_BASE( wxWindow* parent, wxWindowID
 DIALOG_PNS_SETTINGS_BASE::~DIALOG_PNS_SETTINGS_BASE()
 {
 	// Disconnect Events
+	m_mode->Disconnect( wxEVT_COMMAND_RADIOBOX_SELECTED, wxCommandEventHandler( DIALOG_PNS_SETTINGS_BASE::onModeChange ), NULL, this );
 	m_freeAngleMode->Disconnect( wxEVT_COMMAND_CHECKBOX_CLICKED, wxCommandEventHandler( DIALOG_PNS_SETTINGS_BASE::onFreeAngleModeChange ), NULL, this );
 	m_stdButtonsOK->Disconnect( wxEVT_COMMAND_BUTTON_CLICKED, wxCommandEventHandler( DIALOG_PNS_SETTINGS_BASE::OnOkClick ), NULL, this );
 	

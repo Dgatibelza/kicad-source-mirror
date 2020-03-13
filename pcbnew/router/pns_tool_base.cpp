@@ -27,24 +27,24 @@ using namespace std::placeholders;
 #include "class_draw_panel_gal.h"
 #include "class_board.h"
 
-#include <wxPcbStruct.h>
+#include <pcb_edit_frame.h>
 #include <id.h>
 #include <macros.h>
-#include <pcbnew_id.h>
 #include <view/view_controls.h>
 #include <pcb_painter.h>
+#include <pcbnew_settings.h>
 #include <dialogs/dialog_pns_settings.h>
 #include <dialogs/dialog_pns_diff_pair_dimensions.h>
 #include <dialogs/dialog_pns_length_tuning_settings.h>
 #include <dialogs/dialog_track_via_size.h>
 #include <base_units.h>
 #include <bitmaps.h>
-#include <hotkeys.h>
 
-#include <tool/context_menu.h>
+#include <tool/action_menu.h>
 #include <tools/pcb_actions.h>
 #include <tools/grid_helper.h>
 
+#include "pns_arc.h"
 #include "pns_kicad_iface.h"
 #include "pns_tool_base.h"
 #include "pns_segment.h"
@@ -61,24 +61,23 @@ using namespace KIGFX;
 
 namespace PNS {
 
-TOOL_ACTION TOOL_BASE::ACT_RouterOptions( "pcbnew.InteractiveRouter.RouterOptions",
-                                            AS_CONTEXT, TOOL_ACTION::LegacyHotKey( HK_ROUTING_OPTIONS ),
-                                            _( "Routing Options..." ),
-                                            _( "Shows a dialog containing router options." ), tools_xpm );
-
 
 TOOL_BASE::TOOL_BASE( const std::string& aToolName ) :
-    PCB_TOOL( aToolName )
+    PCB_TOOL_BASE( aToolName )
 {
     m_gridHelper = nullptr;
     m_iface = nullptr;
     m_router = nullptr;
+    m_cancelled = false;
 
     m_startItem = nullptr;
     m_startLayer = 0;
+    m_startHighlight = false;
 
     m_endItem = nullptr;
     m_gridHelper = nullptr;
+
+    m_cancelled = false;
 }
 
 
@@ -90,7 +89,6 @@ TOOL_BASE::~TOOL_BASE()
 }
 
 
-
 void TOOL_BASE::Reset( RESET_REASON aReason )
 {
     delete m_gridHelper;
@@ -100,50 +98,84 @@ void TOOL_BASE::Reset( RESET_REASON aReason )
     m_iface = new PNS_KICAD_IFACE;
     m_iface->SetBoard( board() );
     m_iface->SetView( getView() );
-    m_iface->SetHostFrame( frame() );
+    m_iface->SetHostTool( this );
+    m_iface->SetDisplayOptions( &( frame()->GetDisplayOptions() ) );
 
     m_router = new ROUTER;
     m_router->SetInterface( m_iface );
     m_router->ClearWorld();
     m_router->SyncWorld();
-    m_router->LoadSettings( m_savedSettings );
+
     m_router->UpdateSizes( m_savedSizes );
+
+    PCBNEW_SETTINGS* settings = frame()->GetSettings();
+
+    if( !settings->m_PnsSettings )
+        settings->m_PnsSettings = std::make_unique<ROUTING_SETTINGS>( settings, "tools.pns" );
+
+    m_router->LoadSettings( settings->m_PnsSettings.get() );
 
     m_gridHelper = new GRID_HELPER( frame() );
 }
 
 
-ITEM* TOOL_BASE::pickSingleItem( const VECTOR2I& aWhere, int aNet, int aLayer )
+ITEM* TOOL_BASE::pickSingleItem( const VECTOR2I& aWhere, int aNet, int aLayer, bool aIgnorePads,
+								 const std::vector<ITEM*> aAvoidItems)
 {
     int tl = getView()->GetTopLayer();
 
     if( aLayer > 0 )
         tl = aLayer;
 
-    ITEM* prioritized[4];
+    static const int candidateCount = 5;
+    ITEM* prioritized[candidateCount];
+    int dist[candidateCount];
 
-    for( int i = 0; i < 4; i++ )
+    for( int i = 0; i < candidateCount; i++ )
+    {
         prioritized[i] = 0;
+        dist[i] = std::numeric_limits<int>::max();
+    }
 
     ITEM_SET candidates = m_router->QueryHoverItems( aWhere );
 
     for( ITEM* item : candidates.Items() )
     {
+        if( !item->IsRoutable() )
+            continue;
+
         if( !IsCopperLayer( item->Layers().Start() ) )
+            continue;
+
+        if( !m_iface->IsAnyLayerVisible( item->Layers() ) )
+            continue;
+
+        if( std::find( aAvoidItems.begin(), aAvoidItems.end(), item ) != aAvoidItems.end() )
             continue;
 
         // fixme: this causes flicker with live loop removal...
         //if( item->Parent() && !item->Parent()->ViewIsVisible() )
         //    continue;
 
-        if( aNet < 0 || item->Net() == aNet )
+        if( aNet <= 0 || item->Net() == aNet )
         {
             if( item->OfKind( ITEM::VIA_T | ITEM::SOLID_T ) )
             {
-                if( !prioritized[2] )
+                if( item->OfKind( ITEM::SOLID_T ) && aIgnorePads )
+                    continue;
+
+                int itemDist = ( item->Shape()->Centre() - aWhere ).SquaredEuclideanNorm();
+
+                if( !prioritized[2] || itemDist < dist[2] )
+                {
                     prioritized[2] = item;
-                if( item->Layers().Overlaps( tl ) )
+                    dist[2] = itemDist;
+                }
+                if( item->Layers().Overlaps( tl ) &&  itemDist < dist[0] )
+                {
                     prioritized[0] = item;
+                    dist[0] = itemDist;
+                }
             }
             else
             {
@@ -153,29 +185,33 @@ ITEM* TOOL_BASE::pickSingleItem( const VECTOR2I& aWhere, int aNet, int aLayer )
                     prioritized[1] = item;
             }
         }
+        // Allow unconnected items as last resort in RM_MarkObstacles mode
+        else if ( item->Net() == 0 && m_router->Settings().Mode() == RM_MarkObstacles )
+        {
+            if( item->OfKind( ITEM::SOLID_T ) && aIgnorePads )
+                continue;
+
+            if( item->Layers().Overlaps( tl ) )
+                prioritized[4] = item;
+        }
     }
 
     ITEM* rv = NULL;
-    PCB_EDIT_FRAME* frame = getEditFrame<PCB_EDIT_FRAME>();
-    DISPLAY_OPTIONS* displ_opts = (DISPLAY_OPTIONS*)frame->GetDisplayOptions();
 
-    for( int i = 0; i < 4; i++ )
+    for( int i = 0; i < candidateCount; i++ )
     {
         ITEM* item = prioritized[i];
 
-        if( displ_opts->m_ContrastModeDisplay )
+        if( displayOptions().m_ContrastModeDisplay )
             if( item && !item->Layers().Overlaps( tl ) )
                 item = NULL;
 
-        if( item )
+        if( item && ( aLayer < 0 || item->Layers().Overlaps( aLayer ) ) )
         {
             rv = item;
             break;
         }
     }
-
-    if( rv && aLayer >= 0 && !rv->Layers().Overlaps( aLayer ) )
-        rv = NULL;
 
     if( rv )
     {
@@ -191,48 +227,57 @@ void TOOL_BASE::highlightNet( bool aEnabled, int aNetcode )
     RENDER_SETTINGS* rs = getView()->GetPainter()->GetSettings();
 
     if( aNetcode >= 0 && aEnabled )
+    {
+        // If the user has previously set the current net to be highlighted,
+        // we assume they want to keep it highlighted after routing
+        m_startHighlight = ( rs->IsHighlightEnabled() && rs->GetHighlightNetCode() == aNetcode );
+
         rs->SetHighlight( true, aNetcode );
+    }
     else
-        rs->SetHighlight( false );
+    {
+        if( !m_startHighlight )
+            rs->SetHighlight( false );
+
+        m_startHighlight = false;
+    }
 
     getView()->UpdateAllLayersColor();
 }
 
 bool TOOL_BASE::checkSnap( ITEM *aItem )
 {
-    bool doSnap = false;
-
-    // Sync PNS engine settings with the general PCB editor options. I know the code below is awful, but...
+    // Sync PNS engine settings with the general PCB editor options.
     auto& pnss = m_router->Settings();
-    const auto& gens = frame()->Settings();
 
-    pnss.SetSnapToTracks( false );
-    pnss.SetSnapToPads( false );
+    pnss.SetSnapToPads(
+            frame()->Settings().m_MagneticPads == MAGNETIC_OPTIONS::CAPTURE_CURSOR_IN_TRACK_TOOL ||
+            frame()->Settings().m_MagneticPads == MAGNETIC_OPTIONS::CAPTURE_ALWAYS );
 
-    if( gens.m_magneticPads == CAPTURE_CURSOR_IN_TRACK_TOOL || gens.m_magneticPads == CAPTURE_ALWAYS )
-        pnss.SetSnapToPads( true );
-
-    if( gens.m_magneticTracks == CAPTURE_CURSOR_IN_TRACK_TOOL || gens.m_magneticTracks == CAPTURE_ALWAYS )
-        pnss.SetSnapToTracks( true );
+    pnss.SetSnapToTracks(
+            frame()->Settings().m_MagneticTracks == MAGNETIC_OPTIONS::CAPTURE_CURSOR_IN_TRACK_TOOL
+            || frame()->Settings().m_MagneticTracks == MAGNETIC_OPTIONS::CAPTURE_ALWAYS );
 
     if( aItem )
     {
-        if( ( aItem->OfKind( ITEM::VIA_T ) || aItem->OfKind( ITEM::SEGMENT_T ) ) && pnss.GetSnapToTracks() )
-            doSnap = true;
-        else if( aItem->OfKind( ITEM::SOLID_T ) && pnss.GetSnapToPads() )
-            doSnap = true;
+        if( aItem->OfKind( ITEM::VIA_T | ITEM::SEGMENT_T | ITEM::ARC_T )  )
+            return pnss.GetSnapToTracks();
+        else if( aItem->OfKind( ITEM::SOLID_T ) )
+            return pnss.GetSnapToPads();
     }
 
-    return doSnap;
+    return false;
 }
 
-void TOOL_BASE::updateStartItem( TOOL_EVENT& aEvent )
+void TOOL_BASE::updateStartItem( const TOOL_EVENT& aEvent, bool aIgnorePads )
 {
     int tl = getView()->GetTopLayer();
-    VECTOR2I cp = controls()->GetCursorPosition();
+    VECTOR2I cp = controls()->GetCursorPosition( !aEvent.Modifier( MD_SHIFT ) );
     VECTOR2I p;
 
     controls()->ForceCursorPosition( false );
+    m_gridHelper->SetUseGrid( !aEvent.Modifier( MD_ALT ) );
+    m_gridHelper->SetSnap( !aEvent.Modifier( MD_SHIFT ) );
 
     bool snapEnabled = true;
 
@@ -246,14 +291,14 @@ void TOOL_BASE::updateStartItem( TOOL_EVENT& aEvent )
         p = cp;
     }
 
-    m_startItem = pickSingleItem( p );
+    m_startItem = pickSingleItem( p, -1, -1, aIgnorePads );
 
     if( !snapEnabled && m_startItem && !m_startItem->Layers().Overlaps( tl ) )
         m_startItem = nullptr;
 
     m_startSnapPoint = snapToItem( snapEnabled, m_startItem, p );
 
-    if( checkSnap ( m_startItem ))
+    if( checkSnap( m_startItem ) )
     {
         controls()->ForceCursorPosition( true, m_startSnapPoint );
     }
@@ -262,15 +307,16 @@ void TOOL_BASE::updateStartItem( TOOL_EVENT& aEvent )
 
 void TOOL_BASE::updateEndItem( const TOOL_EVENT& aEvent )
 {
-    controls()->ForceCursorPosition( false );
-
-    VECTOR2I mousePos = controls()->GetMousePosition();
-    VECTOR2I cursorPos = controls()->GetCursorPosition();
-
     int layer;
     bool snapEnabled = !aEvent.Modifier( MD_SHIFT );
+    m_gridHelper->SetUseGrid( !aEvent.Modifier( MD_ALT ) );
+    m_gridHelper->SetSnap( snapEnabled );
 
-    if( m_router->GetCurrentNets().empty() || m_router->GetCurrentNets().front() < 0 )
+    controls()->ForceCursorPosition( false );
+    VECTOR2I mousePos = controls()->GetMousePosition();
+
+    if( m_router->Settings().Mode() != RM_MarkObstacles &&
+        ( m_router->GetCurrentNets().empty() || m_router->GetCurrentNets().front() < 0 ) )
     {
         m_endSnapPoint = snapToItem( snapEnabled, nullptr, mousePos );
         controls()->ForceCursorPosition( true, m_endSnapPoint );
@@ -290,7 +336,7 @@ void TOOL_BASE::updateEndItem( const TOOL_EVENT& aEvent )
 
     for( int net : nets )
     {
-        endItem = pickSingleItem( mousePos, net, layer );
+        endItem = pickSingleItem( mousePos, net, layer, false, { m_startItem } );
 
         if( endItem )
             break;
@@ -298,14 +344,14 @@ void TOOL_BASE::updateEndItem( const TOOL_EVENT& aEvent )
 
     if( checkSnap( endItem ) )
     {
-        VECTOR2I p = snapToItem( snapEnabled, endItem, mousePos );
-        controls()->ForceCursorPosition( true, p );
         m_endItem = endItem;
-        m_endSnapPoint = p;
+        m_endSnapPoint = snapToItem( snapEnabled, endItem, mousePos );
     } else {
         m_endItem = nullptr;
-        m_endSnapPoint = cursorPos;
+        m_endSnapPoint = m_gridHelper->Align( mousePos );
     }
+
+    controls()->ForceCursorPosition( true, m_endSnapPoint );
 
     if( m_endItem )
     {
@@ -330,7 +376,7 @@ void TOOL_BASE::deleteTraces( ITEM* aStartItem, bool aWholeTrack )
         TOPOLOGY topo( node );
         ITEM_SET path = topo.AssembleTrivialPath( aStartItem );
 
-        for( auto ent : path.Items() )
+        for( const auto& ent : path.Items() )
             node->Remove( ent.item );
     }
 
@@ -348,7 +394,7 @@ const VECTOR2I TOOL_BASE::snapToItem( bool aEnabled, ITEM* aItem, VECTOR2I aP)
 {
     VECTOR2I anchor;
 
-    if( !aItem || !aEnabled )
+    if( !aItem || !aEnabled || !m_iface->IsItemVisible( aItem ) )
     {
         return m_gridHelper->Align( aP );
     }
@@ -364,18 +410,23 @@ const VECTOR2I TOOL_BASE::snapToItem( bool aEnabled, ITEM* aItem, VECTOR2I aP)
         break;
 
     case ITEM::SEGMENT_T:
+    case ITEM::ARC_T:
     {
-        SEGMENT* seg = static_cast<SEGMENT*>( aItem );
-        const SEG& s = seg->Seg();
-        int w = seg->Width();
+        LINKED_ITEM* li = static_cast<LINKED_ITEM*>( aItem );
+        int w = li->Width();
+        auto A = li->Anchor( 0 );
+        auto B = li->Anchor( 1 );
 
-
-        if( ( aP - s.A ).EuclideanNorm() < w / 2 )
-            anchor = s.A;
-        else if( ( aP - s.B ).EuclideanNorm() < w / 2 )
-            anchor = s.B;
-        else
-            anchor = m_gridHelper->AlignToSegment( aP, s );
+        if( ( aP - A ).EuclideanNorm() < w / 2 )
+            anchor = A;
+        else if( ( aP - B ).EuclideanNorm() < w / 2 )
+            anchor = B;
+        else // TODO(snh): Clean this up
+            if( aItem->Kind() == ITEM::SEGMENT_T )
+                anchor = m_gridHelper->AlignToSegment( aP, static_cast<SEGMENT*>( li )->Seg() );
+            else if( aItem->Kind() == ITEM::ARC_T )
+                anchor = m_gridHelper->AlignToArc( aP,
+                        *static_cast<const SHAPE_ARC*>( static_cast<ARC*>( li )->Shape() ) );
 
         break;
     }

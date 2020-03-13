@@ -74,7 +74,7 @@
  *  Upon which you will get the result 11.
  */
 
-#include <class_am_param.h>
+#include <am_param.h>
 
 /**
  * Evaluate an basic arithmetic expression (infix notation) with precedence
@@ -141,7 +141,7 @@ double Evaluate( AM_PARAM_EVAL_STACK& aExp )
             }
             else
             {
-                optype.push_back( OP_CODE( prm ) );
+                optype.emplace_back( prm );
                 optype.back().m_Priority += extra_priority;
             }
         }

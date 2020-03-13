@@ -23,6 +23,8 @@
  * 51 Franklin Street, Fifth Floor, Boston, MA  02110-1301, USA
  */
 
+#include <algorithm>
+
 #include <commit.h>
 #include <base_struct.h>
 
@@ -62,7 +64,19 @@ COMMIT& COMMIT::Stage( EDA_ITEM* aItem, CHANGE_TYPE aChangeType )
         case CHT_MODIFY:
         {
             EDA_ITEM* parent = parentObject( aItem );
-            return createModified( parent, parent->Clone(), flag );
+            EDA_ITEM* clone = nullptr;
+
+            assert( parent );
+
+            if( parent )
+                clone = parent->Clone();
+
+            assert( clone );
+
+            if( clone )
+                return createModified( parent, clone, flag );
+
+            break;
         }
 
         default:
@@ -139,7 +153,10 @@ COMMIT& COMMIT::createModified( EDA_ITEM* aItem, EDA_ITEM* aCopy, int aExtraFlag
     auto entryIt = m_changedItems.find( parent );
 
     if( entryIt != m_changedItems.end() )
+    {
+        delete aCopy;
         return *this; // item has been already modified once
+    }
 
     makeEntry( parent, CHT_MODIFY | aExtraFlags, aCopy );
 
@@ -150,7 +167,7 @@ COMMIT& COMMIT::createModified( EDA_ITEM* aItem, EDA_ITEM* aCopy, int aExtraFlag
 void COMMIT::makeEntry( EDA_ITEM* aItem, CHANGE_TYPE aType, EDA_ITEM* aCopy )
 {
     // Expect an item copy if it is going to be modified
-    assert( !!aCopy == ( ( aType & CHT_TYPE ) == CHT_MODIFY ) );
+    wxASSERT( !!aCopy == ( ( aType & CHT_TYPE ) == CHT_MODIFY ) );
 
     if( m_changedItems.find( aItem ) != m_changedItems.end() )
     {

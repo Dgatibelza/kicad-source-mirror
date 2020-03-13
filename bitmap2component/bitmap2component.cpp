@@ -1,8 +1,8 @@
 /*
  * This program source code file is part of KICAD, a free EDA CAD application.
  *
- * Copyright (C) 1992-2013 jean-pierre.charras
- * Copyright (C) 1992-2013 Kicad Developers, see change_log.txt for contributors.
+ * Copyright (C) 1992-2019 jean-pierre.charras
+ * Copyright (C) 1992-2019 Kicad Developers, see AUTHORS.txt for contributors.
  *
  * This program is free software; you can redistribute it and/or
  * modify it under the terms of the GNU General Public License
@@ -23,21 +23,24 @@
  */
 
 #include <algorithm>    // std::max
+#include <cerrno>
 #include <cmath>
-#include <errno.h>
-#include <stdio.h>
-#include <stdlib.h>
-#include <string.h>
+#include <cstdio>
+#include <cstdlib>
+#include <cstring>
+#include <string>
 #include <vector>
 
 #include <common.h>
-#include <geometry/shape_poly_set.h>
 #include <layers_id_colors_and_visibility.h>
 
 #include <potracelib.h>
 
 #include "bitmap2component.h"
 
+// Unit conversion. Coord unit from potrace is mm
+#define MM2MICRON 1e3       // For pl_editor
+#define MM2NANOMETER 1e6    // For pcbew
 
 /* free a potrace bitmap */
 static void bm_free( potrace_bitmap_t* bm )
@@ -50,61 +53,6 @@ static void bm_free( potrace_bitmap_t* bm )
 }
 
 
-/* Helper class to handle useful info to convert a bitmap image to
- *  a polygonal object description
- */
-class BITMAPCONV_INFO
-{
-public:
-    enum OUTPUT_FMT_ID m_Format;    // File format
-    int m_PixmapWidth;
-    int m_PixmapHeight;             // the bitmap size in pixels
-    double             m_ScaleX;
-    double             m_ScaleY;    // the conversion scale
-    potrace_path_t*    m_Paths;     // the list of paths, from potrace (list of lines and bezier curves)
-    FILE* m_Outfile;                // File to create
-    const char * m_CmpName;         // The string used as cmp/footprint name
-
-public:
-    BITMAPCONV_INFO();
-
-    /**
-     * Function CreateOutputFile
-     * Creates the output file specified by m_Outfile,
-     * depending on file format given by m_Format
-     */
-    void CreateOutputFile( BMP2CMP_MOD_LAYER aModLayer = (BMP2CMP_MOD_LAYER) 0 );
-
-
-private:
-    /**
-     * Function OuputFileHeader
-     * write to file the header depending on file format
-     */
-    void OuputFileHeader(  const char * aBrdLayerName );
-
-    /**
-     * Function OuputFileEnd
-     * write to file the last strings depending on file format
-     */
-    void OuputFileEnd();
-
-
-    /**
-     * @return the board layer name depending on the board layer selected
-     * @param aChoice = the choice (MOD_LYR_FSILKS to MOD_LYR_FINAL)
-     */
-    const char * getBrdLayerName( BMP2CMP_MOD_LAYER aChoice );
-
-    /**
-     * Function OuputOnePolygon
-     * write one polygon to output file.
-     * Polygon coordinates are expected scaled by the polugon extraction function
-     */
-    void OuputOnePolygon( SHAPE_LINE_CHAIN & aPolygon, const char* aBrdLayerName );
-
-};
-
 static void BezierToPolyline( std::vector <potrace_dpoint_t>& aCornersBuffer,
                               potrace_dpoint_t                p1,
                               potrace_dpoint_t                p2,
@@ -112,7 +60,8 @@ static void BezierToPolyline( std::vector <potrace_dpoint_t>& aCornersBuffer,
                               potrace_dpoint_t                p4 );
 
 
-BITMAPCONV_INFO::BITMAPCONV_INFO()
+BITMAPCONV_INFO::BITMAPCONV_INFO( std::string& aData ):
+    m_Data( aData )
 {
     m_Format = POSTSCRIPT_FMT;
     m_PixmapWidth  = 0;
@@ -120,12 +69,11 @@ BITMAPCONV_INFO::BITMAPCONV_INFO()
     m_ScaleX  = 1.0;
     m_ScaleY  = 1.0;
     m_Paths   = NULL;
-    m_Outfile = NULL;
     m_CmpName = "LOGO";
 }
 
 
-int bitmap2component( potrace_bitmap_t* aPotrace_bitmap, FILE* aOutfile,
+int BITMAPCONV_INFO::ConvertBitmap( potrace_bitmap_t* aPotrace_bitmap,
                       OUTPUT_FMT_ID aFormat, int aDpi_X, int aDpi_Y,
                       BMP2CMP_MOD_LAYER aModLayer )
 {
@@ -134,15 +82,23 @@ int bitmap2component( potrace_bitmap_t* aPotrace_bitmap, FILE* aOutfile,
 
     // set tracing parameters, starting from defaults
     param = potrace_param_default();
+
     if( !param )
     {
-        fprintf( stderr, "Error allocating parameters: %s\n", strerror( errno ) );
+        char msg[256];
+        sprintf( msg, "Error allocating parameters: %s\n", strerror( errno ) );
+        m_errors += msg;
         return 1;
     }
-    param->turdsize = 0;
+
+    // For parameters: see http://potrace.sourceforge.net/potracelib.pdf
+    param->turdsize = 0;        // area (in pixels) of largest path to be ignored.
+                                // Potrace default is 2
+    param->opttolerance = 0.2;  // curve optimization tolerance. Potrace default is 0.2
 
     /* convert the bitmap to curves */
     st = potrace_trace( param, aPotrace_bitmap );
+
     if( !st || st->status != POTRACE_STATUS_OK )
     {
         if( st )
@@ -151,45 +107,45 @@ int bitmap2component( potrace_bitmap_t* aPotrace_bitmap, FILE* aOutfile,
         }
         potrace_param_free( param );
 
-        fprintf( stderr, "Error tracing bitmap: %s\n", strerror( errno ) );
+        char msg[256];
+        sprintf( msg, "Error tracing bitmap: %s\n", strerror( errno ) );
+        m_errors += msg;
         return 1;
     }
 
-    BITMAPCONV_INFO info;
-    info.m_PixmapWidth  = aPotrace_bitmap->w;
-    info.m_PixmapHeight = aPotrace_bitmap->h;     // the bitmap size in pixels
-    info.m_Paths   = st->plist;
-    info.m_Outfile = aOutfile;
+    m_PixmapWidth  = aPotrace_bitmap->w;
+    m_PixmapHeight = aPotrace_bitmap->h;     // the bitmap size in pixels
+    m_Paths   = st->plist;
 
     switch( aFormat )
     {
     case KICAD_LOGO:
-        info.m_Format = KICAD_LOGO;
-        info.m_ScaleX = 1e3 * 25.4 / aDpi_X;       // the conversion scale from PPI to micro
-        info.m_ScaleY = 1e3 * 25.4 / aDpi_Y;       // Y axis is top to bottom
-        info.CreateOutputFile();
+        m_Format = KICAD_LOGO;
+        m_ScaleX = MM2MICRON * 25.4 / aDpi_X;  // the conversion scale from PPI to micron
+        m_ScaleY = MM2MICRON * 25.4 / aDpi_Y;  // Y axis is top to bottom
+        createOutputData();
         break;
 
     case POSTSCRIPT_FMT:
-        info.m_Format = POSTSCRIPT_FMT;
-        info.m_ScaleX = 1.0;                // the conversion scale
-        info.m_ScaleY = info.m_ScaleX;
+        m_Format = POSTSCRIPT_FMT;
+        m_ScaleX = 1.0;                // the conversion scale
+        m_ScaleY = m_ScaleX;
         // output vector data, e.g. as a rudimentary EPS file (mainly for tests)
-        info.CreateOutputFile();
+        createOutputData();
         break;
 
     case EESCHEMA_FMT:
-        info.m_Format = EESCHEMA_FMT;
-        info.m_ScaleX = 1000.0 / aDpi_X;       // the conversion scale from PPI to UI
-        info.m_ScaleY = -1000.0 / aDpi_Y;      // Y axis is bottom to Top for components in libs
-        info.CreateOutputFile();
+        m_Format = EESCHEMA_FMT;
+        m_ScaleX = 1000.0 / aDpi_X;       // the conversion scale from PPI to UI (mil)
+        m_ScaleY = -1000.0 / aDpi_Y;      // Y axis is bottom to Top for components in libs
+        createOutputData();
         break;
 
     case PCBNEW_KICAD_MOD:
-        info.m_Format = PCBNEW_KICAD_MOD;
-        info.m_ScaleX = 1e6 * 25.4 / aDpi_X;       // the conversion scale from PPI to UI
-        info.m_ScaleY = 1e6 * 25.4 / aDpi_Y;       // Y axis is top to bottom in modedit
-        info.CreateOutputFile( aModLayer );
+        m_Format = PCBNEW_KICAD_MOD;
+        m_ScaleX = MM2NANOMETER * 25.4 / aDpi_X;   // the conversion scale from PPI to UI
+        m_ScaleY = MM2NANOMETER * 25.4 / aDpi_Y;   // Y axis is top to bottom in modedit
+        createOutputData( aModLayer );
         break;
 
     default:
@@ -204,7 +160,8 @@ int bitmap2component( potrace_bitmap_t* aPotrace_bitmap, FILE* aOutfile,
     return 0;
 }
 
-const char* BITMAPCONV_INFO::getBrdLayerName( BMP2CMP_MOD_LAYER aChoice )
+
+const char* BITMAPCONV_INFO::getBoardLayerName( BMP2CMP_MOD_LAYER aChoice )
 {
     const char * layerName = "F.SilkS";
 
@@ -230,87 +187,96 @@ const char* BITMAPCONV_INFO::getBrdLayerName( BMP2CMP_MOD_LAYER aChoice )
     return layerName;
 }
 
-void BITMAPCONV_INFO::OuputFileHeader(  const char * aBrdLayerName )
+
+void BITMAPCONV_INFO::outputDataHeader(  const char * aBrdLayerName )
 {
     int Ypos = (int) ( m_PixmapHeight / 2 * m_ScaleY );
     int fieldSize;             // fields text size = 60 mils
+    char strbuf[1024];
 
     switch( m_Format )
     {
     case POSTSCRIPT_FMT:
         /* output vector data, e.g. as a rudimentary EPS file */
-        fprintf( m_Outfile, "%%!PS-Adobe-3.0 EPSF-3.0\n" );
-        fprintf( m_Outfile, "%%%%BoundingBox: 0 0 %d %d\n",
-                 m_PixmapWidth, m_PixmapHeight );
-        fprintf( m_Outfile, "gsave\n" );
+        m_Data += "%%!PS-Adobe-3.0 EPSF-3.0\n";
+        sprintf( strbuf, "%%%%BoundingBox: 0 0 %d %d\n", m_PixmapWidth, m_PixmapHeight );
+        m_Data += strbuf;
+        m_Data += "gsave\n";
         break;
 
     case PCBNEW_KICAD_MOD:
         // fields text size = 1.5 mm
         // fields text thickness = 1.5 / 5 = 0.3mm
-        fprintf( m_Outfile, "(module %s (layer F.Cu)\n  (at 0 0)\n",
-                 m_CmpName );
-        fprintf( m_Outfile, " (fp_text reference \"G***\" (at 0 0) (layer %s) hide\n"
+        sprintf( strbuf, "(module %s (layer F.Cu)\n  (at 0 0)\n", m_CmpName.c_str() );
+        m_Data += strbuf;
+        sprintf( strbuf, " (fp_text reference \"G***\" (at 0 0) (layer %s)\n"
             "  (effects (font (thickness 0.3)))\n  )\n", aBrdLayerName );
-        fprintf( m_Outfile, "  (fp_text value \"%s\" (at 0.75 0) (layer %s) hide\n"
-            "  (effects (font (thickness 0.3)))\n  )\n", m_CmpName, aBrdLayerName );
+        m_Data += strbuf;
+        sprintf( strbuf, "  (fp_text value \"%s\" (at 0.75 0) (layer %s) hide\n"
+            "  (effects (font (thickness 0.3)))\n  )\n", m_CmpName.c_str(), aBrdLayerName );
+        m_Data += strbuf;
         break;
 
     case KICAD_LOGO:
-        fprintf( m_Outfile, "(polygon (pos 0 0 rbcorner) (rotate 0) (linewidth 0.01)\n" );
+        m_Data += "(polygon (pos 0 0 rbcorner) (rotate 0) (linewidth 0.01)\n";
         break;
 
     case EESCHEMA_FMT:
-        fprintf( m_Outfile, "EESchema-LIBRARY Version 2.3\n" );
-        fprintf( m_Outfile, "#\n# %s\n", m_CmpName );
-        fprintf( m_Outfile, "# pixmap size w = %d, h = %d\n#\n",
+        sprintf( strbuf, "EESchema-LIBRARY Version 2.3\n" );
+        m_Data += strbuf;
+        sprintf( strbuf, "#\n# %s\n", m_CmpName.c_str() );
+        m_Data += strbuf;
+        sprintf( strbuf, "# pixmap size w = %d, h = %d\n#\n",
                  m_PixmapWidth, m_PixmapHeight );
+        m_Data += strbuf;
 
         // print reference and value
-        fieldSize = 60;             // fields text size = 60 mils
+        fieldSize = 50;             // fields text size = 50 mils
         Ypos += fieldSize / 2;
-        fprintf( m_Outfile, "DEF %s G 0 40 Y Y 1 F N\n", m_CmpName );
-        fprintf( m_Outfile, "F0 \"#G\" 0 %d %d H I C CNN\n", Ypos, fieldSize );
-        fprintf( m_Outfile, "F1 \"%s\" 0 %d %d H I C CNN\n", m_CmpName, -Ypos, fieldSize );
-        fprintf( m_Outfile, "DRAW\n" );
+        sprintf( strbuf, "DEF %s G 0 40 Y Y 1 F N\n", m_CmpName.c_str() );
+        m_Data += strbuf;
+        sprintf( strbuf, "F0 \"#G\" 0 %d %d H I C CNN\n", Ypos, fieldSize );
+        m_Data += strbuf;
+        sprintf( strbuf, "F1 \"%s\" 0 %d %d H I C CNN\n", m_CmpName.c_str(), -Ypos, fieldSize );
+        m_Data += strbuf;
+        m_Data += "DRAW\n";
         break;
     }
 }
 
 
-void BITMAPCONV_INFO::OuputFileEnd()
+void BITMAPCONV_INFO::outputDataEnd()
 {
     switch( m_Format )
     {
     case POSTSCRIPT_FMT:
-        fprintf( m_Outfile, "grestore\n" );
-        fprintf( m_Outfile, "%%EOF\n" );
+        m_Data += "grestore\n";
+        m_Data += "%%EOF\n";
         break;
 
     case PCBNEW_KICAD_MOD:
-        fprintf( m_Outfile, ")\n" );
+        m_Data += ")\n";
         break;
 
     case KICAD_LOGO:
-        fprintf( m_Outfile, ")\n" );
+        m_Data += ")\n";
         break;
 
     case EESCHEMA_FMT:
-        fprintf( m_Outfile, "ENDDRAW\n" );
-        fprintf( m_Outfile, "ENDDEF\n" );
+        m_Data += "ENDDRAW\n";
+        m_Data += "ENDDEF\n";
         break;
     }
 }
 
-/**
- * Function OuputOnePolygon
- * write one polygon to output file.
- * Polygon coordinates are expected scaled by the polygon extraction function
- */
-void BITMAPCONV_INFO::OuputOnePolygon( SHAPE_LINE_CHAIN & aPolygon, const char* aBrdLayerName )
+
+void BITMAPCONV_INFO::outputOnePolygon( SHAPE_LINE_CHAIN & aPolygon, const char* aBrdLayerName )
 {
+    // write one polygon to output file.
+    // coordinates are expected in target unit.
     int ii, jj;
     VECTOR2I currpoint;
+    char strbuf[1024];
 
     int   offsetX = (int)( m_PixmapWidth / 2 * m_ScaleX );
     int   offsetY = (int)( m_PixmapHeight / 2 * m_ScaleY );
@@ -321,95 +287,106 @@ void BITMAPCONV_INFO::OuputOnePolygon( SHAPE_LINE_CHAIN & aPolygon, const char* 
     {
     case POSTSCRIPT_FMT:
         offsetY = (int)( m_PixmapHeight * m_ScaleY );
-        fprintf( m_Outfile, "newpath\n%d %d moveto\n",
+        sprintf( strbuf, "newpath\n%d %d moveto\n",
                  startpoint.x, offsetY - startpoint.y );
+        m_Data += strbuf;
         jj = 0;
         for( ii = 1; ii < aPolygon.PointCount(); ii++ )
         {
             currpoint = aPolygon.CPoint( ii );
-            fprintf( m_Outfile, " %d %d lineto",
+            sprintf( strbuf, " %d %d lineto",
                      currpoint.x, offsetY - currpoint.y );
+            m_Data += strbuf;
 
             if( jj++ > 6 )
             {
                 jj = 0;
-                fprintf( m_Outfile, ("\n") );
+                m_Data += "\n";
             }
         }
 
-        fprintf( m_Outfile, "\nclosepath fill\n" );
+        m_Data += "\nclosepath fill\n";
         break;
 
     case PCBNEW_KICAD_MOD:
     {
-        double width = 0.01;     // outline thickness in mm
-        fprintf( m_Outfile, "  (fp_poly (pts" );
+        double width = 0.0;         // outline thickness in mm: no thickness
+        m_Data += "  (fp_poly (pts";
 
         jj = 0;
         for( ii = 0; ii < aPolygon.PointCount(); ii++ )
         {
             currpoint = aPolygon.CPoint( ii );
-            fprintf( m_Outfile, " (xy %f %f)",
-                    ( currpoint.x - offsetX ) / 1e6,
-                    ( currpoint.y - offsetY ) / 1e6 );
+            sprintf( strbuf, " (xy %f %f)",
+                    ( currpoint.x - offsetX ) / MM2NANOMETER,
+                    ( currpoint.y - offsetY ) / MM2NANOMETER );
+            m_Data += strbuf;
 
             if( jj++ > 6 )
             {
                 jj = 0;
-                fprintf( m_Outfile, ("\n    ") );
+                m_Data += "\n    ";
             }
         }
-        // Close polygon
-        fprintf( m_Outfile, " (xy %f %f) )",
-                ( startpoint.x - offsetX ) / 1e6, ( startpoint.y - offsetY ) / 1e6 );
-
-        fprintf( m_Outfile, "(layer %s) (width  %f)\n  )\n", aBrdLayerName, width );
-
+        // No need to close polygon
+        m_Data += " )";
+        sprintf( strbuf, "(layer %s) (width  %f)\n  )\n", aBrdLayerName, width );
+        m_Data += strbuf;
     }
     break;
 
     case KICAD_LOGO:
-        fprintf( m_Outfile, "  (pts" );
+        m_Data += "  (pts";
         // Internal units = micron, file unit = mm
         jj = 0;
         for( ii = 0; ii < aPolygon.PointCount(); ii++ )
         {
             currpoint = aPolygon.CPoint( ii );
-            fprintf( m_Outfile, " (xy %.3f %.3f)",
-                    ( currpoint.x - offsetX ) / 1e3,
-                    ( currpoint.y - offsetY ) / 1e3 );
+            sprintf( strbuf, " (xy %.3f %.3f)",
+                    ( currpoint.x - offsetX ) / MM2MICRON,
+                    ( currpoint.y - offsetY ) / MM2MICRON );
+            m_Data += strbuf;
 
             if( jj++ > 4 )
             {
                 jj = 0;
-                fprintf( m_Outfile, ("\n    ") );
+                m_Data += "\n    ";
             }
         }
         // Close polygon
-        fprintf( m_Outfile, " (xy %.3f %.3f) )\n",
-                ( startpoint.x - offsetX ) / 1e3, ( startpoint.y - offsetY ) / 1e3 );
+        sprintf( strbuf, " (xy %.3f %.3f) )\n",
+                 ( startpoint.x - offsetX ) / MM2MICRON,
+                 ( startpoint.y - offsetY ) / MM2MICRON );
+        m_Data += strbuf;
         break;
 
     case EESCHEMA_FMT:
-        fprintf( m_Outfile, "P %d 0 0 1", (int) aPolygon.PointCount() + 1 );
+        // The polygon outline thickness is fixed here to 1 mil, the minimal
+        // value in Eeschema (0 means use default thickness for graphics)
+        #define EE_LINE_THICKNESS 1
+        sprintf( strbuf, "P %d 0 0 %d",
+                 (int) aPolygon.PointCount() + 1, EE_LINE_THICKNESS );
+        m_Data += strbuf;
         for( ii = 0; ii < aPolygon.PointCount(); ii++ )
         {
             currpoint = aPolygon.CPoint( ii );
-            fprintf( m_Outfile, " %d %d",
+            sprintf( strbuf, " %d %d",
                      currpoint.x - offsetX, currpoint.y - offsetY );
+            m_Data += strbuf;
         }
 
         // Close polygon
-        fprintf( m_Outfile, " %d %d",
+        sprintf( strbuf, " %d %d",
                  startpoint.x - offsetX, startpoint.y - offsetY );
+        m_Data += strbuf;
 
-        fprintf( m_Outfile, " F\n" );
+        m_Data += " F\n";
         break;
     }
 }
 
 
-void BITMAPCONV_INFO::CreateOutputFile( BMP2CMP_MOD_LAYER aModLayer )
+void BITMAPCONV_INFO::createOutputData( BMP2CMP_MOD_LAYER aModLayer )
 {
     std::vector <potrace_dpoint_t> cornersBuffer;
 
@@ -426,7 +403,7 @@ void BITMAPCONV_INFO::CreateOutputFile( BMP2CMP_MOD_LAYER aModLayer )
     // The layer name has meaning only for .kicad_mod files.
     // For these files the header creates 2 invisible texts: value and ref
     // (needed but not usefull) on silk screen layer
-    OuputFileHeader( getBrdLayerName( MOD_LYR_FSILKS ) );
+    outputDataHeader( getBoardLayerName( MOD_LYR_FSILKS ) );
 
     bool main_outline = true;
 
@@ -434,6 +411,12 @@ void BITMAPCONV_INFO::CreateOutputFile( BMP2CMP_MOD_LAYER aModLayer )
      * Bezier curves are approximated by a polyline
      */
     potrace_path_t* paths = m_Paths;    // the list of paths
+
+    if(!m_Paths)
+    {
+        m_errors += "No path in black and white image: no outline created\n";
+    }
+
     while( paths != NULL )
     {
         int cnt  = paths->curve.n;
@@ -487,17 +470,21 @@ void BITMAPCONV_INFO::CreateOutputFile( BMP2CMP_MOD_LAYER aModLayer )
          */
         if( paths->next == NULL || paths->next->sign == '+' )
         {
-            // Substract holes to main polygon:
-            polyset_areas.Simplify( SHAPE_POLY_SET::PM_FAST );
-            polyset_holes.Simplify( SHAPE_POLY_SET::PM_FAST );
-            polyset_areas.BooleanSubtract( polyset_holes, SHAPE_POLY_SET::PM_FAST );
+            polyset_areas.Simplify( SHAPE_POLY_SET::PM_STRICTLY_SIMPLE );
+            polyset_holes.Simplify( SHAPE_POLY_SET::PM_STRICTLY_SIMPLE );
+            polyset_areas.BooleanSubtract( polyset_holes, SHAPE_POLY_SET::PM_STRICTLY_SIMPLE );
+
+            // Ensure there are no self intersecting polygons
+            polyset_areas.NormalizeAreaOutlines();
+
+            // Convert polygon with holes to a unique polygon
             polyset_areas.Fracture( SHAPE_POLY_SET::PM_STRICTLY_SIMPLE );
 
             // Output current resulting polygon(s)
             for( int ii = 0; ii < polyset_areas.OutlineCount(); ii++ )
             {
                 SHAPE_LINE_CHAIN& poly = polyset_areas.Outline( ii );
-                OuputOnePolygon(poly, getBrdLayerName( aModLayer ) );
+                outputOnePolygon( poly, getBoardLayerName( aModLayer ));
             }
 
             polyset_areas.RemoveAllContours();
@@ -507,7 +494,7 @@ void BITMAPCONV_INFO::CreateOutputFile( BMP2CMP_MOD_LAYER aModLayer )
         paths = paths->next;
     }
 
-    OuputFileEnd();
+    outputDataEnd();
 }
 
 // a helper function to calculate a square value

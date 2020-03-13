@@ -23,18 +23,11 @@
  * 51 Franklin Street, Fifth Floor, Boston, MA  02110-1301, USA
  */
 
-
-/**
- * @file footprint_info.cpp
- */
-
-
 /*
  * Functions to read footprint libraries and fill m_footprints by available footprints names
  * and their documentation (comments and keywords)
  */
 
-#include <class_module.h>
 #include <common.h>
 #include <fctsys.h>
 #include <footprint_info.h>
@@ -47,7 +40,24 @@
 #include <macros.h>
 #include <pgm_base.h>
 #include <thread>
+#include <utility>
 #include <wildcards_and_files_ext.h>
+
+
+FOOTPRINT_INFO* FOOTPRINT_LIST::GetModuleInfo( const wxString& aLibNickname,
+                                               const wxString& aFootprintName )
+{
+    if( aFootprintName.IsEmpty() )
+        return NULL;
+
+    for( auto& fp : m_list )
+    {
+        if( aLibNickname == fp->GetLibNickname() && aFootprintName == fp->GetFootprintName() )
+            return &*fp;
+    }
+
+    return NULL;
+}
 
 
 FOOTPRINT_INFO* FOOTPRINT_LIST::GetModuleInfo( const wxString& aFootprintName )
@@ -55,22 +65,12 @@ FOOTPRINT_INFO* FOOTPRINT_LIST::GetModuleInfo( const wxString& aFootprintName )
     if( aFootprintName.IsEmpty() )
         return NULL;
 
-    for( auto& fp : m_list )
-    {
-        LIB_ID fpid;
+    LIB_ID fpid;
 
-        wxCHECK_MSG( fpid.Parse( aFootprintName ) < 0, NULL,
-                wxString::Format(
-                        wxT( "'%s' is not a valid LIB_ID." ), GetChars( aFootprintName ) ) );
+    wxCHECK_MSG( fpid.Parse( aFootprintName, LIB_ID::ID_PCB ) < 0, NULL,
+                 wxString::Format( wxT( "\"%s\" is not a valid LIB_ID." ), aFootprintName ) );
 
-        wxString libNickname = fpid.GetLibNickname();
-        wxString footprintName = fpid.GetLibItemName();
-
-        if( libNickname == fp->GetNickname() && footprintName == fp->GetFootprintName() )
-            return &*fp;
-    }
-
-    return NULL;
+    return GetModuleInfo( fpid.GetLibNickname(), fpid.GetLibItemName() );
 }
 
 
@@ -108,7 +108,7 @@ void FOOTPRINT_LIST::DisplayErrors( wxTopLevelWindow* aWindow )
 }
 
 
-static std::unique_ptr<FOOTPRINT_LIST> get_instance_from_id( KIWAY& aKiway, int aId )
+static FOOTPRINT_LIST* get_instance_from_id( KIWAY& aKiway, int aId )
 {
     void* ptr = nullptr;
 
@@ -129,18 +129,37 @@ static std::unique_ptr<FOOTPRINT_LIST> get_instance_from_id( KIWAY& aKiway, int 
         return nullptr;
     }
 
-    return std::unique_ptr<FOOTPRINT_LIST>( (FOOTPRINT_LIST*) ( ptr ) );
+    return static_cast<FOOTPRINT_LIST*>( ptr );
 }
 
 
-std::unique_ptr<FOOTPRINT_LIST> FOOTPRINT_LIST::GetInstance( KIWAY& aKiway )
+FOOTPRINT_LIST* FOOTPRINT_LIST::GetInstance( KIWAY& aKiway )
 {
-    return get_instance_from_id( aKiway, KIFACE_NEW_FOOTPRINT_LIST );
+    FOOTPRINT_LIST* footprintInfo = get_instance_from_id( aKiway, KIFACE_FOOTPRINT_LIST );
+
+    if( ! footprintInfo )
+        return nullptr;
+
+    if( !footprintInfo->GetCount() )
+    {
+        wxTextFile footprintInfoCache( aKiway.Prj().GetProjectPath() + "fp-info-cache" );
+        footprintInfo->ReadCacheFromFile( &footprintInfoCache );
+    }
+
+    return footprintInfo;
 }
 
 
 FOOTPRINT_ASYNC_LOADER::FOOTPRINT_ASYNC_LOADER() : m_list( nullptr )
 {
+    m_total_libs = 0;
+}
+
+
+FOOTPRINT_ASYNC_LOADER::~FOOTPRINT_ASYNC_LOADER()
+{
+    // This is NOP if the load has finished
+    Abort();
 }
 
 
@@ -153,8 +172,6 @@ void FOOTPRINT_ASYNC_LOADER::SetList( FOOTPRINT_LIST* aList )
 void FOOTPRINT_ASYNC_LOADER::Start(
         FP_LIB_TABLE* aTable, wxString const* aNickname, unsigned aNThreads )
 {
-    m_started = true;
-
     // Capture the FP_LIB_TABLE into m_last_table. Formatting it as a string instead of storing the
     // raw data avoids having to pull in the FP-specific parts.
     STRING_FORMATTER sof;
@@ -178,38 +195,11 @@ bool FOOTPRINT_ASYNC_LOADER::Join()
 }
 
 
-int FOOTPRINT_ASYNC_LOADER::GetProgress() const
+void FOOTPRINT_ASYNC_LOADER::Abort()
 {
-    if( !m_started )
-        return 0;
-    else if( m_total_libs == 0 || !m_list )
-        return 100;
-    else
+    if( m_list )
     {
-        int loaded = m_list->CountFinished();
-        int prog = ( 100 * loaded ) / m_total_libs;
-
-        if( loaded == m_total_libs )
-            return 100;
-        else if( loaded < m_total_libs && prog >= 100 )
-            return 99;
-        else if( prog <= 0 )
-            return 1;
-        else
-            return prog;
+        m_list->StopWorkers();
+        m_list = nullptr;
     }
-}
-
-
-void FOOTPRINT_ASYNC_LOADER::SetCompletionCallback( std::function<void()> aCallback )
-{
-    m_completion_cb = aCallback;
-}
-
-
-bool FOOTPRINT_ASYNC_LOADER::IsSameTable( FP_LIB_TABLE* aOther )
-{
-    STRING_FORMATTER sof;
-    aOther->Format( &sof, 0 );
-    return m_last_table == sof.GetString();
 }

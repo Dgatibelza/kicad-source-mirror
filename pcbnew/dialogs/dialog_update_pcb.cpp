@@ -5,7 +5,7 @@
 /*
  * This program source code file is part of KiCad, a free EDA CAD application.
  *
- * Copyright (C) 1992-2016 KiCad Developers, see change_log.txt for contributors.
+ * Copyright (C) 1992-2019 KiCad Developers, see AUTHORS.txt for contributors.
  *
  * This program is free software; you can redistribute it and/or
  * modify it under the terms of the GNU General Public License
@@ -26,37 +26,83 @@
  */
 
 #include <common.h>
-#include <wxPcbStruct.h>
-#include <pcb_netlist.h>
+#include <pcb_edit_frame.h>
+#include <pcbnew_settings.h>
 #include <dialog_update_pcb.h>
 #include <wx_html_report_panel.h>
-#include <board_netlist_updater.h>
+#include <netlist_reader/pcb_netlist.h>
+#include <netlist_reader/board_netlist_updater.h>
 #include <tool/tool_manager.h>
 #include <tools/pcb_actions.h>
+#include <tools/selection_tool.h>
 #include <class_draw_panel_gal.h>
-#include <class_drawpanel.h>
 #include <class_board.h>
 #include <ratsnest_data.h>
-
+#include <view/view.h>
 #include <functional>
+#include <kiface_i.h>
+
 using namespace std::placeholders;
 
-DIALOG_UPDATE_PCB::DIALOG_UPDATE_PCB( PCB_EDIT_FRAME* aParent, NETLIST *aNetlist ) :
-    DIALOG_UPDATE_PCB_BASE ( aParent ),
-    m_frame (aParent),
-    m_netlist (aNetlist)
+
+bool DIALOG_UPDATE_PCB::m_warnForNoNetPads = false;
+bool DIALOG_UPDATE_PCB::m_matchByUUID = false;
+
+
+DIALOG_UPDATE_PCB::DIALOG_UPDATE_PCB( PCB_EDIT_FRAME* aParent, NETLIST* aNetlist ) :
+    DIALOG_UPDATE_PCB_BASE( aParent ),
+    m_frame( aParent ),
+    m_netlist( aNetlist ),
+    m_initialized( false )
 {
-    m_messagePanel->SetLabel( _("Changes to be applied:") );
+    auto cfg = m_frame->GetSettings();
+
+    m_cbUpdateFootprints->SetValue( cfg->m_NetlistDialog.update_footprints );
+    m_cbDeleteExtraFootprints->SetValue( cfg->m_NetlistDialog.delete_extra_footprints );
+    m_cbDeleteSinglePadNets->SetValue( cfg->m_NetlistDialog.delete_single_pad_nets );
+    m_cbWarnNoNetPad->SetValue( m_warnForNoNetPads );
+    m_matchByTimestamp->SetSelection( m_matchByUUID ? 0 : 1 );
+
+    m_messagePanel->SetLabel( _("Changes To Be Applied") );
     m_messagePanel->SetLazyUpdate( true );
     m_netlist->SortByReference();
-    m_btnPerformUpdate->SetFocus();
 
-    m_messagePanel->SetVisibleSeverities( REPORTER::RPT_WARNING | REPORTER::RPT_ERROR | REPORTER::RPT_ACTION );
+    m_messagePanel->SetVisibleSeverities( cfg->m_NetlistDialog.report_filter );
+
+    m_messagePanel->GetSizer()->SetSizeHints( this );
+
+    // We use a sdbSizer to get platform-dependent ordering of the action buttons, but
+    // that requires us to correct the button labels here.
+    m_sdbSizer1OK->SetLabel( _( "Update PCB" ) );
+    m_sdbSizer1Cancel->SetLabel( _( "Close" ) );
+    m_sdbSizer1->Layout();
+
+    m_sdbSizer1OK->SetDefault();
+    FinishDialogSettings();
+
+    m_initialized = true;
+    PerformUpdate( true );
 }
 
 
 DIALOG_UPDATE_PCB::~DIALOG_UPDATE_PCB()
 {
+    m_warnForNoNetPads = m_cbWarnNoNetPad->GetValue();
+    m_matchByUUID = m_matchByTimestamp->GetSelection() == 0;
+
+    auto cfg = m_frame->GetSettings();
+
+    cfg->m_NetlistDialog.update_footprints       = m_cbUpdateFootprints->GetValue();
+    cfg->m_NetlistDialog.delete_extra_footprints = m_cbDeleteExtraFootprints->GetValue();
+    cfg->m_NetlistDialog.delete_single_pad_nets  = m_cbDeleteSinglePadNets->GetValue();
+    cfg->m_NetlistDialog.report_filter           = m_messagePanel->GetVisibleSeverities();
+
+    if( m_runDragCommand )
+    {
+        KIGFX::VIEW_CONTROLS* controls = m_frame->GetCanvas()->GetViewControls();
+        controls->SetCursorPosition( controls->GetMousePosition() );
+        m_frame->GetToolManager()->RunAction( PCB_ACTIONS::move, true );
+    }
 }
 
 
@@ -65,101 +111,51 @@ void DIALOG_UPDATE_PCB::PerformUpdate( bool aDryRun )
     m_messagePanel->Clear();
 
     REPORTER& reporter = m_messagePanel->Reporter();
-    TOOL_MANAGER* toolManager = m_frame->GetToolManager();
-    BOARD* board = m_frame->GetBoard();
 
-    // keep trace of the initial baord area, if we want to place new footprints
-    // outside the existinag board
-    EDA_RECT bbox = board->GetBoundingBox();
+    m_runDragCommand = false;
 
-    if( !aDryRun )
-    {
-
-        // Clear selection, just in case a selected item has to be removed
-        toolManager->RunAction( PCB_ACTIONS::selectionClear, true );
-    }
-
-    m_netlist->SetDeleteExtraFootprints( true );
-    m_netlist->SetFindByTimeStamp( m_matchByTimestamp->GetValue() );
-    m_netlist->SetReplaceFootprints( true );
-
-    try
-    {
-        m_frame->LoadFootprints( *m_netlist, &reporter );
-    }
-    catch( IO_ERROR &error )
-    {
-        wxString msg;
-
-        reporter.Report( _( "Failed to load one or more footprints. Please add the missing libraries in PCBNew configuration. "
-                            "The PCB will not update completely." ), REPORTER::RPT_ERROR );
-        reporter.Report( error.What(), REPORTER::RPT_INFO );
-    }
+    m_netlist->SetDeleteExtraFootprints( m_cbDeleteExtraFootprints->GetValue() );
+    m_netlist->SetFindByTimeStamp( m_matchByTimestamp->GetSelection() == 0 );
+    m_netlist->SetReplaceFootprints( m_cbUpdateFootprints->GetValue() );
 
     BOARD_NETLIST_UPDATER updater( m_frame, m_frame->GetBoard() );
     updater.SetReporter ( &reporter );
-    updater.SetIsDryRun( aDryRun);
-    updater.SetLookupByTimestamp( m_matchByTimestamp->GetValue() );
-    updater.SetDeleteUnusedComponents ( true );
-    updater.SetReplaceFootprints( true );
-    updater.SetDeleteSinglePadNets( false );
+    updater.SetIsDryRun( aDryRun );
+    updater.SetLookupByTimestamp( m_matchByTimestamp->GetSelection() == 0 );
+    updater.SetDeleteUnusedComponents ( m_cbDeleteExtraFootprints->GetValue() );
+    updater.SetReplaceFootprints( m_cbUpdateFootprints->GetValue() );
+    updater.SetDeleteSinglePadNets( m_cbDeleteSinglePadNets->GetValue() );
+    m_warnForNoNetPads = m_cbWarnNoNetPad->GetValue();
+    m_matchByUUID = m_matchByTimestamp->GetSelection() == 0;
+    updater.SetWarnPadNoNetInNetlist( m_warnForNoNetPads );
     updater.UpdateNetlist( *m_netlist );
 
-    m_messagePanel->Flush();
+    m_messagePanel->Flush( true );
 
     if( aDryRun )
         return;
 
-    m_frame->SetCurItem( NULL );
-    m_frame->SetMsgPanel( board );
-
-    std::vector<MODULE*> newFootprints = updater.GetAddedComponents();
-
-    // Spread new footprints.
-    wxPoint areaPosition = m_frame->GetCrossHairPosition();
-
-    if( !m_frame->IsGalCanvasActive() )
-    {
-        // In legacy mode place area to the left side of the board.
-        // if the board is empty, the bbox position is (0,0)
-        areaPosition.x = bbox.GetEnd().x + Millimeter2iu( 10 );
-        areaPosition.y = bbox.GetOrigin().y;
-    }
-
-    m_frame->SpreadFootprints( &newFootprints, false, false, areaPosition, false );
-
-    if( m_frame->IsGalCanvasActive() )
-    {
-        // Start move and place the new modules command
-        if( !newFootprints.empty() )
-        {
-            for( MODULE* footprint : newFootprints )
-            {
-                toolManager->RunAction( PCB_ACTIONS::selectItem, true, footprint );
-            }
-
-            toolManager->InvokeTool( "pcbnew.InteractiveEdit" );
-        }
-    }
-    else    // Legacy canvas
-        m_frame->GetCanvas()->Refresh();
-
-    m_btnPerformUpdate->Enable( false );
-    m_btnPerformUpdate->SetLabel( _( "Update complete" ) );
-    m_btnCancel->SetLabel( _( "Close" ) );
-    m_btnCancel->SetFocus();
+    m_frame->OnNetlistChanged( updater, &m_runDragCommand );
 }
 
 
-void DIALOG_UPDATE_PCB::OnMatchChange( wxCommandEvent& event )
+void DIALOG_UPDATE_PCB::OnMatchChanged( wxCommandEvent& event )
 {
-    PerformUpdate( true );
+    if( m_initialized )
+        PerformUpdate( true );
+}
+
+
+void DIALOG_UPDATE_PCB::OnOptionChanged( wxCommandEvent& event )
+{
+    if( m_initialized )
+        PerformUpdate( true );
 }
 
 
 void DIALOG_UPDATE_PCB::OnUpdateClick( wxCommandEvent& event )
 {
-    m_messagePanel->SetLabel( _( "Changes applied to the PCB:" ) );
+    m_messagePanel->SetLabel( _( "Changes Applied To PCB" ) );
     PerformUpdate( false );
-    m_btnCancel->SetFocus();
+    m_sdbSizer1Cancel->SetDefault();
 }

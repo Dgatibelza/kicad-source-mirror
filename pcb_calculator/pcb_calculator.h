@@ -1,11 +1,11 @@
 /*
  * This program source code file is part of KICAD, a free EDA CAD application.
  *
- * Copyright (C) 1992-2015 Kicad Developers, see change_log.txt for contributors.
+ * Copyright (C) 1992-2015 Kicad Developers, see AUTHORS.txt for contributors.
  *
  * This program is free software; you can redistribute it and/or
  * modify it under the terms of the GNU General Public License
- * as published by the Free Software Foundation; either version 2
+ * as published by the Free Software Foundation; either version 3
  * of the License, or (at your option) any later version.
  *
  * This program is distributed in the hope that it will be useful,
@@ -13,12 +13,8 @@
  * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
  * GNU General Public License for more details.
  *
- * You should have received a copy of the GNU General Public License
- * along with this program; if not, you may find one here:
- * http://www.gnu.org/licenses/old-licenses/gpl-2.0.html
- * or you may search the http://www.gnu.org website for the version 2 license,
- * or you may write to the Free Software Foundation, Inc.,
- * 51 Franklin Street, Fifth Floor, Boston, MA  02110-1301, USA
+ * You should have received a copy of the GNU General Public License along
+ * with this program.  If not, see <http://www.gnu.org/licenses/>.
  */
 
 /**
@@ -86,8 +82,8 @@ private:
     void OnPaintAttenuatorPanel( wxPaintEvent& event ) override;
 
     // Config read-write, virtual from EDA_BASE_FRAME
-    void LoadSettings( wxConfigBase* aCfg ) override;
-    void SaveSettings( wxConfigBase* aCfg ) override;
+    void LoadSettings( APP_SETTINGS_BASE* aCfg ) override;
+    void SaveSettings( APP_SETTINGS_BASE* aCfg ) override;
 
     // R/W data files:
     bool ReadDataFile();
@@ -111,13 +107,13 @@ private:
      * Function TW_Init
      * Read config and init dialog widgets values
      */
-    void TW_Init( wxConfigBase* aCfg );
+    void TW_Init();
 
     /**
      * Function TW_WriteConfig
      * Write Track width prameters in config
      */
-    void TW_WriteConfig( wxConfigBase* aCfg );
+    void TW_WriteConfig();
 
     /**
      * Function OnTWParametersChanged
@@ -148,6 +144,13 @@ private:
     void OnTWCalculateFromIntWidth( wxCommandEvent& event ) override;
 
     /**
+     * Function OnTWResetButtonClick
+     * Called when the user clicks the reset button. This sets
+     * the parameters to their default values.
+     */
+    void OnTWResetButtonClick( wxCommandEvent& event ) override;
+
+    /**
      * Function TWCalculateWidth
      * Calculate track width required based on given current and temperature rise.
      */
@@ -176,6 +179,56 @@ private:
      */
     void TWUpdateModeDisplay();
 
+    // Via size calculations
+
+    /**
+     * Function VS_Init
+     * Read config and init dialog widgets values
+     */
+    void VS_Init();
+
+    /**
+     * Function VS_WriteConfig
+     * Write Via Size prameters in config
+     */
+    void VS_WriteConfig();
+
+    /**
+     * Function OnViaCalculate
+     * Called when the user changes any value in the via calcultor.
+     */
+    void OnViaCalculate( wxCommandEvent& event ) override;
+
+    /**
+     * Function OnViaEpsilonR_Button
+     */
+    void OnViaEpsilonR_Button( wxCommandEvent& event ) override;
+
+    /**
+     * Function OnViaRho_Button
+     */
+    void OnViaRho_Button( wxCommandEvent& event ) override;
+
+    /**
+     * Update the Error message in Via calculation panel
+     */
+    void onUpdateViaCalcErrorText( wxUpdateUIEvent& event ) override;
+
+    /**
+    * Function OnViaResetButtonClick
+    * Called when the user clicks the reset button. This sets
+    * the parameters to their default values.
+    */
+    void OnViaResetButtonClick( wxCommandEvent& event ) override;
+
+    /**
+     * Function VSDisplayValues
+     * Displays the results of the calculation.
+     */
+    void VSDisplayValues( double aViaResistance, double aVoltageDrop, double aPowerLoss,
+                    double aEstimatedAmpacity, double aThermalResistance, double aCapacitance,
+                    double aTimeDegradation, double aInductance, double aReactance );
+
     // Electrical spacing panel:
     void OnElectricalSpacingUnitsSelection( wxCommandEvent& event ) override;
     void OnElectricalSpacingRefresh( wxCommandEvent& event ) override;
@@ -189,16 +242,23 @@ private:
     void OnTranslineSelection( wxCommandEvent& event ) override;
 
     /**
+     * Function OnTransLineResetButtonClick
+     * Called when the user clicks the reset button. This sets
+     * the parameters to their default values.
+    */
+    void OnTransLineResetButtonClick( wxCommandEvent& event ) override;
+
+    /**
      * Function OnTranslineAnalyse
      * Run a new analyse for the current transline with current parameters
-     * and displays the electrical parmeters
+     * and displays the electrical parameters
      */
     void OnTranslineAnalyse( wxCommandEvent& event ) override;
 
     /**
      * Function OnTranslineSynthetize
      * Run a new synthezis for the current transline with current parameters
-     * and displays the geometrical parmeters
+     * and displays the geometrical parameters
      */
     void OnTranslineSynthetize( wxCommandEvent& event ) override;
 
@@ -254,6 +314,7 @@ private:
 
     // Regulators Panel
     void OnRegulatorCalcButtonClick( wxCommandEvent& event ) override;
+    void OnRegulatorResetButtonClick( wxCommandEvent& event ) override;
     void OnRegulTypeSelection( wxCommandEvent& event ) override;
     void OnRegulatorSelection( wxCommandEvent& event ) override;
     void OnDataFileSelection( wxCommandEvent& event ) override;

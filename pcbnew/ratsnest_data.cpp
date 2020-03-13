@@ -28,10 +28,6 @@
  * @brief Class that computes missing connections on a PCB.
  */
 
-#ifdef USE_OPENMP
-#include <omp.h>
-#endif /* USE_OPENMP */
-
 #ifdef PROFILE
 #include <profile.h>
 #endif
@@ -43,8 +39,6 @@ using namespace std::placeholders;
 #include <cassert>
 #include <algorithm>
 #include <limits>
-
-#include <connectivity_algo.h>
 
 static uint64_t getDistance( const CN_ANCHOR_PTR& aNode1, const CN_ANCHOR_PTR& aNode2 )
 {
@@ -69,7 +63,6 @@ static const std::vector<CN_EDGE> kruskalMST( std::list<CN_EDGE>& aEdges,
     unsigned int    mstSize = 0;
     bool ratsnestLines = false;
 
-    //printf("mst nodes : %d edges : %d\n", aNodes.size(), aEdges.size () );
     // The output
     std::vector<CN_EDGE> mst;
 
@@ -161,8 +154,6 @@ class RN_NET::TRIANGULATOR_STATE
 {
 private:
     std::vector<CN_ANCHOR_PTR>  m_allNodes;
-    std::vector<VECTOR2I>  m_prevNodes;
-    std::vector<std::pair<int, int> > m_prevEdges;
 
     std::list<hed::EDGE_PTR> hedTriangulation( std::vector<hed::NODE_PTR>& aNodes )
     {
@@ -175,58 +166,27 @@ private:
     }
 
 
-    std::list<hed::EDGE_PTR> computeTriangulation( std::vector<hed::NODE_PTR>& aNodes )
+    // Checks if all nodes in aNodes lie on a single line. Requires the nodes to
+    // have unique coordinates!
+    bool areNodesColinear( const std::vector<hed::NODE_PTR>& aNodes ) const
     {
-        #if 0
-        bool refresh = false;
-        // we assume aNodes are sorted
-        VECTOR2I prevDelta;
+        if ( aNodes.size() <= 2 )
+            return true;
 
-        if ( aNodes.size() == m_prevNodes.size() )
+        const auto p0 = aNodes[0]->Pos();
+        const auto v0 = aNodes[1]->Pos() - p0;
+
+        for( unsigned i = 2; i < aNodes.size(); i++ )
         {
-            for ( int i = 0; i < aNodes.size(); i++ )
+            const auto v1 = aNodes[i]->Pos() - p0;
+
+            if( v0.Cross( v1 ) != 0 )
             {
-                const auto& a = aNodes[i];
-                const auto& b = m_prevNodes[i];
-
-                const auto delta = a->Pos() - b;
-
-                if ( i > 0 && delta != prevDelta )
-                {
-                    refresh = true;
-                    break;
-                }
-
-                prevDelta = delta;
+                return false;
             }
         }
 
-        if( refresh )
-        {
-            m_prevNodes.resize( aNodes.size() );
-
-            for ( int i = 0; i < aNodes.size(); i++ )
-            {
-                m_prevNodes[i] = aNodes[i]->Pos();
-            }
-
-            printf("need triang refresh\n");
-            auto edges = hedTriangulation( aNodes );
-
-            m_prevEdges.resize( edges.size() );
-
-            int i = 0;
-            for ( auto e : edges )
-            {
-                m_prevEdges[i].first = e->GetSourceNode()->Id();
-                m_prevEdges[i].second = e->GetTargetNode()->Id();
-            }
-
-        }
-
-
-        #endif
-        return hedTriangulation( aNodes );
+        return true;
     }
 
 public:
@@ -251,7 +211,7 @@ public:
         std::vector<ANCHOR_LIST> anchorChains;
 
         triNodes.reserve( m_allNodes.size() );
-        anchorChains.reserve( m_allNodes.size() );
+        anchorChains.resize( m_allNodes.size() );
 
         std::sort( m_allNodes.begin(), m_allNodes.end(),
                 [] ( const CN_ANCHOR_PTR& aNode1, const CN_ANCHOR_PTR& aNode2 )
@@ -270,16 +230,12 @@ public:
         CN_ANCHOR_PTR prev, last;
         int id = 0;
 
-        for( auto n : m_allNodes )
-        {
-            anchorChains.push_back( ANCHOR_LIST() );
-        }
-
-        for( auto n : m_allNodes )
+        for( const auto& n : m_allNodes )
         {
             if( !prev || prev->Pos() != n->Pos() )
             {
                 auto tn = std::make_shared<hed::NODE> ( n->Pos().x, n->Pos().y );
+
                 tn->SetId( id );
                 triNodes.push_back( tn );
             }
@@ -290,7 +246,7 @@ public:
 
         int prevId = 0;
 
-        for( auto n : triNodes )
+        for( const auto& n : triNodes )
         {
             for( int i = prevId; i < n->Id(); i++ )
                 anchorChains[prevId].push_back( m_allNodes[ i ] );
@@ -305,20 +261,25 @@ public:
         {
             return mstEdges;
         }
-        else if( triNodes.size() == 2 )
+        else if( areNodesColinear( triNodes ) )
         {
-            auto src = m_allNodes[ triNodes[0]->Id() ];
-            auto dst = m_allNodes[ triNodes[1]->Id() ];
-            mstEdges.emplace_back( src, dst, getDistance( src, dst ) );
+            // special case: all nodes are on the same line - there's no
+            // triangulation for such set. In this case, we sort along any coordinate
+            // and chain the nodes together.
+            for(int i = 0; i < (int)triNodes.size() - 1; i++ )
+            {
+                auto src = m_allNodes[ triNodes[i]->Id() ];
+                auto dst = m_allNodes[ triNodes[i + 1]->Id() ];
+                mstEdges.emplace_back( src, dst, getDistance( src, dst ) );
+            }
         }
         else
         {
             hed::TRIANGULATION triangulator;
             triangulator.CreateDelaunay( triNodes.begin(), triNodes.end() );
-//            std::list<hed::EDGE_PTR> edges;
             triangulator.GetEdges( triangEdges );
 
-            for( auto e : triangEdges )
+            for( const auto& e : triangEdges )
             {
                 auto    src = m_allNodes[ e->GetSourceNode()->Id() ];
                 auto    dst = m_allNodes[ e->GetTargetNode()->Id() ];
@@ -344,7 +305,7 @@ public:
                 const auto& prevNode    = chain[j - 1];
                 const auto& curNode     = chain[j];
                 int weight = prevNode->GetCluster() != curNode->GetCluster() ? 1 : 0;
-                mstEdges.push_back( CN_EDGE ( prevNode, curNode, weight ) );
+                mstEdges.emplace_back( prevNode, curNode, weight );
             }
         }
 
@@ -363,7 +324,6 @@ void RN_NET::compute()
 {
     // Special cases do not need complicated algorithms (actually, it does not work well with
     // the Delaunay triangulator)
-    //printf("compute nodes :  %d\n", m_nodes.size() );
     if( m_nodes.size() <= 2 )
     {
         m_rnEdges.clear();
@@ -383,7 +343,7 @@ void RN_NET::compute()
         else
         {
             // Set tags to m_nodes as connected
-            for( auto node : m_nodes )
+            for( const auto& node : m_nodes )
                 node->SetTag( 0 );
         }
 
@@ -393,7 +353,7 @@ void RN_NET::compute()
 
     m_triangulator->Clear();
 
-    for( auto n : m_nodes )
+    for( const auto& n : m_nodes )
     {
         m_triangulator->AddNode( n );
     }
@@ -452,13 +412,8 @@ void RN_NET::AddCluster( CN_CLUSTER_PTR aCluster )
         if( nAnchors > anchors.size() )
             nAnchors = anchors.size();
 
-        //printf("item %p anchors : %d\n", item, anchors.size() );
-        //printf("add item %p anchors : %d net : %d\n", item, item->Anchors().size(), item->Parent()->GetNetCode() );
-
         for( unsigned int i = 0; i < nAnchors; i++ )
         {
-        //    printf("add anchor %p\n", anchors[i].get() );
-
             anchors[i]->SetCluster( aCluster );
             m_nodes.push_back(anchors[i]);
 
@@ -485,9 +440,9 @@ bool RN_NET::NearestBicoloredPair( const RN_NET& aOtherNet, CN_ANCHOR_PTR& aNode
 
     VECTOR2I::extended_type distMax = VECTOR2I::ECOORD_MAX;
 
-    for( auto nodeA : m_nodes )
+    for( const auto& nodeA : m_nodes )
     {
-        for( auto nodeB : aOtherNet.m_nodes )
+        for( const auto& nodeB : aOtherNet.m_nodes )
         {
             if( !nodeA->GetNoLine() )
             {

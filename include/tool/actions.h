@@ -2,7 +2,7 @@
  * This program source code file is part of KiCad, a free EDA CAD application.
  *
  * Copyright (C) 2013-2016 CERN
- * Copyright (C) 2016 KiCad Developers, see AUTHORS.txt for contributors.
+ * Copyright (C) 2016-2019 KiCad Developers, see AUTHORS.txt for contributors.
  * @author Maciej Suminski <maciej.suminski@cern.ch>
  *
  * This program is free software; you can redistribute it and/or
@@ -27,13 +27,15 @@
 #define __ACTIONS_H
 
 #include <tool/tool_action.h>
-#include <boost/optional.hpp>
+#include <core/optional.h>
 
 class TOOL_EVENT;
 class TOOL_MANAGER;
 
+#define LEGACY_HK_NAME( x ) x
+
 /**
- * Class ACTIONS
+ * ACTIONS
  *
  * Gathers all the actions that are shared by tools. The instance of a subclass of
  * ACTIONS is created inside of ACTION_MANAGER object that registers the actions.
@@ -44,10 +46,45 @@ public:
 
     virtual ~ACTIONS() {};
 
-    // Generic actions
+    // Generic document actions
+    static TOOL_ACTION doNew;           // sadly 'new' is a reserved word
+    static TOOL_ACTION newLibrary;
+    static TOOL_ACTION addLibrary;
+    static TOOL_ACTION open;
+    static TOOL_ACTION save;
+    static TOOL_ACTION saveAs;
+    static TOOL_ACTION saveCopyAs;
+    static TOOL_ACTION saveAll;
+    static TOOL_ACTION revert;
+    static TOOL_ACTION pageSettings;
+    static TOOL_ACTION print;
+    static TOOL_ACTION plot;
+    static TOOL_ACTION quit;
+
+    // Generic edit actions
     static TOOL_ACTION cancelInteractive;
+    static TOOL_ACTION showContextMenu;
+    static TOOL_ACTION undo;
+    static TOOL_ACTION redo;
+    static TOOL_ACTION cut;
+    static TOOL_ACTION copy;
+    static TOOL_ACTION paste;
+    static TOOL_ACTION pasteSpecial;
+    static TOOL_ACTION duplicate;
+    static TOOL_ACTION doDelete;        // sadly 'delete' is a reserved word
+    static TOOL_ACTION deleteTool;
+
+    // Find and Replace
+    static TOOL_ACTION find;
+    static TOOL_ACTION findAndReplace;
+    static TOOL_ACTION findNext;
+    static TOOL_ACTION findNextMarker;
+    static TOOL_ACTION replaceAndFindNext;
+    static TOOL_ACTION replaceAll;
+    static TOOL_ACTION updateFind;
 
     // View controls
+    static TOOL_ACTION zoomRedraw;
     static TOOL_ACTION zoomIn;
     static TOOL_ACTION zoomOut;
     static TOOL_ACTION zoomInCenter;
@@ -56,6 +93,36 @@ public:
     static TOOL_ACTION zoomFitScreen;
     static TOOL_ACTION zoomPreset;
     static TOOL_ACTION zoomTool;
+    static TOOL_ACTION centerContents;
+    static TOOL_ACTION toggleCursor;
+    static TOOL_ACTION toggleCursorStyle;
+    static TOOL_ACTION highContrastMode;
+
+    static TOOL_ACTION refreshPreview;      // Similar to a synthetic mouseMoved event, but also
+                                            // used after a rotate, mirror, etc.
+
+    static TOOL_ACTION pinLibrary;
+    static TOOL_ACTION unpinLibrary;
+
+    /// Cursor control with keyboard
+    static TOOL_ACTION cursorUp;
+    static TOOL_ACTION cursorDown;
+    static TOOL_ACTION cursorLeft;
+    static TOOL_ACTION cursorRight;
+
+    static TOOL_ACTION cursorUpFast;
+    static TOOL_ACTION cursorDownFast;
+    static TOOL_ACTION cursorLeftFast;
+    static TOOL_ACTION cursorRightFast;
+
+    static TOOL_ACTION cursorClick;
+    static TOOL_ACTION cursorDblClick;
+
+    // Panning with keyboard
+    static TOOL_ACTION panUp;
+    static TOOL_ACTION panDown;
+    static TOOL_ACTION panLeft;
+    static TOOL_ACTION panRight;
 
     // Grid control
     static TOOL_ACTION gridFast1;
@@ -65,6 +132,44 @@ public:
     static TOOL_ACTION gridSetOrigin;
     static TOOL_ACTION gridResetOrigin;
     static TOOL_ACTION gridPreset;
+    static TOOL_ACTION toggleGrid;
+    static TOOL_ACTION gridProperties;
+
+    // Units
+    static TOOL_ACTION imperialUnits;
+    static TOOL_ACTION metricUnits;
+    static TOOL_ACTION toggleUnits;
+    static TOOL_ACTION togglePolarCoords;
+    static TOOL_ACTION resetLocalCoords;
+
+    // Common Tools
+    static TOOL_ACTION selectionTool;
+    static TOOL_ACTION measureTool;
+    static TOOL_ACTION pickerTool;
+
+    // Misc
+    static TOOL_ACTION show3DViewer;
+    static TOOL_ACTION showSymbolBrowser;
+    static TOOL_ACTION showSymbolEditor;
+    static TOOL_ACTION showFootprintBrowser;
+    static TOOL_ACTION showFootprintEditor;
+    static TOOL_ACTION updatePcbFromSchematic;
+    static TOOL_ACTION updateSchematicFromPcb;
+    static TOOL_ACTION acceleratedGraphics;
+    static TOOL_ACTION standardGraphics;
+
+    // Internal
+    static TOOL_ACTION updateMenu;
+    static TOOL_ACTION activatePointEditor;
+
+    // Suite
+    static TOOL_ACTION configurePaths;
+    static TOOL_ACTION showSymbolLibTable;
+    static TOOL_ACTION showFootprintLibTable;
+    static TOOL_ACTION gettingStarted;
+    static TOOL_ACTION help;
+    static TOOL_ACTION listHotKeys;
+    static TOOL_ACTION getInvolved;
 
     /**
      * Function TranslateLegacyId()
@@ -73,17 +178,33 @@ public:
      * @return std::string is name of the corresponding TOOL_ACTION. It may be empty, if there is
      * no corresponding TOOL_ACTION.
      */
-    virtual boost::optional<TOOL_EVENT> TranslateLegacyId( int aId ) = 0;
-
-    ///> Registers all valid tools for an application with the tool manager
-    virtual void RegisterAllTools( TOOL_MANAGER* aToolManager ) = 0;
+    virtual OPT<TOOL_EVENT> TranslateLegacyId( int aId ) = 0;
 
     ///> Cursor control event types
-    enum CURSOR_EVENT_TYPE { CURSOR_UP, CURSOR_DOWN, CURSOR_LEFT, CURSOR_RIGHT,
-                             CURSOR_CLICK, CURSOR_DBL_CLICK, CURSOR_FAST_MOVE = 0x8000 };
+    enum CURSOR_EVENT_TYPE { CURSOR_NONE, CURSOR_UP, CURSOR_DOWN, CURSOR_LEFT, CURSOR_RIGHT,
+                             CURSOR_CLICK, CURSOR_DBL_CLICK, CURSOR_RIGHT_CLICK,
+                             CURSOR_FAST_MOVE = 0x8000 };
 
     ///> Remove event modifier flags
-    enum class REMOVE_FLAGS { NORMAL = 0x00, ALT = 0x01 };
+    enum class REMOVE_FLAGS { NORMAL = 0x00, ALT = 0x01, CUT = 0x02 };
 };
 
-#endif
+
+/**
+ * EVENTS
+ *
+ * Gathers all the events that are shared by tools.
+ */
+class EVENTS
+{
+public:
+    const static TOOL_EVENT SelectedEvent;
+    const static TOOL_EVENT UnselectedEvent;
+    const static TOOL_EVENT ClearedEvent;
+
+    const static TOOL_EVENT SelectedItemsModified;
+};
+
+#endif // __ACTIONS_H
+
+

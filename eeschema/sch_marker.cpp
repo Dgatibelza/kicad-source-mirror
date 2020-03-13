@@ -2,7 +2,7 @@
  * This program source code file is part of KiCad, a free EDA CAD application.
  *
  * Copyright (C) 2009 Jean-Pierre Charras, jaen-pierre.charras@gipsa-lab.inpg.com
- * Copyright (C) 1992-2011 KiCad Developers, see AUTHORS.txt for contributors.
+ * Copyright (C) 1992-2019 KiCad Developers, see AUTHORS.txt for contributors.
  *
  * This program is free software; you can redistribute it and/or
  * modify it under the terms of the GNU General Public License
@@ -22,35 +22,29 @@
  * 51 Franklin Street, Fifth Floor, Boston, MA  02110-1301, USA
  */
 
-/**
- * @file sch_marker.cpp
- * @brief Class SCH_MARKER implementation
- */
-
 #include <fctsys.h>
-#include <wxstruct.h>
-#include <class_drawpanel.h>
+#include <sch_draw_panel.h>
 #include <trigo.h>
 #include <msgpanel.h>
 #include <bitmaps.h>
+#include <base_units.h>
 
-#include <general.h>
 #include <sch_marker.h>
-#include <erc.h>
+
+/// Factor to convert the maker unit shape to internal units:
+#define SCALING_FACTOR  Millimeter2iu( 0.1 )
 
 
-/********************/
-/* class SCH_MARKER */
-/********************/
-
-SCH_MARKER::SCH_MARKER() : SCH_ITEM( NULL, SCH_MARKER_T ), MARKER_BASE()
+// JEY TODO: retire this; there's no reason not to use the next one...
+SCH_MARKER::SCH_MARKER() : SCH_ITEM( NULL, SCH_MARKER_T ), MARKER_BASE( SCALING_FACTOR )
 {
 }
 
 
+// JEY TODO: pass in ERCE code so we can get severity from it...
 SCH_MARKER::SCH_MARKER( const wxPoint& pos, const wxString& text ) :
     SCH_ITEM( NULL, SCH_MARKER_T ),
-    MARKER_BASE( 0, pos, text, pos )
+    MARKER_BASE( 0, pos, text, pos, wxEmptyString, wxPoint(), SCALING_FACTOR )
 {
 }
 
@@ -61,85 +55,64 @@ EDA_ITEM* SCH_MARKER::Clone() const
 }
 
 
+void SCH_MARKER::SwapData( SCH_ITEM* aItem )
+{
+    std::swap( *((SCH_MARKER*) this), *((SCH_MARKER*) aItem ) );
+}
+
+
 #if defined(DEBUG)
 
 void SCH_MARKER::Show( int nestLevel, std::ostream& os ) const
 {
     // for now, make it look like XML:
-    NestedSpace( nestLevel, os ) << '<' << GetClass().Lower().mb_str()
-                                 << GetPos() << "/>\n";
+    NestedSpace( nestLevel, os ) << '<' << GetClass().Lower().mb_str() << GetPos() << "/>\n";
 }
 
 #endif
 
-/**
- * Function Save (do nothing : markers are no more saved in files )
- * writes the data structures for this object out to a FILE in "*.brd" format.
- * @param aFile The FILE to write to.
- * @return bool - true if success writing else false.
- */
-bool SCH_MARKER::Save( FILE* aFile ) const
+
+KIGFX::COLOR4D SCH_MARKER::getColor() const
 {
-    return true;
-}
-
-
-void SCH_MARKER::Draw( EDA_DRAW_PANEL* aPanel, wxDC* aDC,
-                       const wxPoint& aOffset, GR_DRAWMODE aDrawMode, COLOR4D aColor )
-{
-    COLOR4D color = m_Color;
-    COLOR4D tmp   = color;
-
-    if( GetMarkerType() == MARKER_BASE::MARKER_ERC )
-    {
-        color = ( GetErrorLevel() == MARKER_BASE::MARKER_SEVERITY_ERROR ) ?
-                  GetLayerColor( LAYER_ERC_ERR ) : GetLayerColor( LAYER_ERC_WARN );
-    }
-
-    if( aColor == COLOR4D::UNSPECIFIED )
-        m_Color = color;
+    if( IsExcluded() )
+        return GetLayerColor( LAYER_HIDDEN );
+    else if( GetErrorLevel() == MARKER_BASE::MARKER_SEVERITY_ERROR )
+        return GetLayerColor( LAYER_ERC_ERR );
     else
-        m_Color = aColor;
-
-    DrawMarker( aPanel, aDC, aDrawMode, aOffset );
-    m_Color = tmp;
+        return GetLayerColor( LAYER_ERC_WARN );
 }
 
 
-bool SCH_MARKER::Matches( wxFindReplaceData& aSearchData, void* aAuxData,
-                          wxPoint * aFindLocation )
+void SCH_MARKER::Print( wxDC* aDC, const wxPoint& aOffset )
 {
-    if( SCH_ITEM::Matches( m_drc.GetErrorText(), aSearchData ) ||
-        SCH_ITEM::Matches( m_drc.GetMainText(), aSearchData ) ||
-        SCH_ITEM::Matches( m_drc.GetAuxiliaryText(), aSearchData ) )
-    {
-        if( aFindLocation )
-            *aFindLocation = m_Pos;
-
-        return true;
-    }
-
-    return false;
+    PrintMarker( aDC, aOffset );
 }
 
 
-/**
- * Function GetBoundingBox
- * returns the orthogonal, bounding box of this object for display purposes.
- * This box should be an enclosing perimeter for visible components of this
- * object, and the units should be in the pcb or schematic coordinate system.
- * It is OK to overestimate the size by a few counts.
- */
+bool SCH_MARKER::Matches( wxFindReplaceData& aSearchData, void* aAuxData )
+{
+    return SCH_ITEM::Matches( m_drc.GetErrorText(), aSearchData )
+                || SCH_ITEM::Matches( m_drc.GetMainText(), aSearchData )
+                || SCH_ITEM::Matches( m_drc.GetAuxiliaryText(), aSearchData );
+}
+
+
+void SCH_MARKER::ViewGetLayers( int aLayers[], int& aCount ) const
+{
+    aCount     = 2;
+    aLayers[0] = this->m_ErrorLevel == MARKER_SEVERITY_ERROR ? LAYER_ERC_ERR : LAYER_ERC_WARN;
+    aLayers[1] = LAYER_SELECTION_SHADOWS;
+}
+
+
 const EDA_RECT SCH_MARKER::GetBoundingBox() const
 {
     return GetBoundingBoxMarker();
 }
 
 
-void SCH_MARKER::GetMsgPanelInfo( MSG_PANEL_ITEMS& aList )
+void SCH_MARKER::GetMsgPanelInfo( EDA_UNITS aUnits, MSG_PANEL_ITEMS& aList )
 {
-    wxString msg;
-
     aList.push_back( MSG_PANEL_ITEM( _( "Electronics Rule Check Error" ),
                                      GetReporter().GetErrorText(), DARKRED ) );
 }
@@ -173,21 +146,7 @@ void SCH_MARKER::MirrorY( int aYaxis_position )
 }
 
 
-bool SCH_MARKER::IsSelectStateChanged( const wxRect& aRect )
-{
-    bool previousState = IsSelected();
-
-    if( aRect.Contains( m_Pos ) )
-        SetFlags( SELECTED );
-    else
-        ClearFlags( SELECTED );
-
-    return previousState != IsSelected();
-}
-
-
 bool SCH_MARKER::HitTest( const wxPoint& aPosition, int aAccuracy ) const
 {
-    return HitTestMarker( aPosition );
+    return HitTestMarker( aPosition, aAccuracy );
 }
-

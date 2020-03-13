@@ -21,20 +21,24 @@
  * 51 Franklin Street, Fifth Floor, Boston, MA  02110-1301, USA
  */
 
-#include <wx/utils.h>
+#include "kicadpcb.h"
+
+#include "kicadcurve.h"
+#include "kicadmodule.h"
+#include "oce_utils.h"
+
+#include <sexpr/sexpr.h>
+#include <sexpr/sexpr_parser.h>
+
 #include <wx/filename.h>
 #include <wx/log.h>
 #include <wx/stdpaths.h>
+#include <wx/utils.h>
+
 #include <iostream>
+#include <memory>
 #include <sstream>
 #include <string>
-
-#include "kicadpcb.h"
-#include "sexpr/sexpr.h"
-#include "sexpr/sexpr_parser.h"
-#include "kicadmodule.h"
-#include "kicadcurve.h"
-#include "oce_utils.h"
 
 
 /*
@@ -86,12 +90,11 @@ KICADPCB::KICADPCB()
     m_resolver.Set3DConfigDir( cfgdir.GetPath() );
     m_thickness = 1.6;
     m_pcb = NULL;
+    m_minDistance = MIN_DISTANCE;
     m_useGridOrigin = false;
     m_useDrillOrigin = false;
     m_hasGridOrigin = false;
     m_hasDrillOrigin = false;
-
-    return;
 }
 
 
@@ -143,9 +146,9 @@ bool KICADPCB::ReadFile( const wxString& aFileName )
     {
         SEXPR::PARSER parser;
         std::string infile( fname.GetFullPath().ToUTF8() );
-        SEXPR::SEXPR* data = parser.ParseFromFile( infile );
+        std::unique_ptr<SEXPR::SEXPR> data( parser.ParseFromFile( infile ) );
 
-        if( NULL == data )
+        if( !data )
         {
             std::ostringstream ostr;
             ostr << "* no data in file: '" << aFileName.ToUTF8() << "'\n";
@@ -154,9 +157,8 @@ bool KICADPCB::ReadFile( const wxString& aFileName )
             return false;
         }
 
-        if( !parsePCB( data ) )
+        if( !parsePCB( data.get() ) )
             return false;
-
     }
     catch( std::exception& e )
     {
@@ -180,12 +182,12 @@ bool KICADPCB::ReadFile( const wxString& aFileName )
 }
 
 
-bool KICADPCB::WriteSTEP( const wxString& aFileName, bool aOverwrite )
+bool KICADPCB::WriteSTEP( const wxString& aFileName )
 {
     if( m_pcb )
     {
         std::string filename( aFileName.ToUTF8() );
-        return m_pcb->WriteSTEP( filename, aOverwrite );
+        return m_pcb->WriteSTEP( filename );
     }
 
     return false;
@@ -193,12 +195,12 @@ bool KICADPCB::WriteSTEP( const wxString& aFileName, bool aOverwrite )
 
 
 #ifdef SUPPORTS_IGES
-bool KICADPCB::WriteIGES( const wxString& aFileName, bool aOverwrite )
+bool KICADPCB::WriteIGES( const wxString& aFileName )
 {
     if( m_pcb )
     {
         std::string filename( aFileName.ToUTF8() );
-        return m_pcb->WriteIGES( filename, aOverwrite );
+        return m_pcb->WriteIGES( filename );
     }
 
     return false;
@@ -324,9 +326,14 @@ bool KICADPCB::parseLayers( SEXPR::SEXPR* data )
             wxLogMessage( "%s\n", ostr.str().c_str() );
             return false;
         }
+        std::string ref;
 
-        m_layersNames[child->GetChild( 1 )->GetSymbol()] =
-                      child->GetChild( 0 )->GetInteger();
+        if( child->GetChild( 1 )->IsSymbol() )
+            ref = child->GetChild( 1 )->GetSymbol();
+        else
+            ref = child->GetChild( 1 )->GetString();
+
+        m_layersNames[ref] = child->GetChild( 0 )->GetInteger();
     }
 
     return true;
@@ -477,6 +484,7 @@ bool KICADPCB::ComposePCB( bool aComposeVirtual )
 
     m_pcb = new PCBMODEL();
     m_pcb->SetPCBThickness( m_thickness );
+    m_pcb->SetMinDistance( m_minDistance );
 
     for( auto i : m_curves )
     {

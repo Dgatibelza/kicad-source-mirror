@@ -31,6 +31,17 @@
 #include <wx/log.h>
 
 
+// A helper function to normalize aAngle between -2PI and +2PI
+inline void normalise2PI( float& aAngle )
+{
+    while( aAngle > 0.0 )
+        aAngle -= M_PI*2;
+
+    while( aAngle < 0.0 )
+        aAngle += M_PI*2;
+}
+
+
 /**
  *  Trace mask used to enable or disable the trace output of this class.
  *  The debug output can be turned on by setting the WXTRACE environment variable to
@@ -50,8 +61,8 @@ CCAMERA::CCAMERA( float aRangeScale )
     m_camera_pos_init       = SFVEC3F( 0.0f, 0.0f, -(aRangeScale * 2.0f ) );
     m_board_lookat_pos_init = SFVEC3F( 0.0f );
     m_windowSize            = SFVEC2I( 0, 0 );
-    m_projectionType        = PROJECTION_PERSPECTIVE;
-    m_interpolation_mode    = INTERPOLATION_BEZIER;
+    m_projectionType        = PROJECTION_TYPE::PERSPECTIVE;
+    m_interpolation_mode    = CAMERA_INTERPOLATION::BEZIER;
 
     Reset();
 }
@@ -95,6 +106,20 @@ void CCAMERA::Reset_T1()
     m_zoom_t1              = 1.0f;
     m_rotate_aux_t1        = SFVEC3F( 0.0f );
     m_lookat_pos_t1        = m_board_lookat_pos_init;
+
+
+    // Since 0 = 2pi, we want to reset the angle to be the closest
+    // one to where we currently are. That ensures that we rotate
+    // the board around the smallest distance getting there.
+    if( m_rotate_aux_t0.x > M_PI )
+        m_rotate_aux_t1.x = 2*M_PI;
+
+    if( m_rotate_aux_t0.y > M_PI )
+        m_rotate_aux_t1.y = 2*M_PI;
+
+    if( m_rotate_aux_t0.z > M_PI )
+        m_rotate_aux_t1.z = 2*M_PI;
+
 }
 
 
@@ -111,14 +136,17 @@ void CCAMERA::updateRotationMatrix()
     m_rotationMatrixAux = glm::rotate( glm::mat4( 1.0f ),
                                        m_rotate_aux.x,
                                        SFVEC3F( 1.0f, 0.0f, 0.0f ) );
+    normalise2PI( m_rotate_aux.x );
 
     m_rotationMatrixAux = glm::rotate( m_rotationMatrixAux,
                                        m_rotate_aux.y,
                                        SFVEC3F( 0.0f, 1.0f, 0.0f ) );
+    normalise2PI( m_rotate_aux.y );
 
     m_rotationMatrixAux = glm::rotate( m_rotationMatrixAux,
                                        m_rotate_aux.z,
                                        SFVEC3F( 0.0f, 0.0f, 1.0f ) );
+    normalise2PI( m_rotate_aux.z );
 
     m_parametersChanged = true;
 
@@ -148,7 +176,7 @@ void CCAMERA::rebuildProjection()
     switch( m_projectionType )
     {
     default:
-    case PROJECTION_PERSPECTIVE:
+    case PROJECTION_TYPE::PERSPECTIVE:
 
         m_frustum.nearD = 0.10f;
 
@@ -163,7 +191,7 @@ void CCAMERA::rebuildProjection()
 
         m_projectionMatrixInv = glm::inverse( m_projectionMatrix );
 
-        m_frustum.tang = glm::tan( glm::radians( m_frustum.angle ) * 0.5f ) ;
+        m_frustum.tang = glm::tan( glm::radians( m_frustum.angle ) * 0.5f );
 
         m_focalLen.x = ( (float)m_windowSize.y / (float)m_windowSize.x ) / m_frustum.tang;
         m_focalLen.y = 1.0f / m_frustum.tang;
@@ -174,23 +202,25 @@ void CCAMERA::rebuildProjection()
         m_frustum.fw = m_frustum.fh * m_frustum.ratio;
         break;
 
-    case PROJECTION_ORTHO:
+    case PROJECTION_TYPE::ORTHO:
 
         m_frustum.nearD = -m_frustum.farD; // Use a symmetrical clip plane for ortho projection
 
-        const float orthoReductionFactor = m_zoom / 75.0f;
+        // This formula was found by trial and error
+        const float orthoReductionFactor = glm::length( m_camera_pos_init ) *
+                                           m_zoom * m_zoom * 0.5f;
 
         // Initialize Projection Matrix for Ortographic View
-        m_projectionMatrix = glm::ortho( -m_windowSize.x * orthoReductionFactor,
-                                          m_windowSize.x * orthoReductionFactor,
-                                         -m_windowSize.y * orthoReductionFactor,
-                                          m_windowSize.y * orthoReductionFactor,
+        m_projectionMatrix = glm::ortho( -m_frustum.ratio * orthoReductionFactor,
+                                          m_frustum.ratio * orthoReductionFactor,
+                                         -orthoReductionFactor,
+                                          orthoReductionFactor,
                                           m_frustum.nearD, m_frustum.farD );
 
         m_projectionMatrixInv = glm::inverse( m_projectionMatrix );
 
-        m_frustum.nw = m_windowSize.x * orthoReductionFactor * 2.0f;
-        m_frustum.nh = m_windowSize.y * orthoReductionFactor * 2.0f;
+        m_frustum.nw = orthoReductionFactor * 2.0f * m_frustum.ratio;
+        m_frustum.nh = orthoReductionFactor * 2.0f;
         m_frustum.fw = m_frustum.nw;
         m_frustum.fh = m_frustum.nh;
 
@@ -303,14 +333,14 @@ void CCAMERA::MakeRay( const SFVEC2I &aWindowPos,
     switch( m_projectionType )
     {
     default:
-    case PROJECTION_PERSPECTIVE:
+    case PROJECTION_TYPE::PERSPECTIVE:
         aOutOrigin = up_plus_right + m_frustum.nc;
         aOutDirection = glm::normalize( aOutOrigin - m_pos );
         break;
 
-    case PROJECTION_ORTHO:
+    case PROJECTION_TYPE::ORTHO:
         aOutOrigin = up_plus_right * 0.5f + m_frustum.nc;
-        aOutDirection = -m_dir;
+        aOutDirection = -m_dir + SFVEC3F( FLT_EPSILON );
         break;
     }
 }
@@ -334,14 +364,14 @@ void CCAMERA::MakeRay( const SFVEC2F &aWindowPos, SFVEC3F &aOutOrigin, SFVEC3F &
     switch( m_projectionType )
     {
     default:
-    case PROJECTION_PERSPECTIVE:
+    case PROJECTION_TYPE::PERSPECTIVE:
         aOutOrigin = up_plus_right + m_frustum.nc;
         aOutDirection = glm::normalize( aOutOrigin - m_pos );
         break;
 
-    case PROJECTION_ORTHO:
+    case PROJECTION_TYPE::ORTHO:
         aOutOrigin = up_plus_right * 0.5f + m_frustum.nc;
-        aOutDirection = -m_dir;
+        aOutDirection = -m_dir + SFVEC3F( FLT_EPSILON );
         break;
     }
 }
@@ -416,10 +446,10 @@ void CCAMERA::SetProjection( PROJECTION_TYPE aProjectionType )
 
 void CCAMERA::ToggleProjection()
 {
-    if( m_projectionType == PROJECTION_ORTHO )
-        m_projectionType = PROJECTION_PERSPECTIVE;
+    if( m_projectionType == PROJECTION_TYPE::ORTHO )
+        m_projectionType = PROJECTION_TYPE::PERSPECTIVE;
     else
-        m_projectionType = PROJECTION_ORTHO;
+        m_projectionType = PROJECTION_TYPE::ORTHO;
 
     rebuildProjection();
 }

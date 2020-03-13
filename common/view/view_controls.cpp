@@ -24,9 +24,10 @@
  * 51 Franklin Street, Fifth Floor, Boston, MA  02110-1301, USA
  */
 
+#include <gal/graphics_abstraction_layer.h>
+#include <tool/actions.h>
 #include <view/view.h>
 #include <view/view_controls.h>
-#include <gal/graphics_abstraction_layer.h>
 
 using namespace KIGFX;
 
@@ -62,12 +63,17 @@ void VC_SETTINGS::Reset()
     m_snappingEnabled = true;
     m_grabMouse = false;
     m_autoPanEnabled = false;
-    m_autoPanMargin = 0.1;
-    m_autoPanSpeed = 0.15;
+    m_autoPanSettingEnabled = false;
+    m_autoPanMargin = 0.02f;
+    m_autoPanSpeed = 0.15f;
+    m_autoPanAcceleration = 1.5f;
     m_warpCursor = false;
     m_enableMousewheelPan = false;
     m_panWithRightButton = false;
     m_panWithLeftButton = false;
+    m_lastKeyboardCursorPositionValid = false;
+    m_lastKeyboardCursorPosition = { 0.0, 0.0 };
+    m_lastKeyboardCursorCommand = ACTIONS::CURSOR_NONE;
 }
 
 
@@ -80,5 +86,6 @@ void VIEW_CONTROLS::ApplySettings( const VC_SETTINGS& aSettings )
     SetAutoPan( aSettings.m_autoPanEnabled );
     SetAutoPanMargin( aSettings.m_autoPanMargin );
     SetAutoPanSpeed( aSettings.m_autoPanSpeed );
+    SetAutoPanAcceleration( aSettings.m_autoPanAcceleration );
     ForceCursorPosition( aSettings.m_forceCursorPosition, aSettings.m_forcedPosition );
 }

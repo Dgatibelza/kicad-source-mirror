@@ -27,12 +27,15 @@
  * @brief General wrappers for kicad / wx structures and classes
  */
 
+%include <std_deque.i>
 %include <std_vector.i>
+%include <std_list.i>
 %include <std_basic_string.i>
 %include <std_string.i>
 %include <std_map.i>
 %include <std_shared_ptr.i>
 %include <std_set.i>
+%include <stdint.i>
 
 %include "ki_exception.i"   // affects all that follow it
 
@@ -74,44 +77,50 @@ principle should be easily implemented by adapting the current STL containers.
 %ignore operator <<;
 %ignore operator=;
 
-%include dlist.i
-
 // headers/imports that must be included in the _wrapper.cpp at top
 
 %{
     #include <macros.h>
     #include <cstddef>
     #include <base_struct.h>
-    #include <class_eda_rect.h>
+    #include <eda_rect.h>
     #include <common.h>
     #include <wx_python_helpers.h>
     #include <cstddef>
     #include <vector>
     #include <bitset>
 
-    #include <class_title_block.h>
-    #include <class_colors_design_settings.h>
-    #include <class_marker_base.h>
+    #include <title_block.h>
+    #include <marker_base.h>
     #include <eda_text.h>
     #include <convert_to_biu.h>
+    #include <id.h>
+    #include <build_version.h>
+    #include <layers_id_colors_and_visibility.h>
+    #include <settings/settings_manager.h>
 %}
 
 // all the wx wrappers for wxString, wxPoint, wxRect, wxChar ..
 %include wx.i
 
-// header files that must be wrapped
+// SWIG is incompatible with std::unique_ptr
+%ignore GetNewConfig;
 
+// header files that must be wrapped
 %include macros.h
 %include core/typeinfo.h
 %include base_struct.h
-%include class_eda_rect.h
+%include eda_rect.h
 %include common.h
-%include class_title_block.h
+%include title_block.h
 %include gal/color4d.h
-%include class_colors_design_settings.h
-%include class_marker_base.h
+%include marker_base.h
 %include eda_text.h
+%include build_version.h
+%include settings/settings_manager.h
 
+// Cast time_t to known type for Python
+typedef long time_t;
 
 // std template mappings
 %template(intVector) std::vector<int>;
@@ -126,12 +135,16 @@ principle should be easily implemented by adapting the current STL containers.
 // KiCad plugin handling
 %include "kicadplugins.i"
 
-// map CPolyLine and classes used in CPolyLine:
-#include <../polygon/PolyLine.h>
-%include <../polygon/PolyLine.h>
-
 #include <geometry/shape.h>
 %include <geometry/shape.h>
+
+// Contains VECTOR2I
+%include math.i
+
+// ignore warning from nested classes
+#pragma SWIG nowarn=325
+#include <geometry/shape_line_chain.h>
+%include <geometry/shape_line_chain.h>
 
 #include <geometry/shape_poly_set.h>
 %include <geometry/shape_poly_set.h>
@@ -142,6 +155,7 @@ principle should be easily implemented by adapting the current STL containers.
 // Rename operators defined in utf8.h
 %rename(utf8_to_charptr) operator char* () const;
 %rename(utf8_to_wxstring) operator wxString () const;
+%rename(utf8_to_string) operator const std::string& () const;
 
 #include <utf8.h>
 %include <utf8.h>

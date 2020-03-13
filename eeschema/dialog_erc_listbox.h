@@ -27,12 +27,12 @@
 #include <vector>
 
 #include <fctsys.h>
-#include <class_drawpanel.h>
+#include <sch_draw_panel.h>
 #include <sch_marker.h>
 #include <wx/html/htmlwin.h>
 
 /**
- * Class ERC_HTML_LISTFRAME
+ * ERC_HTML_LISTFRAME
  * is used to display a DRC_ITEM_LIST.
  */
 class ERC_HTML_LISTFRAME : public wxHtmlWindow
@@ -68,24 +68,29 @@ public:
      * Function DisplayList();
      * Build the Html marker list and show it
      */
-    void DisplayList()
+    void DisplayList( EDA_UNITS aUnits )
     {
         wxString htmlpage;
-
+        wxColour bgcolor = wxSystemSettings::GetColour( wxSYS_COLOUR_WINDOW );
+        wxColour fgcolor = wxSystemSettings::GetColour( wxSYS_COLOUR_WINDOWTEXT );
         // for each marker, build a link like:
         // <A HREF="marker_index">text to click</A>
         // The "text to click" is the error name (first line of the full error text).
         wxString marker_text;
+        wxString href;
 
         for( unsigned ii = 0; ii < m_MarkerListReferences.size(); ii++ )
         {
-            marker_text.Printf( wxT( "<A HREF=\"%d\">" ), ii );
-            marker_text << m_MarkerListReferences[ii]->GetReporter().ShowHtml();
-            marker_text.Replace( wxT( "<ul>" ), wxT( "</A><ul>" ), false );
+            href.Printf( wxT( "href='%d'" ), ii );
+            marker_text = m_MarkerListReferences[ii]->GetReporter().ShowHtml( aUnits );
+            marker_text.Replace( wxT( "href=''"), href );
             htmlpage += marker_text;
         }
 
-        SetPage( htmlpage );
+        SetPage( wxString::Format( wxT( "<html><body bgcolor='%s' text='%s'>%s</body></html>" ),
+                                   bgcolor.GetAsString( wxC2S_HTML_SYNTAX ),
+                                   fgcolor.GetAsString( wxC2S_HTML_SYNTAX ),
+                                   htmlpage ) );
     }
 
     /**

@@ -41,6 +41,7 @@
 
 class SHAPE_LINE_CHAIN;
 class SHAPE_POLY_SET;
+class BITMAP_BASE;
 
 namespace KIGFX
 {
@@ -55,8 +56,14 @@ namespace KIGFX
  * for drawing purposes these are transformed to screen units with this layer. So zooming is handled here as well.
  *
  */
-class GAL: GAL_DISPLAY_OPTIONS_OBSERVER
+class GAL : GAL_DISPLAY_OPTIONS_OBSERVER
 {
+    // These friend declarations allow us to hide routines that should not be called.  The
+    // corresponding RAII objects must be used instead.
+    friend class GAL_CONTEXT_LOCKER;
+    friend class GAL_UPDATE_CONTEXT;
+    friend class GAL_DRAWING_CONTEXT;
+
 public:
     // Constructor / Destructor
     GAL( GAL_DISPLAY_OPTIONS& aOptions );
@@ -68,21 +75,15 @@ public:
     /// @brief Returns true if the GAL canvas is visible on the screen.
     virtual bool IsVisible() const { return true; }
 
+    /// @brief Returns true if the GAL engine is a cairo based type.
+    virtual bool IsCairoEngine() { return false; }
+
+    /// @brief Returns true if the GAL engine is a opengl based type.
+    virtual bool IsOpenGlEngine() { return false; }
+
     // ---------------
     // Drawing methods
     // ---------------
-
-    /// @brief Begin the drawing, needs to be called for every new frame.
-    virtual void BeginDrawing() {};
-
-    /// @brief End the drawing, needs to be called for every new frame.
-    virtual void EndDrawing() {};
-
-    /// @brief Enables item update mode.
-    virtual void BeginUpdate() {}
-
-    /// @brief Disables item update mode.
-    virtual void EndUpdate() {}
 
     /**
      * @brief Draw a line.
@@ -140,6 +141,8 @@ public:
      * DrawArc() draws a "pie piece" when fill is turned on, and a thick stroke when fill is off.
      * DrawArcSegment() with fill *on* behaves like DrawArc() with fill *off*.
      * DrawArcSegment() with fill *off* draws the outline of what it would have drawn with fill on.
+	 *
+	 * TODO: Unify Arc routines
      *
      * @param aCenterPoint  is the center point of the arc.
      * @param aRadius       is the arc radius.
@@ -167,6 +170,7 @@ public:
     virtual void DrawPolygon( const std::deque<VECTOR2D>& aPointList ) {};
     virtual void DrawPolygon( const VECTOR2D aPointList[], int aListSize ) {};
     virtual void DrawPolygon( const SHAPE_POLY_SET& aPolySet ) {};
+    virtual void DrawPolygon( const SHAPE_LINE_CHAIN& aPolySet ) {};
 
     /**
      * @brief Draw a cubic bezier spline.
@@ -175,9 +179,18 @@ public:
      * @param controlPointA is the first control point.
      * @param controlPointB is the second control point.
      * @param endPoint      is the end point of the spline.
+     * @param aFilterValue  is used by Bezier to segments approximation, if
+     * the Bezier curve is not supported and needs a curve to polyline conversion.
+     * aFilterValue = 0 means no filtering.
      */
     virtual void DrawCurve( const VECTOR2D& startPoint,    const VECTOR2D& controlPointA,
-                            const VECTOR2D& controlPointB, const VECTOR2D& endPoint ) {};
+                            const VECTOR2D& controlPointB, const VECTOR2D& endPoint,
+                            double aFilterValue = 0.0 ) {};
+
+    /**
+     * @brief Draw a bitmap image.
+     */
+    virtual void DrawBitmap( const BITMAP_BASE& aBitmap ) {};
 
     // --------------
     // Screen methods
@@ -249,6 +262,16 @@ public:
     }
 
     /**
+     * @brief Get the fill color.
+     *
+     * @return the color for filling a outline.
+     */
+    inline const COLOR4D& GetFillColor() const
+    {
+        return fillColor;
+    }
+
+    /**
      * @brief Set the stroke color.
      *
      * @param aColor is the color for stroking the outline.
@@ -273,7 +296,7 @@ public:
      *
      * @param aLineWidth is the line width.
      */
-    virtual void SetLineWidth( double aLineWidth )
+    virtual void SetLineWidth( float aLineWidth )
     {
         lineWidth = aLineWidth;
     }
@@ -283,7 +306,7 @@ public:
      *
      * @return the actual line width.
      */
-    inline double GetLineWidth() const
+    inline float GetLineWidth() const
     {
         return lineWidth;
     }
@@ -316,11 +339,12 @@ public:
      * @param aText is the text to be drawn.
      * @param aPosition is the text position in world coordinates.
      * @param aRotationAngle is the text rotation angle.
+     * @param aMarkupFlags a bitset of TEXT_MARKUP_FLAGS.
      */
     virtual void StrokeText( const wxString& aText, const VECTOR2D& aPosition,
-                                    double aRotationAngle )
+                                    double aRotationAngle, int aMarkupFlags = 0 )
     {
-        strokeFont.Draw( aText, aPosition, aRotationAngle );
+        strokeFont.Draw( aText, aPosition, aRotationAngle, aMarkupFlags );
     }
 
     /**
@@ -351,9 +375,10 @@ public:
      * a only one line text.
      *
      * @param aText is the text string (one line).
+     * @param aMarkupFlags a bitset of TEXT_MARKUP_FLAGS.
      * @return is the text size.
      */
-    VECTOR2D GetTextLineSize( const UTF8& aText ) const;
+    VECTOR2D GetTextLineSize( const UTF8& aText, int aMarkupFlags = 0 ) const;
 
     /**
      * Compute the vertical position of an overbar, sometimes used in texts.
@@ -496,7 +521,7 @@ public:
     /**
      * @brief Transform the context.
      *
-     * @param aTransformation is the ransformation matrix.
+     * @param aTransformation is the transformation matrix.
      */
     virtual void Transform( const MATRIX3x3D& aTransformation ) {};
 
@@ -630,6 +655,11 @@ public:
         worldUnitLength = aWorldUnitLength;
     }
 
+    inline void SetScreenSize( const VECTOR2I& aSize )
+    {
+        screenSize = aSize;
+    }
+
     /**
      * @brief Set the dots per inch of the screen.
      *
@@ -686,6 +716,26 @@ public:
     }
 
     /**
+     * @brief Set the rotation angle.
+     *
+     * @param aRotation is the new rotation angle (radians).
+     */
+    void SetRotation( double aRotation )
+    {
+        rotation = aRotation;
+    }
+
+    /**
+     * Get the rotation angle.
+     *
+     * @return The rotation angle (radians).
+     */
+    double GetRotation() const
+    {
+        return rotation;
+    }
+
+    /**
      * @brief Set the range of the layer depth.
      *
      * Usually required for the OpenGL implementation, any object outside this range is not drawn.
@@ -736,20 +786,25 @@ public:
         globalFlipY = yAxis;
     }
 
+    /**
+     * Return true if flip flag for the X axis is set.
+     */
+    bool IsFlippedX() const
+    {
+        return globalFlipX;
+    }
+
+    /**
+     * Return true if flip flag for the Y axis is set.
+     */
+    bool IsFlippedY() const
+    {
+        return globalFlipY;
+    }
 
     // ---------------------------
     // Buffer manipulation methods
     // ---------------------------
-
-    /**
-     * @brief Save the screen contents.
-     */
-    virtual void SaveScreen() {};
-
-    /**
-     * @brief Restore the screen contents.
-     */
-    virtual void RestoreScreen() {};
 
     /**
      * @brief Sets the target for rendering.
@@ -881,13 +936,13 @@ public:
      *
      * @return the grid line width
      */
-    inline double GetGridLineWidth() const
+    inline float GetGridLineWidth() const
     {
         return gridLineWidth;
     }
 
     ///> @brief Draw the grid
-    virtual void DrawGrid();
+    virtual void DrawGrid() {};
 
     /**
      * Function GetGridPoint()
@@ -982,7 +1037,7 @@ public:
         depthStack.pop();
     }
 
-    static const double METRIC_UNIT_LENGTH;
+    virtual void EnableDepthTest( bool aEnabled = false ) {};
 
 protected:
 
@@ -997,6 +1052,7 @@ protected:
     VECTOR2D           lookAtPoint;            ///< Point to be looked at in world space
 
     double             zoomFactor;             ///< The zoom factor
+    double             rotation;               ///< Rotation transformation (radians)
     MATRIX3x3D         worldScreenMatrix;      ///< World transformation
     MATRIX3x3D         screenWorldMatrix;      ///< Screen transformation
     double             worldScale;             ///< The scale factor world->screen
@@ -1004,7 +1060,7 @@ protected:
     bool globalFlipX;                          ///< Flag for X axis flipping
     bool globalFlipY;                          ///< Flag for Y axis flipping
 
-    double             lineWidth;              ///< The line width
+    float              lineWidth;              ///< The line width
 
     bool               isFillEnabled;          ///< Is filling of graphic objects enabled ?
     bool               isStrokeEnabled;        ///< Are the outlines stroked ?
@@ -1026,7 +1082,7 @@ protected:
     COLOR4D            axesColor;              ///< Color of the axes
     bool               axesEnabled;            ///< Should the axes be drawn
     int                gridTick;               ///< Every tick line gets the double width
-    double             gridLineWidth;          ///< Line width of the grid
+    float              gridLineWidth;          ///< Line width of the grid
     int                gridMinSpacing;         ///< Minimum screen size of the grid (pixels)
                                                ///< below which the grid is not drawn
 
@@ -1040,6 +1096,26 @@ protected:
     /// Instance of object that stores information about how to draw texts
     STROKE_FONT        strokeFont;
 
+    /// Private: use GAL_CONTEXT_LOCKER RAII object
+    virtual void lockContext( int aClientCookie ) {}
+
+    virtual void unlockContext( int aClientCookie ) {}
+
+    /// @brief Enables item update mode.
+    /// Private: use GAL_UPDATE_CONTEXT RAII object
+    virtual void beginUpdate() {}
+
+    /// @brief Disables item update mode.
+    virtual void endUpdate() {}
+
+    /// @brief Begin the drawing, needs to be called for every new frame.
+    /// Private: use GAL_DRAWING_CONTEXT RAII object
+    virtual void beginDrawing() {};
+
+    /// @brief End the drawing, needs to be called for every new frame.
+    /// Private: use GAL_DRAWING_CONTEXT RAII object
+    virtual void endDrawing() {};
+
     /// Compute the scaling factor for the world->screen matrix
     inline void computeWorldScale()
     {
@@ -1052,14 +1128,6 @@ protected:
      * @return the minimum spacing to use for drawing the grid
      */
     double computeMinGridSpacing() const;
-
-    /**
-     * @brief Draw a grid line (usually a simplified line function).
-     *
-     * @param aStartPoint is the start point of the line.
-     * @param aEndPoint is the end point of the line.
-     */
-    virtual void drawGridLine( const VECTOR2D& aStartPoint, const VECTOR2D& aEndPoint ) {};
 
     /// Possible depth range
     static const int MIN_DEPTH;
@@ -1103,6 +1171,61 @@ private:
         bool                m_mirrored;
     } textProperties;
 };
-}    // namespace KIGFX
+
+
+class GAL_CONTEXT_LOCKER
+{
+public:
+    GAL_CONTEXT_LOCKER( GAL* aGal ) :
+        m_gal( aGal )
+    {
+        m_cookie = rand();
+        m_gal->lockContext( m_cookie );
+    }
+
+    ~GAL_CONTEXT_LOCKER()
+    {
+        m_gal->unlockContext( m_cookie );
+    }
+
+protected:
+    GAL* m_gal;
+    int  m_cookie;
+};
+
+
+class GAL_UPDATE_CONTEXT : public GAL_CONTEXT_LOCKER
+{
+public:
+    GAL_UPDATE_CONTEXT( GAL* aGal ) :
+            GAL_CONTEXT_LOCKER( aGal )
+    {
+        m_gal->beginUpdate();
+    }
+
+    ~GAL_UPDATE_CONTEXT()
+    {
+        m_gal->endUpdate();
+    }
+};
+
+
+class GAL_DRAWING_CONTEXT : public GAL_CONTEXT_LOCKER
+{
+public:
+    GAL_DRAWING_CONTEXT( GAL* aGal ) :
+            GAL_CONTEXT_LOCKER( aGal )
+    {
+        m_gal->beginDrawing();
+    }
+
+    ~GAL_DRAWING_CONTEXT()
+    {
+        m_gal->endDrawing();
+    }
+};
+
+
+};    // namespace KIGFX
 
 #endif /* GRAPHICSABSTRACTIONLAYER_H_ */

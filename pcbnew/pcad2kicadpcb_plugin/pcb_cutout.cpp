@@ -28,7 +28,6 @@
  */
 
 #include <wx/wx.h>
-#include <wx/config.h>
 
 #include <pcb_cutout.h>
 
@@ -46,9 +45,9 @@ PCB_CUTOUT::~PCB_CUTOUT()
 }
 
 
-bool PCB_CUTOUT::Parse( XNODE*      aNode,
-                        wxString    aDefaultMeasurementUnit,
-                        wxString    aActualConversion )
+bool PCB_CUTOUT::Parse( XNODE*          aNode,
+                        const wxString& aDefaultMeasurementUnit,
+                        const wxString& aActualConversion )
 {
     XNODE*          lNode;
 

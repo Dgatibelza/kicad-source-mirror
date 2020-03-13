@@ -30,6 +30,7 @@
 #ifndef pcb_H_
 #define pcb_H_
 
+#include <map>
 #include <wx/wx.h>
 #include <xnode.h>
 
@@ -38,53 +39,52 @@
 
 namespace PCAD2KICAD {
 
-#define MAX_PCAD_LAYER_QTY 32
-
 class PCB : public PCB_MODULE, public PCB_CALLBACKS
 {
 public:
     PCB_COMPONENTS_ARRAY    m_pcbComponents;    // PCB Modules,Lines,Routes,Texts, .... and so on
     PCB_NETS_ARRAY          m_pcbNetlist;       // net objects collection
     wxString                m_defaultMeasurementUnit;
-    TLAYER                  m_layersMap[MAX_PCAD_LAYER_QTY];    // flexible layers mapping
+    std::map<int, TLAYER>   m_layersMap;        // flexible layers mapping
     int m_sizeX;
     int m_sizeY;
 
     PCB( BOARD* aBoard );
     ~PCB();
 
-    PCB_LAYER_ID        GetKiCadLayer( int aPCadLayer ) override;
+    PCB_LAYER_ID    GetKiCadLayer( int aPCadLayer ) override;
     LAYER_TYPE_T    GetLayerType( int aPCadLayer ) override;
     wxString        GetLayerNetNameRef( int aPCadLayer ) override;
-    int             GetNewTimestamp() override;
     int             GetNetCode( wxString aNetName ) override;
 
-    void            Parse( wxStatusBar* aStatusBar,
-                           wxXmlDocument* aXmlDoc,
-                           wxString     aActualConversion );
+    void            ParseBoard( wxStatusBar*    aStatusBar,
+                                wxXmlDocument*  aXmlDoc,
+                                const wxString& aActualConversion );
 
     void            AddToBoard() override;
 
 private:
-    int             m_timestamp_cnt;
     wxArrayString   m_layersStackup;
 
-    XNODE*          FindCompDefName( XNODE* aNode, wxString aName );
-    void            SetTextProperty( XNODE*         aNode,
-                                     TTEXTVALUE*    aTextValue,
-                                     wxString       aPatGraphRefName,
-                                     wxString       aXmlName,
-                                     wxString       aActualConversion );
-    void            DoPCBComponents( XNODE*         aNode,
-                                     wxXmlDocument* aXmlDoc,
-                                     wxString       aActualConversion,
-                                     wxStatusBar*   aStatusBar );
-    void            ConnectPinToNet( wxString aCr, wxString aPr, wxString aNetName );
-    int             FindLayer( wxString aLayerName );
+    XNODE*          FindCompDefName( XNODE* aNode, const wxString& aName );
+    void            SetTextProperty( XNODE*          aNode,
+                                     TTEXTVALUE*     aTextValue,
+                                     const wxString& aPatGraphRefName,
+                                     const wxString& aXmlName,
+                                     const wxString& aActualConversion );
+    void            DoPCBComponents( XNODE*          aNode,
+                                     wxXmlDocument*  aXmlDoc,
+                                     const wxString& aActualConversion,
+                                     wxStatusBar*    aStatusBar );
+    void            ConnectPinToNet( const wxString& aCr,
+                                     const wxString& aPr,
+                                     const wxString& aNetName );
+    int             FindLayer( const wxString& aLayerName );
     void            MapLayer( XNODE* aNode );
     int             FindOutlinePoint( VERTICES_ARRAY* aOutline, wxRealPoint aPoint );
     double          GetDistance( wxRealPoint* aPoint1, wxRealPoint* aPoint2 );
-    void            GetBoardOutline( wxXmlDocument* aXmlDoc, wxString aActualConversion );
+    void            GetBoardOutline( wxXmlDocument* aXmlDoc,
+                                     const wxString& aActualConversion );
 };
 
 } // namespace PCAD2KICAD

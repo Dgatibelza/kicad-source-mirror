@@ -25,9 +25,10 @@
 #include <list>
 
 #include <memory>
-#include <boost/optional.hpp>
+#include <core/optional.h>
 #include <boost/unordered_set.hpp>
 
+#include <layers_id_colors_and_visibility.h>
 #include <geometry/shape_line_chain.h>
 
 #include "pns_routing_settings.h"
@@ -42,7 +43,7 @@ namespace KIGFX
 class VIEW;
 class VIEW_GROUP;
 
-};
+}
 
 namespace PNS {
 
@@ -52,6 +53,7 @@ class DIFF_PAIR_PLACER;
 class PLACEMENT_ALGO;
 class LINE_PLACER;
 class ITEM;
+class ARC;
 class LINE;
 class SOLID;
 class SEGMENT;
@@ -60,6 +62,7 @@ class VIA;
 class RULE_RESOLVER;
 class SHOVE;
 class DRAGGER;
+class DRAG_ALGO;
 
 enum ROUTER_MODE {
     PNS_MODE_ROUTE_SINGLE = 1,
@@ -75,10 +78,12 @@ enum DRAG_MODE
     DM_SEGMENT = 0x2,
     DM_VIA = 0x4,
     DM_FREE_ANGLE = 0x8,
-    DM_ANY = 0x7
+    DM_ARC = 0x10,
+    DM_ANY = 0x17,
+    DM_COMPONENT = 0x20
 };
 /**
- * Class ROUTER
+ * ROUTER
  *
  * Main router class.
  */
@@ -93,7 +98,9 @@ enum DRAG_MODE
         virtual void SyncWorld( NODE* aNode ) = 0;
         virtual void AddItem( ITEM* aItem ) = 0;
         virtual void RemoveItem( ITEM* aItem ) = 0;
-        virtual void DisplayItem( const ITEM* aItem, int aColor = -1, int aClearance = -1 ) = 0;
+        virtual bool IsAnyLayerVisible( const LAYER_RANGE& aLayer ) = 0;
+        virtual bool IsItemVisible( const PNS::ITEM* aItem ) = 0;
+        virtual void DisplayItem( const ITEM* aItem, int aColor = -1, int aClearance = -1, bool aEdit = false ) = 0;
         virtual void HideItem( ITEM* aItem ) = 0;
         virtual void Commit() = 0;
 //        virtual void Abort () = 0;
@@ -133,9 +140,11 @@ public:
     bool RoutingInProgress() const;
     bool StartRouting( const VECTOR2I& aP, ITEM* aItem, int aLayer );
     void Move( const VECTOR2I& aP, ITEM* aItem );
-    bool FixRoute( const VECTOR2I& aP, ITEM* aItem );
+    bool FixRoute( const VECTOR2I& aP, ITEM* aItem, bool aForceFinish = false );
     void BreakSegment( ITEM *aItem, const VECTOR2I& aP );
 
+    void UndoLastSegment();
+    void CommitRouting();
     void StopRouting();
 
     int GetClearance( const ITEM* aA, const ITEM* aB ) const;
@@ -147,13 +156,15 @@ public:
 
     void FlipPosture();
 
-    void DisplayItem( const ITEM* aItem, int aColor = -1, int aClearance = -1 );
+    void DisplayItem( const ITEM* aItem, int aColor = -1, int aClearance = -1, bool aEdit = false );
     void DisplayItems( const ITEM_SET& aItems );
     void DeleteTraces( ITEM* aStartItem, bool aWholeTrack );
     void SwitchLayer( int layer );
 
     void ToggleViaPlacement();
     void SetOrthoMode( bool aEnable );
+
+    void ToggleRounded();
 
     int GetCurrentLayer() const;
     const std::vector<int> GetCurrentNets() const;
@@ -171,6 +182,7 @@ public:
     const VECTOR2I      SnapToItem( ITEM* aItem, VECTOR2I aP, bool& aSplitsSegment );
 
     bool StartDragging( const VECTOR2I& aP, ITEM* aItem, int aDragMode = DM_ANY );
+    bool StartDragging( const VECTOR2I& aP, ITEM_SET aItems, int aDragMode = DM_COMPONENT );
 
     void SetIterLimit( int aX ) { m_iterLimit = aX; }
     int GetIterLimit() const { return m_iterLimit; };
@@ -184,7 +196,7 @@ public:
     bool GetShowIntermediateSteps() const { return m_showInterSteps; }
     int GetShapshotIter() const { return m_snapshotIter; }
 
-    ROUTING_SETTINGS& Settings() { return m_settings; }
+    ROUTING_SETTINGS& Settings() { return *m_settings; }
 
     void CommitRouting( NODE* aNode );
 
@@ -198,7 +210,7 @@ public:
      * Changes routing settings to ones passed in the parameter.
      * @param aSettings are the new settings.
      */
-    void LoadSettings( const ROUTING_SETTINGS& aSettings )
+    void LoadSettings( ROUTING_SETTINGS* aSettings )
     {
         m_settings = aSettings;
     }
@@ -225,7 +237,7 @@ private:
     void moveDragging( const VECTOR2I& aP, ITEM* aItem );
 
     void eraseView();
-    void updateView( NODE* aNode, ITEM_SET& aCurrent );
+    void updateView( NODE* aNode, ITEM_SET& aCurrent, bool aDragging = false );
 
     void clearViewFlags();
 
@@ -245,6 +257,7 @@ private:
     void highlightCurrent( bool enabled );
 
     void markViolations( NODE* aNode, ITEM_SET& aCurrent, NODE::ITEM_VECTOR& aRemoved );
+    bool isStartingPointRoutable( const VECTOR2I& aWhere, int aLayer );
 
     VECTOR2I m_currentEnd;
     RouterState m_state;
@@ -253,7 +266,7 @@ private:
     NODE*                   m_lastNode;
 
     std::unique_ptr< PLACEMENT_ALGO > m_placer;
-    std::unique_ptr< DRAGGER >        m_dragger;
+    std::unique_ptr< DRAG_ALGO >        m_dragger;
     std::unique_ptr< SHOVE >          m_shove;
 
     ROUTER_IFACE* m_iface;
@@ -264,7 +277,7 @@ private:
     bool m_violation;
     bool m_forceMarkObstaclesMode = false;
 
-    ROUTING_SETTINGS m_settings;
+    ROUTING_SETTINGS* m_settings;
     SIZES_SETTINGS m_sizes;
     ROUTER_MODE m_mode;
 

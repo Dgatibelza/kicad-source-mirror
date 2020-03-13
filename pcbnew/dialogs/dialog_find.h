@@ -3,7 +3,7 @@
  *
  * Copyright (C) 2012 Marco Mattila <marcom99@gmail.com>
  * Copyright (C) 2006 Jean-Pierre Charras <jean-pierre.charras@gipsa-lab.inpg.fr>
- * Copyright (C) 1992-2012 Kicad Developers, see AUTHORS.txt for contributors.
+ * Copyright (C) 1992-2019 Kicad Developers, see AUTHORS.txt for contributors.
  *
  * This program is free software; you can redistribute it and/or
  * modify it under the terms of the GNU General Public License
@@ -26,33 +26,59 @@
 #ifndef DIALOG_FIND_BASE_H
 #define DIALOG_FIND_BASE_H
 
-#include <dialog_find_base.h>
 #include <boost/function.hpp>
+#include <sys/types.h>
+#include <wx/event.h>
+#include <deque>
+
+#include <class_board_item.h>
+
+#include <dialog_find_base.h>
+
+using namespace std;
 
 class DIALOG_FIND : public DIALOG_FIND_BASE
 {
 public:
     DIALOG_FIND( PCB_BASE_FRAME* aParent );
-    void OnInitDialog( wxInitDialogEvent& event ) override;
-    inline BOARD_ITEM* GetItem() const { return foundItem; }
-    void EnableWarp( bool aEnabled );
-    void SetCallback( boost::function<void (BOARD_ITEM*)> aCallback ) { callback = aCallback; }
+
+    /**
+     * Returns the currently found item or nullptr in the case of no items found
+     * @return
+     */
+    inline BOARD_ITEM* GetItem() const
+    {
+        if( m_it != m_hitList.end() )
+            return *m_it;
+        else
+            return nullptr;
+    }
+
+    /**
+     * Function to be called on each found event.  Must be able to handle nullptr in the
+     * case where no item is found
+     * @param aCallback
+     */
+    void SetCallback( boost::function<void( BOARD_ITEM* )> aCallback )
+    {
+        m_highlightCallback = aCallback;
+    }
+
 
 private:
-    PCB_BASE_FRAME* parent;
+    PCB_BASE_FRAME*                     m_frame;
+    std::deque<BOARD_ITEM*>             m_hitList;
+    std::deque<BOARD_ITEM*>::iterator   m_it;
+    bool                                m_upToDate;
 
-    int itemCount, markerCount;
-    static wxString prevSearchString;
-    static bool warpMouse;
-    BOARD_ITEM* foundItem;
+    boost::function<void( BOARD_ITEM* )> m_highlightCallback;
 
-    // Function called when an item is found
-    boost::function<void (BOARD_ITEM*)> callback;
-
-    void onButtonFindItemClick( wxCommandEvent& event ) override;
-    void onButtonFindMarkerClick( wxCommandEvent& event ) override;
-    void onButtonCloseClick( wxCommandEvent& event ) override;
-    void onClose( wxCloseEvent& event ) override;
+    void onTextEnter( wxCommandEvent& event ) override;
+    void onFindNextClick( wxCommandEvent& event ) override;
+    void onFindPreviousClick( wxCommandEvent& event ) override;
+    void onSearchAgainClick( wxCommandEvent& event ) override;
+    void onClose( wxCommandEvent& event ) override;
+    void search( bool direction );
 };
 
 #endif /* DIALOG_FIND_BASE_H */

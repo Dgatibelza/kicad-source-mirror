@@ -1,8 +1,8 @@
 ///////////////////////////////////////////////////////////////////////////
-// C++ code generated with wxFormBuilder (version May 21 2016)
+// C++ code generated with wxFormBuilder (version Jul 11 2018)
 // http://www.wxformbuilder.org/
 //
-// PLEASE DO "NOT" EDIT THIS FILE!
+// PLEASE DO *NOT* EDIT THIS FILE!
 ///////////////////////////////////////////////////////////////////////////
 
 #ifndef __DIALOG_LIB_EDIT_DRAW_ITEM_BASE_H__
@@ -11,8 +11,6 @@
 #include <wx/artprov.h>
 #include <wx/xrc/xmlres.h>
 #include <wx/intl.h>
-class DIALOG_SHIM;
-
 #include "dialog_shim.h"
 #include <wx/string.h>
 #include <wx/stattext.h>
@@ -22,8 +20,9 @@ class DIALOG_SHIM;
 #include <wx/settings.h>
 #include <wx/textctrl.h>
 #include <wx/sizer.h>
+#include <wx/radiobox.h>
 #include <wx/checkbox.h>
-#include <wx/radiobut.h>
+#include <wx/statline.h>
 #include <wx/button.h>
 #include <wx/dialog.h>
 
@@ -37,29 +36,20 @@ class DIALOG_LIB_EDIT_DRAW_ITEM_BASE : public DIALOG_SHIM
 	private:
 	
 	protected:
-		enum
-		{
-			ID_M_STATICTEXTSHARING = 1000
-		};
-		
-		wxStaticText* m_staticText1;
-		wxStaticText* m_staticWidth;
-		wxTextCtrl* m_textWidth;
-		wxStaticText* m_staticWidthUnits;
-		wxStaticText* m_staticTextSharing;
+		wxStaticText* m_widthLabel;
+		wxTextCtrl* m_widthCtrl;
+		wxStaticText* m_widthUnits;
+		wxRadioBox* m_fillCtrl;
 		wxCheckBox* m_checkApplyToAllUnits;
 		wxCheckBox* m_checkApplyToAllConversions;
-		wxStaticText* m_staticText4;
-		wxRadioButton* m_radioFillNone;
-		wxRadioButton* m_radioFillForeground;
-		wxRadioButton* m_radioFillBackground;
-		wxStdDialogButtonSizer* m_sdbSizer1;
-		wxButton* m_sdbSizer1OK;
-		wxButton* m_sdbSizer1Cancel;
+		wxStaticLine* m_staticline;
+		wxStdDialogButtonSizer* m_sdbSizer;
+		wxButton* m_sdbSizerOK;
+		wxButton* m_sdbSizerCancel;
 	
 	public:
 		
-		DIALOG_LIB_EDIT_DRAW_ITEM_BASE( wxWindow* parent, wxWindowID id = wxID_ANY, const wxString& title = _("Drawing Properties"), const wxPoint& pos = wxDefaultPosition, const wxSize& size = wxDefaultSize, long style = wxDEFAULT_DIALOG_STYLE|wxRESIZE_BORDER ); 
+		DIALOG_LIB_EDIT_DRAW_ITEM_BASE( wxWindow* parent, wxWindowID id = wxID_ANY, const wxString& title = _("Drawing Properties"), const wxPoint& pos = wxDefaultPosition, const wxSize& size = wxSize( 295,256 ), long style = wxDEFAULT_DIALOG_STYLE|wxRESIZE_BORDER ); 
 		~DIALOG_LIB_EDIT_DRAW_ITEM_BASE();
 	
 };

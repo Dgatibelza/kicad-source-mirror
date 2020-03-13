@@ -33,6 +33,10 @@
 #include <class_board.h>
 #include <3d_math.h>
 #include "3d_fastmath.h"
+#include <geometry/geometry_utils.h>
+#include <math/util.h>      // for KiROUND
+#include <pgm_base.h>
+#include <settings/settings_manager.h>
 
 /**
  *  Trace mask used to enable or disable the trace output of this class.
@@ -52,20 +56,22 @@ CINFO3D_VISU::CINFO3D_VISU() :
 {
     wxLogTrace( m_logTrace, wxT( "CINFO3D_VISU::CINFO3D_VISU" ) );
 
-    m_board = NULL;
+    m_board            = NULL;
     m_3d_model_manager = NULL;
-    m_3D_grid_type = GRID3D_NONE;
+    m_3D_grid_type     = GRID3D_TYPE::NONE;
     m_drawFlags.resize( FL_LAST, false );
 
-    m_render_engine = RENDER_ENGINE_OPENGL_LEGACY;
-    m_material_mode = MATERIAL_MODE_NORMAL;
+    if( PgmOrNull() )
+        m_colors = Pgm().GetSettingsManager().GetColorSettings();
+
+    m_render_engine = RENDER_ENGINE::OPENGL_LEGACY;
+    m_material_mode = MATERIAL_MODE::NORMAL;
 
     m_boardPos = wxPoint();
     m_boardSize = wxSize();
-    m_boardCenter = SFVEC3F();
+    m_boardCenter = SFVEC3F( 0.0f );
 
-    m_boardBoudingBox.Reset();
-    m_board2dBBox3DU.Reset();
+    m_boardBoundingBox.Reset();
 
     m_layers_container2D.clear();
     m_layers_holes2D.clear();
@@ -102,14 +108,17 @@ CINFO3D_VISU::CINFO3D_VISU() :
     SetFlag( FL_ZONE, true );
     SetFlag( FL_SILKSCREEN, true );
     SetFlag( FL_SOLDERMASK, true );
+    SetFlag( FL_SUBTRACT_MASK_FROM_SILK, false );
 
-    m_BgColorBot        = SFVEC3D( 0.4, 0.4, 0.5 );
-    m_BgColorTop        = SFVEC3D( 0.8, 0.8, 0.9 );
-    m_BoardBodyColor    = SFVEC3D( 0.4, 0.4, 0.5 );
-    m_SolderMaskColor   = SFVEC3D( 0.1, 0.2, 0.1 );
-    m_SolderPasteColor  = SFVEC3D( 0.4, 0.4, 0.4 );
-    m_SilkScreenColor   = SFVEC3D( 0.9, 0.9, 0.9 );
-    m_CopperColor       = SFVEC3D( 0.75, 0.61, 0.23 );
+    m_BgColorBot         = SFVEC3D( 0.4, 0.4, 0.5 );
+    m_BgColorTop         = SFVEC3D( 0.8, 0.8, 0.9 );
+    m_BoardBodyColor     = SFVEC3D( 0.4, 0.4, 0.5 );
+    m_SolderMaskColorTop = SFVEC3D( 0.1, 0.2, 0.1 );
+    m_SolderMaskColorBot = SFVEC3D( 0.1, 0.2, 0.1 );
+    m_SolderPasteColor   = SFVEC3D( 0.4, 0.4, 0.4 );
+    m_SilkScreenColorTop = SFVEC3D( 0.9, 0.9, 0.9 );
+    m_SilkScreenColorBot = SFVEC3D( 0.9, 0.9, 0.9 );
+    m_CopperColor        = SFVEC3D( 0.75, 0.61, 0.23 );
 }
 
 
@@ -187,8 +196,7 @@ bool CINFO3D_VISU::Is3DLayerEnabled( PCB_LAYER_ID aLayer ) const
 
     default:
         // the layer is an internal copper layer, used the visibility
-        if( GetFlag( FL_SHOW_BOARD_BODY ) &&
-            (m_render_engine == RENDER_ENGINE_OPENGL_LEGACY) )
+        if( GetFlag( FL_SHOW_BOARD_BODY ) && ( m_render_engine == RENDER_ENGINE::OPENGL_LEGACY ) )
         {
             // Do not render internal layers if it is overlap with the board
             // (on OpenGL render)
@@ -243,37 +251,20 @@ int CINFO3D_VISU::GetCopperThicknessBIU() const
     return COPPER_THICKNESS;
 }
 
-// Constant factors used for number of segments approximation calcs
-#define MIN_SEG_PER_CIRCLE 12
-#define MAX_SEG_PER_CIRCLE 48
-
-#define SEG_MIN_FACTOR_BIU ( 0.10f * IU_PER_MM )
-#define SEG_MAX_FACTOR_BIU ( 6.00f * IU_PER_MM )
-
-
 unsigned int CINFO3D_VISU::GetNrSegmentsCircle( float aDiameter3DU ) const
 {
     wxASSERT( aDiameter3DU > 0.0f );
 
-    unsigned int result = mapf( aDiameter3DU,
-                                m_calc_seg_min_factor3DU, m_calc_seg_max_factor3DU,
-                                (float)MIN_SEG_PER_CIRCLE, (float)MAX_SEG_PER_CIRCLE );
-    wxASSERT( result > 1 );
-
-    return result;
+    return GetNrSegmentsCircle( (int)( aDiameter3DU / m_biuTo3Dunits ) );
 }
 
 
-unsigned int CINFO3D_VISU::GetNrSegmentsCircle( int aDiameterBUI ) const
+unsigned int CINFO3D_VISU::GetNrSegmentsCircle( int aDiameterBIU ) const
 {
-    wxASSERT( aDiameterBUI > 0 );
+    wxASSERT( aDiameterBIU > 0 );
 
-    unsigned int result = mapf( (float)aDiameterBUI,
-                                (float)SEG_MIN_FACTOR_BIU, (float)SEG_MAX_FACTOR_BIU,
-                                (float)MIN_SEG_PER_CIRCLE, (float)MAX_SEG_PER_CIRCLE );
-    wxASSERT( result > 1 );
-
-    return result;
+    // Require at least 3 segments for a circle
+    return std::max( GetArcToSegmentCount( aDiameterBIU / 2, ARC_HIGH_DEF, 360.0 ), 3 );
 }
 
 
@@ -281,11 +272,11 @@ double CINFO3D_VISU::GetCircleCorrectionFactor( int aNrSides ) const
 {
     wxASSERT( aNrSides >= 3 );
 
-    return 1.0 / cos( M_PI / ( (double)aNrSides * 2.0 ) );
+    return GetCircletoPolyCorrectionFactor( aNrSides );
 }
 
 
-void CINFO3D_VISU::InitSettings( REPORTER *aStatusTextReporter )
+void CINFO3D_VISU::InitSettings( REPORTER* aStatusTextReporter, REPORTER* aWarningTextReporter )
 {
     wxLogTrace( m_logTrace, wxT( "CINFO3D_VISU::InitSettings" ) );
 
@@ -317,10 +308,6 @@ void CINFO3D_VISU::InitSettings( REPORTER *aStatusTextReporter )
 
     // Calculate the convertion to apply to all positions.
     m_biuTo3Dunits = RANGE_SCALE_3D / std::max( m_boardSize.x, m_boardSize.y );
-
-    // Calculate factors for cicle segment approximation
-    m_calc_seg_min_factor3DU = (float)( SEG_MIN_FACTOR_BIU * m_biuTo3Dunits );
-    m_calc_seg_max_factor3DU = (float)( SEG_MAX_FACTOR_BIU * m_biuTo3Dunits );
 
     m_epoxyThickness3DU = m_board->GetDesignSettings().GetBoardThickness() *
                           m_biuTo3Dunits;
@@ -436,7 +423,7 @@ void CINFO3D_VISU::InitSettings( REPORTER *aStatusTextReporter )
     boardMin.z = m_layerZcoordTop[B_Adhes];
     boardMax.z = m_layerZcoordTop[F_Adhes];
 
-    m_boardBoudingBox = CBBOX( boardMin, boardMax );
+    m_boardBoundingBox = CBBOX( boardMin, boardMax );
 
 #ifdef PRINT_STATISTICS_3D_VIEWER
     unsigned stats_startCreateBoardPolyTime = GetRunningMicroSecs();
@@ -445,7 +432,10 @@ void CINFO3D_VISU::InitSettings( REPORTER *aStatusTextReporter )
     if( aStatusTextReporter )
         aStatusTextReporter->Report( _( "Build board body" ) );
 
-    createBoardPolygon();
+    if( !createBoardPolygon() )
+        aWarningTextReporter->Report( _( "Warning: Board outline is not closed" ) );
+    else
+        aWarningTextReporter->Report( wxEmptyString );
 
 #ifdef PRINT_STATISTICS_3D_VIEWER
     unsigned stats_stopCreateBoardPolyTime = GetRunningMicroSecs();
@@ -470,23 +460,13 @@ void CINFO3D_VISU::InitSettings( REPORTER *aStatusTextReporter )
 }
 
 
-void CINFO3D_VISU::createBoardPolygon()
+bool CINFO3D_VISU::createBoardPolygon()
 {
     m_board_poly.RemoveAllContours();
 
     wxString errmsg;
 
-    if( !m_board->GetBoardPolygonOutlines( m_board_poly, /*allLayerHoles,*/ &errmsg ) )
-    {
-        errmsg.append( wxT( "\n\n" ) );
-        errmsg.append( _( "Cannot determine the board outline." ) );
-        wxLogMessage( errmsg );
-    }
-
-    // Be sure the polygon is strictly simple to avoid issues.
-    m_board_poly.Simplify( SHAPE_POLY_SET::PM_STRICTLY_SIMPLE );
-
-    Polygon_Calc_BBox_3DU( m_board_poly, m_board2dBBox3DU, m_biuTo3Dunits );
+    return m_board->GetBoardPolygonOutlines( m_board_poly, &errmsg );
 }
 
 
@@ -513,9 +493,9 @@ void CINFO3D_VISU::CameraSetType( CAMERA_TYPE aCameraType )
 {
     switch( aCameraType )
     {
-    case CAMERA_TRACKBALL:
+    case CAMERA_TYPE::TRACKBALL:
         m_currentCamera = m_trackBallCamera;
-    break;
+        break;
 
     default:
         wxLogMessage( wxT( "CINFO3D_VISU::CameraSetType() error: unknown camera type %d" ),
@@ -529,7 +509,7 @@ SFVEC3F CINFO3D_VISU::GetLayerColor( PCB_LAYER_ID aLayerId ) const
 {
     wxASSERT( aLayerId < PCB_LAYER_ID_COUNT );
 
-    const COLOR4D color = m_board->Colors().GetLayerColor( aLayerId );
+    const COLOR4D color = m_colors->GetColor( aLayerId );
 
     return SFVEC3F( color.r, color.g, color.b );
 }
@@ -537,7 +517,7 @@ SFVEC3F CINFO3D_VISU::GetLayerColor( PCB_LAYER_ID aLayerId ) const
 
 SFVEC3F CINFO3D_VISU::GetItemColor( int aItemId ) const
 {
-    return GetColor( m_board->Colors().GetItemColor( aItemId ) );
+    return GetColor( m_colors->GetColor( aItemId ) );
 }
 
 

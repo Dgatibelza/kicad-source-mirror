@@ -25,6 +25,8 @@
 #include <vector>
 #include <stack>
 
+#include <math/box2.h>
+
 #include "pns_optimizer.h"
 #include "pns_routing_settings.h"
 #include "pns_algo_base.h"
@@ -38,7 +40,7 @@ class NODE;
 class ROUTER;
 
 /**
- * Class SHOVE
+ * SHOVE
  *
  * The actual Push and Shove algorithm.
  */
@@ -67,9 +69,8 @@ public:
     SHOVE_STATUS ShoveLines( const LINE& aCurrentHead );
     SHOVE_STATUS ShoveMultiLines( const ITEM_SET& aHeadSet );
 
-    SHOVE_STATUS ShoveDraggingVia( VIA* aVia, const VECTOR2I& aWhere, VIA** aNewVia );
-    SHOVE_STATUS ProcessSingleLine( LINE& aCurrent, LINE& aObstacle,
-                                    LINE& aShoved );
+    SHOVE_STATUS ShoveDraggingVia( const VIA_HANDLE aOldVia, const VECTOR2I& aWhere, VIA_HANDLE& aNewVia );
+    SHOVE_STATUS ProcessSingleLine( LINE& aCurrent, LINE& aObstacle, LINE& aShoved );
 
     void ForceClearance ( bool aEnabled, int aClearance )
     {
@@ -85,56 +86,61 @@ public:
 
     void SetInitialLine( LINE& aInitial );
 
+    bool AddLockedSpringbackNode( NODE* aNode );
+    void UnlockSpringbackNode( NODE* aNode );
+    bool RewindSpringbackTo( NODE* aNode );
+
 private:
     typedef std::vector<SHAPE_LINE_CHAIN> HULL_SET;
-    typedef boost::optional<LINE> OPT_LINE;
+    typedef OPT<LINE> OPT_LINE;
     typedef std::pair<LINE, LINE> LINE_PAIR;
     typedef std::vector<LINE_PAIR> LINE_PAIR_VEC;
 
     struct SPRINGBACK_TAG
     {
         int64_t m_length;
-        int m_segments;
+        VIA_HANDLE m_draggedVia;
         VECTOR2I m_p;
         NODE* m_node;
-        ITEM_SET m_headItems;
-        COST_ESTIMATOR m_cost;
         OPT_BOX2I m_affectedArea;
+        int m_seq;
+        bool m_locked;
     };
 
     SHOVE_STATUS processHullSet( LINE& aCurrent, LINE& aObstacle,
                                  LINE& aShoved, const HULL_SET& hulls );
 
-    bool reduceSpringback( const ITEM_SET& aHeadItems );
-    bool pushSpringback( NODE* aNode, const ITEM_SET& aHeadItems,
-                                const COST_ESTIMATOR& aCost, const OPT_BOX2I& aAffectedArea );
+    NODE* reduceSpringback( const ITEM_SET& aHeadSet, VIA_HANDLE& aDraggedVia );
+
+    bool pushSpringback( NODE* aNode, const OPT_BOX2I& aAffectedArea, VIA* aDraggedVia );
 
     SHOVE_STATUS walkaroundLoneVia( LINE& aCurrent, LINE& aObstacle, LINE& aShoved );
     bool checkBumpDirection( const LINE& aCurrent, const LINE& aShoved ) const;
 
+    SHOVE_STATUS onCollidingArc( LINE& aCurrent, ARC* aObstacleArc );
     SHOVE_STATUS onCollidingLine( LINE& aCurrent, LINE& aObstacle );
     SHOVE_STATUS onCollidingSegment( LINE& aCurrent, SEGMENT* aObstacleSeg );
     SHOVE_STATUS onCollidingSolid( LINE& aCurrent, ITEM* aObstacle );
     SHOVE_STATUS onCollidingVia( ITEM* aCurrent, VIA* aObstacleVia );
     SHOVE_STATUS onReverseCollidingVia( LINE& aCurrent, VIA* aObstacleVia );
-    SHOVE_STATUS pushVia( VIA* aVia, const VECTOR2I& aForce, int aCurrentRank, bool aDryRun = false );
+    SHOVE_STATUS pushOrShoveVia( VIA* aVia, const VECTOR2I& aForce, int aCurrentRank );
 
     OPT_BOX2I totalAffectedArea() const;
 
-    void unwindStack( SEGMENT* aSeg );
-    void unwindStack( ITEM* aItem );
+    void unwindLineStack( LINKED_ITEM* aSeg );
+    void unwindLineStack( ITEM* aItem );
 
     void runOptimizer( NODE* aNode );
 
-    bool pushLine( const LINE& aL, bool aKeepCurrentOnTop = false );
-    void popLine();
+    bool pushLineStack( const LINE& aL, bool aKeepCurrentOnTop = false );
+    void popLineStack();
 
-    LINE assembleLine( const SEGMENT* aSeg, int* aIndex = NULL );
+    LINE assembleLine( const LINKED_ITEM* aSeg, int* aIndex = NULL );
 
     void replaceItems( ITEM* aOld, std::unique_ptr< ITEM > aNew );
     void replaceLine( LINE& aOld, LINE& aNew );
 
-    OPT_BOX2I                   m_affectedAreaSum;
+    OPT_BOX2I                   m_affectedArea;
 
     SHOVE_STATUS shoveIteration( int aIter );
     SHOVE_STATUS shoveMainLoop();
@@ -147,12 +153,12 @@ private:
 
     NODE*                       m_root;
     NODE*                       m_currentNode;
+    int                         m_restrictSpringbackTagId;
 
     OPT_LINE                    m_newHead;
 
     LOGGER                      m_logger;
     VIA*                        m_draggedVia;
-    ITEM_SET                    m_draggedViaHeadSet;
 
     int                         m_iter;
     int m_forceClearance;

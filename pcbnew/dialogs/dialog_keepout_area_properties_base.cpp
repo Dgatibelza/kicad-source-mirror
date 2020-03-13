@@ -1,100 +1,110 @@
 ///////////////////////////////////////////////////////////////////////////
-// C++ code generated with wxFormBuilder (version Aug  4 2017)
+// C++ code generated with wxFormBuilder (version v3.8.0)
 // http://www.wxformbuilder.org/
 //
-// PLEASE DO "NOT" EDIT THIS FILE!
+// PLEASE DO *NOT* EDIT THIS FILE!
 ///////////////////////////////////////////////////////////////////////////
 
 #include "dialog_keepout_area_properties_base.h"
 
 ///////////////////////////////////////////////////////////////////////////
 
-BEGIN_EVENT_TABLE( DIALOG_KEEPOUT_AREA_PROPERTIES_BASE, DIALOG_SHIM )
-	EVT_DATAVIEW_ITEM_VALUE_CHANGED( wxID_ANY, DIALOG_KEEPOUT_AREA_PROPERTIES_BASE::_wxFB_OnLayerSelection )
-END_EVENT_TABLE()
-
 DIALOG_KEEPOUT_AREA_PROPERTIES_BASE::DIALOG_KEEPOUT_AREA_PROPERTIES_BASE( wxWindow* parent, wxWindowID id, const wxString& title, const wxPoint& pos, const wxSize& size, long style ) : DIALOG_SHIM( parent, id, title, pos, size, style )
 {
-	this->SetSizeHints( wxSize( 500,-1 ), wxDefaultSize );
-	
-	wxBoxSizer* m_MainSizer;
-	m_MainSizer = new wxBoxSizer( wxVERTICAL );
-	
-	wxBoxSizer* m_UpperSizer;
-	m_UpperSizer = new wxBoxSizer( wxHORIZONTAL );
-	
-	wxBoxSizer* m_layersListSizer;
-	m_layersListSizer = new wxBoxSizer( wxVERTICAL );
-	
-	m_staticTextLayerSelection = new wxStaticText( this, wxID_ANY, _("Keepout Area Layers:"), wxDefaultPosition, wxDefaultSize, 0 );
+	this->SetSizeHints( wxSize( -1,-1 ), wxDefaultSize );
+
+	wxBoxSizer* bMainSizer;
+	bMainSizer = new wxBoxSizer( wxVERTICAL );
+
+	wxBoxSizer* bUpperSizer;
+	bUpperSizer = new wxBoxSizer( wxHORIZONTAL );
+
+	wxBoxSizer* bLayersListSizer;
+	bLayersListSizer = new wxBoxSizer( wxVERTICAL );
+
+	m_staticTextLayerSelection = new wxStaticText( this, wxID_ANY, _("Layers:"), wxDefaultPosition, wxDefaultSize, 0 );
 	m_staticTextLayerSelection->Wrap( -1 );
-	m_layersListSizer->Add( m_staticTextLayerSelection, 0, wxTOP|wxRIGHT|wxLEFT, 5 );
-	
-	m_layers = new wxDataViewListCtrl( this, wxID_ANY, wxDefaultPosition, wxDefaultSize, wxDV_HORIZ_RULES|wxDV_NO_HEADER );
-	m_layersListSizer->Add( m_layers, 1, wxALL|wxEXPAND, 5 );
-	
-	
-	m_UpperSizer->Add( m_layersListSizer, 1, wxEXPAND, 5 );
-	
+	bLayersListSizer->Add( m_staticTextLayerSelection, 0, wxTOP|wxRIGHT|wxLEFT, 5 );
+
+	m_layers = new wxDataViewListCtrl( this, wxID_ANY, wxDefaultPosition, wxDefaultSize, wxDV_NO_HEADER|wxBORDER_SIMPLE );
+	bLayersListSizer->Add( m_layers, 1, wxEXPAND|wxBOTTOM|wxRIGHT|wxLEFT, 5 );
+
+
+	bUpperSizer->Add( bLayersListSizer, 1, wxEXPAND|wxBOTTOM|wxRIGHT|wxLEFT, 5 );
+
 	wxBoxSizer* bSizerRight;
 	bSizerRight = new wxBoxSizer( wxVERTICAL );
-	
-	m_staticTextprops = new wxStaticText( this, wxID_ANY, _("Properties:"), wxDefaultPosition, wxDefaultSize, 0 );
-	m_staticTextprops->Wrap( -1 );
-	bSizerRight->Add( m_staticTextprops, 0, wxTOP|wxRIGHT|wxLEFT, 5 );
-	
-	wxString m_OrientEdgesOptChoices[] = { _("Any orientation"), _("180, 90, and 45 degrees") };
-	int m_OrientEdgesOptNChoices = sizeof( m_OrientEdgesOptChoices ) / sizeof( wxString );
-	m_OrientEdgesOpt = new wxRadioBox( this, wxID_ANY, _("Zone Edge Orientation:"), wxDefaultPosition, wxDefaultSize, m_OrientEdgesOptNChoices, m_OrientEdgesOptChoices, 1, wxRA_SPECIFY_COLS );
-	m_OrientEdgesOpt->SetSelection( 1 );
-	bSizerRight->Add( m_OrientEdgesOpt, 0, wxEXPAND|wxBOTTOM|wxRIGHT|wxLEFT, 5 );
-	
-	wxString m_OutlineAppearanceCtrlChoices[] = { _("Line"), _("Hatched Outline"), _("Full Hatched") };
+
+	m_cbTracksCtrl = new wxCheckBox( this, wxID_ANY, _("Keep out tracks"), wxDefaultPosition, wxDefaultSize, 0 );
+	bSizerRight->Add( m_cbTracksCtrl, 0, wxTOP|wxRIGHT|wxLEFT|wxEXPAND, 5 );
+
+	m_cbViasCtrl = new wxCheckBox( this, wxID_ANY, _("Keep out vias"), wxDefaultPosition, wxDefaultSize, 0 );
+	bSizerRight->Add( m_cbViasCtrl, 0, wxTOP|wxRIGHT|wxLEFT|wxEXPAND, 5 );
+
+	m_cbCopperPourCtrl = new wxCheckBox( this, wxID_ANY, _("Keep out copper pours"), wxDefaultPosition, wxDefaultSize, 0 );
+	bSizerRight->Add( m_cbCopperPourCtrl, 0, wxALL|wxEXPAND, 5 );
+
+
+	bSizerRight->Add( 0, 0, 0, wxEXPAND|wxTOP|wxBOTTOM, 5 );
+
+	m_cbConstrainCtrl = new wxCheckBox( this, wxID_ANY, _("Constrain outline to H, V and 45 deg"), wxDefaultPosition, wxDefaultSize, 0 );
+	bSizerRight->Add( m_cbConstrainCtrl, 0, wxALL, 5 );
+
+
+	bSizerRight->Add( 0, 0, 0, wxTOP|wxBOTTOM, 5 );
+
+	wxBoxSizer* bSizerLowerRight;
+	bSizerLowerRight = new wxBoxSizer( wxHORIZONTAL );
+
+	m_staticTextStyle = new wxStaticText( this, wxID_ANY, _("Outline display:"), wxDefaultPosition, wxDefaultSize, 0 );
+	m_staticTextStyle->Wrap( -1 );
+	bSizerLowerRight->Add( m_staticTextStyle, 0, wxALIGN_CENTER_VERTICAL|wxRIGHT|wxLEFT, 5 );
+
+	wxString m_OutlineAppearanceCtrlChoices[] = { _("Line"), _("Hatched"), _("Fully hatched") };
 	int m_OutlineAppearanceCtrlNChoices = sizeof( m_OutlineAppearanceCtrlChoices ) / sizeof( wxString );
-	m_OutlineAppearanceCtrl = new wxRadioBox( this, wxID_ANY, _("Outline Appearence:"), wxDefaultPosition, wxDefaultSize, m_OutlineAppearanceCtrlNChoices, m_OutlineAppearanceCtrlChoices, 1, wxRA_SPECIFY_COLS );
-	m_OutlineAppearanceCtrl->SetSelection( 1 );
-	bSizerRight->Add( m_OutlineAppearanceCtrl, 0, wxALL|wxEXPAND, 5 );
-	
-	wxStaticBoxSizer* sbSizerCutoutOpts;
-	sbSizerCutoutOpts = new wxStaticBoxSizer( new wxStaticBox( this, wxID_ANY, _("Keepout Options:") ), wxVERTICAL );
-	
-	m_cbTracksCtrl = new wxCheckBox( sbSizerCutoutOpts->GetStaticBox(), wxID_ANY, _("No tracks"), wxDefaultPosition, wxDefaultSize, 0 );
-	sbSizerCutoutOpts->Add( m_cbTracksCtrl, 0, wxTOP|wxRIGHT|wxLEFT|wxEXPAND, 5 );
-	
-	m_cbViasCtrl = new wxCheckBox( sbSizerCutoutOpts->GetStaticBox(), wxID_ANY, _("No vias"), wxDefaultPosition, wxDefaultSize, 0 );
-	sbSizerCutoutOpts->Add( m_cbViasCtrl, 0, wxTOP|wxRIGHT|wxLEFT|wxEXPAND, 5 );
-	
-	m_cbCopperPourCtrl = new wxCheckBox( sbSizerCutoutOpts->GetStaticBox(), wxID_ANY, _("No copper pour"), wxDefaultPosition, wxDefaultSize, 0 );
-	sbSizerCutoutOpts->Add( m_cbCopperPourCtrl, 0, wxALL|wxEXPAND, 5 );
-	
-	
-	bSizerRight->Add( sbSizerCutoutOpts, 0, wxEXPAND|wxALL, 5 );
-	
-	
-	m_UpperSizer->Add( bSizerRight, 0, wxEXPAND, 5 );
-	
-	
-	m_MainSizer->Add( m_UpperSizer, 1, wxEXPAND, 5 );
-	
+	m_OutlineAppearanceCtrl = new wxChoice( this, wxID_ANY, wxDefaultPosition, wxDefaultSize, m_OutlineAppearanceCtrlNChoices, m_OutlineAppearanceCtrlChoices, 0 );
+	m_OutlineAppearanceCtrl->SetSelection( 0 );
+	bSizerLowerRight->Add( m_OutlineAppearanceCtrl, 0, wxALL, 5 );
+
+
+	bSizerRight->Add( bSizerLowerRight, 0, wxEXPAND, 5 );
+
+
+	bUpperSizer->Add( bSizerRight, 0, wxALL|wxEXPAND, 10 );
+
+
+	bMainSizer->Add( bUpperSizer, 1, wxEXPAND|wxTOP|wxRIGHT|wxLEFT, 5 );
+
 	m_staticline1 = new wxStaticLine( this, wxID_ANY, wxDefaultPosition, wxDefaultSize, wxLI_HORIZONTAL );
-	m_MainSizer->Add( m_staticline1, 0, wxEXPAND | wxALL, 5 );
-	
+	bMainSizer->Add( m_staticline1, 0, wxEXPAND|wxTOP|wxRIGHT|wxLEFT, 5 );
+
 	m_sdbSizerButtons = new wxStdDialogButtonSizer();
 	m_sdbSizerButtonsOK = new wxButton( this, wxID_OK );
 	m_sdbSizerButtons->AddButton( m_sdbSizerButtonsOK );
 	m_sdbSizerButtonsCancel = new wxButton( this, wxID_CANCEL );
 	m_sdbSizerButtons->AddButton( m_sdbSizerButtonsCancel );
 	m_sdbSizerButtons->Realize();
-	
-	m_MainSizer->Add( m_sdbSizerButtons, 0, wxEXPAND|wxALL, 5 );
-	
-	
-	this->SetSizer( m_MainSizer );
+
+	bMainSizer->Add( m_sdbSizerButtons, 0, wxEXPAND|wxALL, 5 );
+
+
+	this->SetSizer( bMainSizer );
 	this->Layout();
-	
+	bMainSizer->Fit( this );
+
 	this->Centre( wxBOTH );
+
+	// Connect Events
+	m_layers->Connect( wxEVT_COMMAND_DATAVIEW_ITEM_VALUE_CHANGED, wxDataViewEventHandler( DIALOG_KEEPOUT_AREA_PROPERTIES_BASE::OnLayerSelection ), NULL, this );
+	m_layers->Connect( wxEVT_RIGHT_DOWN, wxMouseEventHandler( DIALOG_KEEPOUT_AREA_PROPERTIES_BASE::onLayerListRightDown ), NULL, this );
+	m_layers->Connect( wxEVT_SIZE, wxSizeEventHandler( DIALOG_KEEPOUT_AREA_PROPERTIES_BASE::OnSizeLayersList ), NULL, this );
 }
 
 DIALOG_KEEPOUT_AREA_PROPERTIES_BASE::~DIALOG_KEEPOUT_AREA_PROPERTIES_BASE()
 {
+	// Disconnect Events
+	m_layers->Disconnect( wxEVT_COMMAND_DATAVIEW_ITEM_VALUE_CHANGED, wxDataViewEventHandler( DIALOG_KEEPOUT_AREA_PROPERTIES_BASE::OnLayerSelection ), NULL, this );
+	m_layers->Disconnect( wxEVT_RIGHT_DOWN, wxMouseEventHandler( DIALOG_KEEPOUT_AREA_PROPERTIES_BASE::onLayerListRightDown ), NULL, this );
+	m_layers->Disconnect( wxEVT_SIZE, wxSizeEventHandler( DIALOG_KEEPOUT_AREA_PROPERTIES_BASE::OnSizeLayersList ), NULL, this );
+
 }

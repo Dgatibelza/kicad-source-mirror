@@ -1,8 +1,8 @@
 ///////////////////////////////////////////////////////////////////////////
-// C++ code generated with wxFormBuilder (version Jun  5 2014)
+// C++ code generated with wxFormBuilder (version Nov 22 2017)
 // http://www.wxformbuilder.org/
 //
-// PLEASE DO "NOT" EDIT THIS FILE!
+// PLEASE DO *NOT* EDIT THIS FILE!
 ///////////////////////////////////////////////////////////////////////////
 
 #include "wx_html_report_panel.h"
@@ -21,35 +21,34 @@ DIALOG_SYMBOL_REMAP_BASE::DIALOG_SYMBOL_REMAP_BASE( wxWindow* parent, wxWindowID
 	wxBoxSizer* bSizer2;
 	bSizer2 = new wxBoxSizer( wxHORIZONTAL );
 	
-	m_staticText1 = new wxStaticText( this, wxID_ANY, wxT("This schematic currently uses the symbol library look\nup method for loading schematic symbols.  KiCad will\nattempt to map the existing symbols to use the new\nsymbol library table.  If you choose to choose to skip\nthis step, you will be responsible for manually assigning\nsymbols."), wxDefaultPosition, wxDefaultSize, 0 );
-	m_staticText1->Wrap( -1 );
-	bSizer2->Add( m_staticText1, 0, wxALL|wxEXPAND, 5 );
+	m_htmlCtrl = new wxHtmlWindow( this, wxID_ANY, wxDefaultPosition, wxDefaultSize, wxHW_SCROLLBAR_AUTO );
+	bSizer2->Add( m_htmlCtrl, 4, wxALL|wxEXPAND, 5 );
 	
 	wxBoxSizer* bSizer3;
 	bSizer3 = new wxBoxSizer( wxVERTICAL );
 	
-	m_buttonRemp = new wxButton( this, wxID_ANY, wxT("Remap Symbols"), wxDefaultPosition, wxDefaultSize, 0 );
-	bSizer3->Add( m_buttonRemp, 0, wxALL|wxEXPAND, 5 );
+	m_buttonRemap = new wxButton( this, wxID_ANY, _("Remap Symbols"), wxDefaultPosition, wxDefaultSize, 0 );
+	bSizer3->Add( m_buttonRemap, 0, wxALL|wxEXPAND, 5 );
 	
-	m_buttonClose = new wxButton( this, wxID_CANCEL, wxT("Close"), wxDefaultPosition, wxDefaultSize, 0 );
+	m_buttonClose = new wxButton( this, wxID_CANCEL, _("Close"), wxDefaultPosition, wxDefaultSize, 0 );
 	bSizer3->Add( m_buttonClose, 0, wxALL|wxEXPAND, 5 );
 	
 	
 	bSizer2->Add( bSizer3, 1, wxEXPAND, 5 );
 	
 	
-	bSizer1->Add( bSizer2, 0, wxEXPAND|wxLEFT|wxRIGHT|wxTOP, 5 );
+	bSizer1->Add( bSizer2, 3, wxEXPAND|wxLEFT|wxRIGHT|wxTOP, 5 );
 	
 	wxBoxSizer* bSizer4;
 	bSizer4 = new wxBoxSizer( wxVERTICAL );
 	
 	m_messagePanel = new WX_HTML_REPORT_PANEL( this, wxID_ANY, wxDefaultPosition, wxDefaultSize, wxTAB_TRAVERSAL );
-	m_messagePanel->SetMinSize( wxSize( -1,150 ) );
+	m_messagePanel->SetMinSize( wxSize( -1,200 ) );
 	
 	bSizer4->Add( m_messagePanel, 1, wxEXPAND | wxALL, 5 );
 	
 	
-	bSizer1->Add( bSizer4, 1, wxEXPAND, 5 );
+	bSizer1->Add( bSizer4, 5, wxEXPAND, 5 );
 	
 	
 	this->SetSizer( bSizer1 );
@@ -59,12 +58,14 @@ DIALOG_SYMBOL_REMAP_BASE::DIALOG_SYMBOL_REMAP_BASE( wxWindow* parent, wxWindowID
 	this->Centre( wxBOTH );
 	
 	// Connect Events
-	m_buttonRemp->Connect( wxEVT_COMMAND_BUTTON_CLICKED, wxCommandEventHandler( DIALOG_SYMBOL_REMAP_BASE::OnRemapSymbols ), NULL, this );
+	m_buttonRemap->Connect( wxEVT_COMMAND_BUTTON_CLICKED, wxCommandEventHandler( DIALOG_SYMBOL_REMAP_BASE::OnRemapSymbols ), NULL, this );
+	m_buttonRemap->Connect( wxEVT_UPDATE_UI, wxUpdateUIEventHandler( DIALOG_SYMBOL_REMAP_BASE::OnUpdateUIRemapButton ), NULL, this );
 }
 
 DIALOG_SYMBOL_REMAP_BASE::~DIALOG_SYMBOL_REMAP_BASE()
 {
 	// Disconnect Events
-	m_buttonRemp->Disconnect( wxEVT_COMMAND_BUTTON_CLICKED, wxCommandEventHandler( DIALOG_SYMBOL_REMAP_BASE::OnRemapSymbols ), NULL, this );
+	m_buttonRemap->Disconnect( wxEVT_COMMAND_BUTTON_CLICKED, wxCommandEventHandler( DIALOG_SYMBOL_REMAP_BASE::OnRemapSymbols ), NULL, this );
+	m_buttonRemap->Disconnect( wxEVT_UPDATE_UI, wxUpdateUIEventHandler( DIALOG_SYMBOL_REMAP_BASE::OnUpdateUIRemapButton ), NULL, this );
 	
 }

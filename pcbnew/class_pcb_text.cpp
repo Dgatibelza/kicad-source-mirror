@@ -29,19 +29,20 @@
  */
 
 #include <fctsys.h>
-#include <wxstruct.h>
 #include <gr_basic.h>
 #include <base_struct.h>
-#include <drawtxt.h>
+#include <gr_text.h>
 #include <kicad_string.h>
 #include <trigo.h>
 #include <richio.h>
-#include <class_drawpanel.h>
 #include <macros.h>
-#include <wxPcbStruct.h>
+#include <pcb_edit_frame.h>
 #include <msgpanel.h>
 #include <base_units.h>
 #include <bitmaps.h>
+#include <pgm_base.h>
+#include <settings/color_settings.h>
+#include <settings/settings_manager.h>
 
 #include <class_board.h>
 #include <class_pcb_text.h>
@@ -66,81 +67,53 @@ void TEXTE_PCB::SetTextAngle( double aAngle )
 }
 
 
-void TEXTE_PCB::Draw( EDA_DRAW_PANEL* panel, wxDC* DC,
-                      GR_DRAWMODE DrawMode, const wxPoint& offset )
+void TEXTE_PCB::Print( PCB_BASE_FRAME* aFrame, wxDC* DC, const wxPoint& offset )
 {
-    BOARD* brd = GetBoard();
+   BOARD* brd = GetBoard();
 
     if( brd->IsLayerVisible( m_Layer ) == false )
         return;
 
-    auto frame = static_cast<PCB_EDIT_FRAME*> ( panel->GetParent() );
-    auto color = frame->Settings().Colors().GetLayerColor( m_Layer );
+    auto            color      = Pgm().GetSettingsManager().GetColorSettings()->GetColor( m_Layer );
+    EDA_DRAW_MODE_T fillmode   = FILLED;
+    auto&           displ_opts = aFrame->GetDisplayOptions();
 
-    EDA_DRAW_MODE_T fillmode = FILLED;
-    DISPLAY_OPTIONS* displ_opts =
-        panel ? (DISPLAY_OPTIONS*)panel->GetDisplayOptions() : NULL;
-
-    if( displ_opts && displ_opts->m_DisplayDrawItemsFill == SKETCH )
+    if( displ_opts.m_DisplayDrawItemsFill == SKETCH )
         fillmode = SKETCH;
 
-    // shade text if high contrast mode is active
-    if( ( DrawMode & GR_ALLOW_HIGHCONTRAST ) && displ_opts && displ_opts->m_ContrastModeDisplay )
-    {
-        PCB_LAYER_ID curr_layer = ( (PCB_SCREEN*) panel->GetScreen() )->m_Active_Layer;
-
-        if( !IsOnLayer( curr_layer ) )
-            color = COLOR4D( DARKDARKGRAY );
-    }
-
-    COLOR4D anchor_color = COLOR4D::UNSPECIFIED;
-
-    if( brd->IsElementVisible( LAYER_ANCHOR ) )
-        anchor_color = frame->Settings().Colors().GetItemColor( LAYER_ANCHOR );
-
-    EDA_RECT* clipbox = panel? panel->GetClipBox() : NULL;
-    EDA_TEXT::Draw( clipbox, DC, offset, color,
-                    DrawMode, fillmode, anchor_color );
-
-    // Enable these line to draw the bounding box (debug tests purposes only)
-#if 0
-    {
-        EDA_RECT BoundaryBox = GetBoundingBox();
-        GRRect( clipbox, DC, BoundaryBox, 0, BROWN );
-    }
-#endif
+    EDA_TEXT::Print( DC, offset, color, fillmode );
 }
 
 
-void TEXTE_PCB::GetMsgPanelInfo( std::vector< MSG_PANEL_ITEM >& aList )
+void TEXTE_PCB::GetMsgPanelInfo( EDA_UNITS aUnits, std::vector<MSG_PANEL_ITEM>& aList )
 {
     wxString    msg;
 
     wxCHECK_RET( m_Parent != NULL, wxT( "TEXTE_PCB::GetMsgPanelInfo() m_Parent is NULL." ) );
 
     if( m_Parent->Type() == PCB_DIMENSION_T )
-        aList.push_back( MSG_PANEL_ITEM( _( "Dimension" ), GetShownText(), DARKGREEN ) );
+        aList.emplace_back( _( "Dimension" ), GetShownText(), DARKGREEN );
     else
-        aList.push_back( MSG_PANEL_ITEM( _( "PCB Text" ), GetShownText(), DARKGREEN ) );
+        aList.emplace_back( _( "PCB Text" ), GetShownText(), DARKGREEN );
 
-    aList.push_back( MSG_PANEL_ITEM( _( "Layer" ), GetLayerName(), BLUE ) );
+    aList.emplace_back( _( "Layer" ), GetLayerName(), BLUE );
 
     if( !IsMirrored() )
-        aList.push_back( MSG_PANEL_ITEM( _( "Mirror" ), _( "No" ), DARKGREEN ) );
+        aList.emplace_back( _( "Mirror" ), _( "No" ), DARKGREEN );
     else
-        aList.push_back( MSG_PANEL_ITEM( _( "Mirror" ), _( "Yes" ), DARKGREEN ) );
+        aList.emplace_back( _( "Mirror" ), _( "Yes" ), DARKGREEN );
 
     msg.Printf( wxT( "%.1f" ), GetTextAngle() / 10.0 );
-    aList.push_back( MSG_PANEL_ITEM( _( "Angle" ), msg, DARKGREEN ) );
+    aList.emplace_back( _( "Angle" ), msg, DARKGREEN );
 
-    msg = ::CoordinateToString( GetThickness() );
-    aList.push_back( MSG_PANEL_ITEM( _( "Thickness" ), msg, MAGENTA ) );
+    msg = MessageTextFromValue( aUnits, GetThickness() );
+    aList.emplace_back( _( "Thickness" ), msg, MAGENTA );
 
-    msg = ::CoordinateToString( GetTextWidth() );
-    aList.push_back( MSG_PANEL_ITEM( _( "Width" ), msg, RED ) );
+    msg = MessageTextFromValue( aUnits, GetTextWidth() );
+    aList.emplace_back( _( "Width" ), msg, RED );
 
-    msg = ::CoordinateToString( GetTextHeight() );
-    aList.push_back( MSG_PANEL_ITEM( _( "Height" ), msg, RED ) );
+    msg = MessageTextFromValue( aUnits, GetTextHeight() );
+    aList.emplace_back( _( "Height" ), msg, RED );
 }
 
 
@@ -165,25 +138,32 @@ void TEXTE_PCB::Rotate( const wxPoint& aRotCentre, double aAngle )
 }
 
 
-void TEXTE_PCB::Flip( const wxPoint& aCentre )
+void TEXTE_PCB::Flip( const wxPoint& aCentre, bool aFlipLeftRight )
 {
-    SetTextY( aCentre.y - ( GetTextPos().y - aCentre.y ) );
+    if( aFlipLeftRight )
+        SetTextX( aCentre.x - ( GetTextPos().x - aCentre.x ) );
+    else
+        SetTextY( aCentre.y - ( GetTextPos().y - aCentre.y ) );
 
     int copperLayerCount = GetBoard()->GetCopperLayerCount();
 
     SetLayer( FlipLayer( GetLayer(), copperLayerCount ) );
     SetMirrored( !IsMirrored() );
+
+    // adjust justified text for mirroring
+    if( GetHorizJustify() == GR_TEXT_HJUSTIFY_LEFT || GetHorizJustify() == GR_TEXT_HJUSTIFY_RIGHT )
+    {
+        if( ( GetHorizJustify() == GR_TEXT_HJUSTIFY_RIGHT ) == IsMirrored() )
+            SetTextX( GetTextPos().x - GetTextBox().GetWidth() );
+        else
+            SetTextX( GetTextPos().x + GetTextBox().GetWidth() );
+    }
 }
 
 
-wxString TEXTE_PCB::GetSelectMenuText() const
+wxString TEXTE_PCB::GetSelectMenuText( EDA_UNITS aUnits ) const
 {
-    wxString text;
-
-    text.Printf( _( "Pcb Text \"%s\" on %s"),
-                 GetChars ( ShortenedShownText() ), GetChars( GetLayerName() ) );
-
-    return text;
+    return wxString::Format( _( "Pcb Text \"%s\" on %s"), ShortenedShownText(), GetLayerName() );
 }
 
 
@@ -196,4 +176,11 @@ BITMAP_DEF TEXTE_PCB::GetMenuImage() const
 EDA_ITEM* TEXTE_PCB::Clone() const
 {
     return new TEXTE_PCB( *this );
+}
+
+void TEXTE_PCB::SwapData( BOARD_ITEM* aImage )
+{
+    assert( aImage->Type() == PCB_TEXT_T );
+
+    std::swap( *((TEXTE_PCB*) this), *((TEXTE_PCB*) aImage) );
 }

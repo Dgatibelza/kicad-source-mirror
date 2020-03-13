@@ -2,7 +2,7 @@
  * This program source code file is part of KiCad, a free EDA CAD application.
  *
  * Copyright (C) 2006 Jean-Pierre Charras, jaen-pierre.charras@gipsa-lab.inpg.com
- * Copyright (C) 1992-2017 KiCad Developers, see AUTHORS.txt for contributors.
+ * Copyright (C) 1992-2019 KiCad Developers, see AUTHORS.txt for contributors.
  *
  * This program is free software; you can redistribute it and/or
  * modify it under the terms of the GNU General Public License
@@ -22,28 +22,25 @@
  * 51 Franklin Street, Fifth Floor, Boston, MA  02110-1301, USA
  */
 
-/**
- * @file sch_sheet_pin.cpp
- * @brief Implementation of the SCH_SHEET_PIN class.
- */
+#include <algorithm>
 
-#include <fctsys.h>
-#include <gr_basic.h>
-#include <class_drawpanel.h>
-#include <drawtxt.h>
-#include <plot_common.h>
-#include <trigo.h>
-#include <richio.h>
-#include <schframe.h>
 #include <bitmaps.h>
-
+#include <fctsys.h>
 #include <general.h>
-#include <sch_sheet.h>
+#include <geometry/shape_line_chain.h>
+#include <gr_basic.h>
+#include <gr_text.h>
 #include <kicad_string.h>
+#include <plotter.h>
+#include <sch_draw_panel.h>
+#include <sch_edit_frame.h>
+#include <sch_sheet.h>
+#include <trigo.h>
 
 
 SCH_SHEET_PIN::SCH_SHEET_PIN( SCH_SHEET* parent, const wxPoint& pos, const wxString& text ) :
-    SCH_HIERLABEL( pos, text, SCH_SHEET_PIN_T )
+    SCH_HIERLABEL( pos, text, SCH_SHEET_PIN_T ),
+    m_edge( SHEET_UNDEFINED_SIDE )
 {
     SetParent( parent );
     wxASSERT( parent );
@@ -56,7 +53,7 @@ SCH_SHEET_PIN::SCH_SHEET_PIN( SCH_SHEET* parent, const wxPoint& pos, const wxStr
     else
         SetEdge( SHEET_LEFT_SIDE );
 
-    m_shape = NET_INPUT;
+    m_shape      = PINSHEETLABEL_SHAPE::PS_INPUT;
     m_isDangling = true;
     m_number     = 2;
 }
@@ -68,15 +65,10 @@ EDA_ITEM* SCH_SHEET_PIN::Clone() const
 }
 
 
-void SCH_SHEET_PIN::Draw( EDA_DRAW_PANEL* aPanel,
-                          wxDC*           aDC,
-                          const wxPoint&  aOffset,
-                          GR_DRAWMODE     aDraw_mode,
-                          COLOR4D         aColor )
+void SCH_SHEET_PIN::Print( wxDC* aDC, const wxPoint&  aOffset )
 {
-    // The icon selection is handle by the virtual method CreateGraphicShape
-    // called by ::Draw
-    SCH_HIERLABEL::Draw( aPanel, aDC, aOffset, aDraw_mode, aColor );
+    // The icon selection is handle by the virtual method CreateGraphicShape called by ::Print
+    SCH_HIERLABEL::Print( aDC, aOffset );
 }
 
 
@@ -117,7 +109,7 @@ void SCH_SHEET_PIN::SetNumber( int aNumber )
 }
 
 
-void SCH_SHEET_PIN::SetEdge( SCH_SHEET_PIN::SHEET_SIDE aEdge )
+void SCH_SHEET_PIN::SetEdge( SHEET_SIDE aEdge )
 {
     SCH_SHEET* Sheet = GetParent();
 
@@ -128,25 +120,25 @@ void SCH_SHEET_PIN::SetEdge( SCH_SHEET_PIN::SHEET_SIDE aEdge )
     case SHEET_LEFT_SIDE:
         m_edge = aEdge;
         SetTextX( Sheet->m_pos.x );
-        SetLabelSpinStyle( 2 ); // Orientation horiz inverse
+        SetLabelSpinStyle( LABEL_SPIN_STYLE::RIGHT ); // Orientation horiz inverse
         break;
 
     case SHEET_RIGHT_SIDE:
         m_edge = aEdge;
         SetTextX( Sheet->m_pos.x + Sheet->m_size.x );
-        SetLabelSpinStyle( 0 ); // Orientation horiz normal
+        SetLabelSpinStyle( LABEL_SPIN_STYLE::LEFT ); // Orientation horiz normal
         break;
 
     case SHEET_TOP_SIDE:
         m_edge = aEdge;
         SetTextY( Sheet->m_pos.y );
-        SetLabelSpinStyle( 3 ); // Orientation vert BOTTOM
+        SetLabelSpinStyle( LABEL_SPIN_STYLE::BOTTOM ); // Orientation vert BOTTOM
         break;
 
     case SHEET_BOTTOM_SIDE:
         m_edge = aEdge;
         SetTextY( Sheet->m_pos.y + Sheet->m_size.y );
-        SetLabelSpinStyle( 1 ); // Orientation vert UP
+        SetLabelSpinStyle( LABEL_SPIN_STYLE::UP ); // Orientation vert UP
         break;
 
     default:
@@ -155,7 +147,7 @@ void SCH_SHEET_PIN::SetEdge( SCH_SHEET_PIN::SHEET_SIDE aEdge )
 }
 
 
-enum SCH_SHEET_PIN::SHEET_SIDE SCH_SHEET_PIN::GetEdge() const
+enum SHEET_SIDE SCH_SHEET_PIN::GetEdge() const
 {
     return m_edge;
 }
@@ -168,222 +160,57 @@ void SCH_SHEET_PIN::ConstrainOnEdge( wxPoint Pos )
     if( sheet == NULL )
         return;
 
-    wxPoint center = sheet->m_pos + ( sheet->m_size / 2 );
+    int leftSide  = sheet->m_pos.x;
+    int rightSide = sheet->m_pos.x + sheet->m_size.x;
+    int topSide   = sheet->m_pos.y;
+    int botSide   = sheet->m_pos.y + sheet->m_size.y;
 
-    if( m_edge == SHEET_LEFT_SIDE || m_edge == SHEET_RIGHT_SIDE )
+    SHAPE_LINE_CHAIN sheetEdge;
+
+    sheetEdge.Append( leftSide,  topSide );
+    sheetEdge.Append( rightSide, topSide );
+    sheetEdge.Append( rightSide, botSide );
+    sheetEdge.Append( leftSide,  botSide );
+    sheetEdge.Append( leftSide,  topSide );
+
+    switch( sheetEdge.NearestSegment( Pos ) )
     {
-        if( Pos.x > center.x )
-        {
-            SetEdge( SHEET_RIGHT_SIDE );
-        }
-        else
-        {
-            SetEdge( SHEET_LEFT_SIDE );
-        }
+    case 0: SetEdge( SHEET_TOP_SIDE );    break;
+    case 1: SetEdge( SHEET_RIGHT_SIDE );  break;
+    case 2: SetEdge( SHEET_BOTTOM_SIDE ); break;
+    case 3: SetEdge( SHEET_LEFT_SIDE );   break;
+    default: wxASSERT( "Invalid segment number" );
+    }
 
+    switch( GetEdge() )
+    {
+    case SHEET_RIGHT_SIDE:
+    case SHEET_LEFT_SIDE:
         SetTextY( Pos.y );
 
-        if( GetTextPos().y < sheet->m_pos.y )
-            SetTextY( sheet->m_pos.y );
+        if( GetTextPos().y < topSide )
+            SetTextY( topSide );
 
-        if( GetTextPos().y > (sheet->m_pos.y + sheet->m_size.y) )
-            SetTextY( sheet->m_pos.y + sheet->m_size.y );
-    }
-    else
-    {
-        if( Pos.y > center.y )
-        {
-            SetEdge( SHEET_BOTTOM_SIDE );
-        }
-        else
-        {
-            SetEdge( SHEET_TOP_SIDE );
-        }
+        if( GetTextPos().y > botSide )
+            SetTextY( botSide );
 
+        break;
+
+    case SHEET_BOTTOM_SIDE:
+    case SHEET_TOP_SIDE:
         SetTextX( Pos.x );
 
-        if( GetTextPos().x < sheet->m_pos.x )
-            SetTextX( sheet->m_pos.x );
+        if( GetTextPos().x < leftSide )
+            SetTextX( leftSide );
 
-        if( GetTextPos().x > (sheet->m_pos.x + sheet->m_size.x) )
-            SetTextX( sheet->m_pos.x + sheet->m_size.x );
+        if( GetTextPos().x > rightSide )
+            SetTextX( rightSide );
+
+        break;
+
+    case SHEET_UNDEFINED_SIDE:
+        wxASSERT( "Undefined sheet side" );
     }
-}
-
-
-bool SCH_SHEET_PIN::Save( FILE* aFile ) const
-{
-    int type = 'U', side = 'L';
-
-    if( m_Text.IsEmpty() )
-        return true;
-
-    switch( m_edge )
-    {
-    default:
-    case SHEET_LEFT_SIDE:     //pin on left side
-        side = 'L';
-        break;
-
-    case SHEET_RIGHT_SIDE:     //pin on right side
-        side = 'R';
-        break;
-
-    case SHEET_TOP_SIDE:      //pin on top side
-        side = 'T';
-        break;
-
-    case SHEET_BOTTOM_SIDE:     //pin on bottom side
-        side = 'B';
-        break;
-    }
-
-    switch( m_shape )
-    {
-    case NET_INPUT:
-        type = 'I'; break;
-
-    case NET_OUTPUT:
-        type = 'O'; break;
-
-    case NET_BIDI:
-        type = 'B'; break;
-
-    case NET_TRISTATE:
-        type = 'T'; break;
-
-    case NET_UNSPECIFIED:
-        type = 'U'; break;
-    }
-
-    if( fprintf( aFile, "F%d %s %c %c %-3d %-3d %-3d\n", m_number,
-                 EscapedUTF8( m_Text ).c_str(),     // supplies wrapping quotes
-                 type, side, GetTextPos().x, GetTextPos().y,
-                 GetTextWidth() ) == EOF )
-    {
-        return false;
-    }
-
-    return true;
-}
-
-
-bool SCH_SHEET_PIN::Load( LINE_READER& aLine, wxString& aErrorMsg )
-{
-    int     x, y, size;
-    char    number[256];
-    char    name[256];
-    char    connectType[256];
-    char    sheetSide[256];
-    char*   line = aLine.Line();
-    char*   cp;
-
-    static const char delims[] = " \t";
-
-    // Read coordinates.
-    // D( printf( "line: \"%s\"\n", line );)
-
-    cp = strtok( line, delims );
-
-    strncpy( number, cp, sizeof(number) );
-    number[sizeof(number)-1] = 0;
-
-    cp += strlen( number ) + 1;
-
-    cp += ReadDelimitedText( name, cp, sizeof(name) );
-
-    cp = strtok( cp, delims );
-    strncpy( connectType, cp, sizeof(connectType) );
-    connectType[sizeof(connectType)-1] = 0;
-
-    cp = strtok( NULL, delims );
-    strncpy( sheetSide, cp, sizeof(sheetSide) );
-    sheetSide[sizeof(sheetSide)-1] = 0;
-
-    cp += strlen( sheetSide ) + 1;
-
-    int r = sscanf( cp, "%d %d %d", &x, &y, &size );
-    if( r != 3 )
-    {
-        aErrorMsg.Printf( wxT( "Eeschema file sheet hierarchical label error at line %d.\n" ),
-                          aLine.LineNumber() );
-
-        aErrorMsg << FROM_UTF8( line );
-        return false;
-    }
-
-    m_Text = FROM_UTF8( name );
-
-    if( size == 0 )
-        size = GetDefaultTextSize();
-
-    SetTextSize( wxSize( size, size ) );
-    SetTextPos( wxPoint( x, y ) );
-
-    switch( connectType[0] )
-    {
-    case 'I':
-        m_shape = NET_INPUT;
-        break;
-
-    case 'O':
-        m_shape = NET_OUTPUT;
-        break;
-
-    case 'B':
-        m_shape = NET_BIDI;
-        break;
-
-    case 'T':
-        m_shape = NET_TRISTATE;
-        break;
-
-    case 'U':
-        m_shape = NET_UNSPECIFIED;
-        break;
-    }
-
-    switch( sheetSide[0] )
-    {
-    case 'R' : // pin on right side
-        SetEdge( SHEET_RIGHT_SIDE );
-        break;
-
-    case 'T' : // pin on top side
-        SetEdge( SHEET_TOP_SIDE );
-        break;
-
-    case 'B' : // pin on bottom side
-        SetEdge( SHEET_BOTTOM_SIDE );
-        break;
-
-    case 'L' : // pin on left side
-    default  :
-        SetEdge( SHEET_LEFT_SIDE );
-        break;
-    }
-
-    return true;
-}
-
-
-bool SCH_SHEET_PIN::Matches( wxFindReplaceData& aSearchData,
-                             void* aAuxData, wxPoint* aFindLocation )
-{
-    wxCHECK_MSG( GetParent() != NULL, false,
-                 wxT( "Sheet pin " ) + m_Text + wxT( " does not have a parent sheet!" ) );
-
-    wxLogTrace( traceFindItem, wxT( "    child item " ) + GetSelectMenuText() );
-
-    if( SCH_ITEM::Matches( m_Text, aSearchData ) )
-    {
-        if( aFindLocation )
-            *aFindLocation = GetBoundingBox().Centre();
-
-        return true;
-    }
-
-    return false;
 }
 
 
@@ -395,16 +222,9 @@ void SCH_SHEET_PIN::MirrorX( int aXaxis_position )
 
     switch( m_edge )
     {
-    case SHEET_TOP_SIDE:
-        SetEdge( SHEET_BOTTOM_SIDE );
-        break;
-
-    case SHEET_BOTTOM_SIDE:
-        SetEdge( SHEET_TOP_SIDE );
-        break;
-
-    default:
-        break;
+    case SHEET_TOP_SIDE:    SetEdge( SHEET_BOTTOM_SIDE ); break;
+    case SHEET_BOTTOM_SIDE: SetEdge( SHEET_TOP_SIDE );    break;
+    default: break;
     }
 }
 
@@ -417,16 +237,9 @@ void SCH_SHEET_PIN::MirrorY( int aYaxis_position )
 
     switch( m_edge )
     {
-    case SHEET_LEFT_SIDE:
-        SetEdge( SHEET_RIGHT_SIDE );
-        break;
-
-    case SHEET_RIGHT_SIDE:
-        SetEdge( SHEET_LEFT_SIDE );
-        break;
-
-    default:
-        break;
+    case SHEET_LEFT_SIDE:  SetEdge( SHEET_RIGHT_SIDE ); break;
+    case SHEET_RIGHT_SIDE: SetEdge( SHEET_LEFT_SIDE );  break;
+    default: break;
     }
 }
 
@@ -435,36 +248,15 @@ void SCH_SHEET_PIN::Rotate( wxPoint aPosition )
 {
     wxPoint pt = GetTextPos();
     RotatePoint( &pt, aPosition, 900 );
-    SetTextPos( pt );
-
-    switch( m_edge )
-    {
-    case SHEET_LEFT_SIDE:     //pin on left side
-        SetEdge( SHEET_BOTTOM_SIDE );
-        break;
-
-    case SHEET_RIGHT_SIDE:     //pin on right side
-        SetEdge( SHEET_TOP_SIDE );
-        break;
-
-    case SHEET_TOP_SIDE:      //pin on top side
-        SetEdge( SHEET_LEFT_SIDE );
-        break;
-
-    case SHEET_BOTTOM_SIDE:     //pin on bottom side
-        SetEdge( SHEET_RIGHT_SIDE );
-        break;
-
-    default:
-        break;
-    }
+    ConstrainOnEdge( pt );
 }
 
 
 void SCH_SHEET_PIN::CreateGraphicShape( std::vector <wxPoint>& aPoints, const wxPoint& aPos )
 {
-     /* This is the same icon shapes as SCH_HIERLABEL
-     * but the graphic icon is slightly different in 2 cases:
+    /*
+     * These are the same icon shapes as SCH_HIERLABEL but the graphic icon is slightly
+     * different in 2 cases:
      * for INPUT type the icon is the OUTPUT shape of SCH_HIERLABEL
      * for OUTPUT type the icon is the INPUT shape of SCH_HIERLABEL
      */
@@ -472,16 +264,9 @@ void SCH_SHEET_PIN::CreateGraphicShape( std::vector <wxPoint>& aPoints, const wx
 
     switch( m_shape )
     {
-    case NET_INPUT:
-        m_shape = NET_OUTPUT;
-        break;
-
-    case NET_OUTPUT:
-        m_shape = NET_INPUT;
-        break;
-
-    default:
-        break;
+    case PINSHEETLABEL_SHAPE::PS_INPUT:  m_shape = PINSHEETLABEL_SHAPE::PS_OUTPUT; break;
+    case PINSHEETLABEL_SHAPE::PS_OUTPUT: m_shape = PINSHEETLABEL_SHAPE::PS_INPUT;  break;
+    default:                                                                       break;
     }
 
     SCH_HIERLABEL::CreateGraphicShape( aPoints, aPos );
@@ -496,12 +281,11 @@ void SCH_SHEET_PIN::GetEndPoints( std::vector <DANGLING_END_ITEM>& aItemList )
 }
 
 
-wxString SCH_SHEET_PIN::GetSelectMenuText() const
+wxString SCH_SHEET_PIN::GetSelectMenuText( EDA_UNITS aUnits ) const
 {
-    wxString tmp;
-    tmp.Printf( _( "Hierarchical Sheet Pin %s" ), GetChars( ShortenedShownText() ) );
-    return tmp;
+    return wxString::Format( _( "Hierarchical Sheet Pin %s" ), ShortenedShownText() );
 }
+
 
 BITMAP_DEF SCH_SHEET_PIN::GetMenuImage() const
 {
@@ -524,13 +308,9 @@ bool SCH_SHEET_PIN::HitTest( const wxPoint& aPoint, int aAccuracy ) const
 void SCH_SHEET_PIN::Show( int nestLevel, std::ostream& os ) const
 {
     // XML output:
-    wxString s = GetClass();
-
-    NestedSpace( nestLevel, os ) << '<' << s.Lower().mb_str() << ">"
-                                 << " pin_name=\"" << TO_UTF8( m_Text )
+    NestedSpace( nestLevel, os ) << '<' << GetClass().Lower().mb_str() << ">"
+                                 << " pin_name=\"" << TO_UTF8( GetText() )
                                  << '"' << "/>\n" << std::flush;
-
-//    NestedSpace( nestLevel, os ) << "</" << s.Lower().mb_str() << ">\n";
 }
 
 #endif

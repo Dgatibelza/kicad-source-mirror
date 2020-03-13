@@ -3,7 +3,7 @@
  *
  * Copyright (C) 2007, 2008 Lubo Racko <developer@lura.sk>
  * Copyright (C) 2007, 2008, 2012 Alexander Lunev <al.lunev@yahoo.com>
- * Copyright (C) 2012 KiCad Developers, see CHANGELOG.TXT for contributors.
+ * Copyright (C) 2012-2020 KiCad Developers, see CHANGELOG.TXT for contributors.
  *
  * This program is free software; you can redistribute it and/or
  * modify it under the terms of the GNU General Public License
@@ -28,7 +28,6 @@
  */
 
 #include <wx/wx.h>
-#include <wx/config.h>
 
 #include <common.h>
 
@@ -48,10 +47,10 @@ PCB_TEXT::~PCB_TEXT()
 }
 
 
-void PCB_TEXT::Parse( XNODE*        aNode,
-                      int           aLayer,
-                      wxString      aDefaultMeasurementUnit,
-                      wxString      aActualConversion )
+void PCB_TEXT::Parse( XNODE*          aNode,
+                      int             aLayer,
+                      const wxString& aDefaultMeasurementUnit,
+                      const wxString& aActualConversion )
 {
     XNODE*      lNode;
     wxString    str;
@@ -106,21 +105,28 @@ void PCB_TEXT::AddToBoard()
     m_name.textRotation = m_rotation;
 
     TEXTE_PCB* pcbtxt = new TEXTE_PCB( m_board );
-    m_board->Add( pcbtxt, ADD_APPEND );
+    m_board->Add( pcbtxt, ADD_MODE::APPEND );
 
     pcbtxt->SetText( m_name.text );
 
-    SetTextSizeFromStrokeFontHeight( pcbtxt, m_name.textHeight );
+    if( m_name.isTrueType )
+        SetTextSizeFromTrueTypeFontHeight( pcbtxt, m_name.textHeight );
+    else
+        SetTextSizeFromStrokeFontHeight( pcbtxt, m_name.textHeight );
 
+    pcbtxt->SetItalic( m_name.isItalic );
     pcbtxt->SetThickness( m_name.textstrokeWidth );
-    pcbtxt->SetTextAngle( m_name.textRotation );
 
     SetTextJustify( pcbtxt, m_name.justify );
     pcbtxt->SetTextPos( wxPoint( m_name.textPositionX,
                                  m_name.textPositionY ) );
 
     pcbtxt->SetMirrored( m_name.mirror );
-    pcbtxt->SetTimeStamp( 0 );
+
+    if( pcbtxt->IsMirrored() )
+        pcbtxt->SetTextAngle( 3600.0 - m_name.textRotation );
+    else
+        pcbtxt->SetTextAngle( m_name.textRotation );
 
     pcbtxt->SetLayer( m_KiCadLayer );
 }

@@ -50,6 +50,63 @@ developers. The other KiCad developers will appreciate your effort.
 **Do not modify this document without the consent of the project
 leader. All changes to this document require approval.**
 
+## 1.3 Tools ## {#tools}
+
+There are some tools that can help you format your code easily.
+
+[`clang-format`][clang-format] is a formatting tool that can both be used to
+provide code-style automation to your editor of choice, as well as allow git to
+check formatting when committing (using a "Git hook"). You should install this
+program to be able to use the Git hooks.
+
+The style config file is `_clang-format`, and should be picked up automatically
+by `clang-format` when the `--style=file` option is set.
+
+To enable the Git hooks (only needs to be done once per Git repo):
+
+    git config core.hooksPath .githooks
+
+Set the `git clang-format` tool to use the provided `_clang-format` file:
+
+    git config clangFormat.style file
+
+Then, to enable the format checker, set the `kicad.check-format` Git config
+to "true" for the KiCad repo:
+
+    git config kicad.check-format true
+
+Without this config, the format checker will not run on commit, but you can
+still check files staged for commit manually (see below).
+
+If the hook is enabled, when you commit a change, you will be told if you
+have caused any style violations (only in your changed code). You can then fix
+the errors, either manually, or with the tools below.
+
+If you are warned about formatting errors, but you are sure your style is correct,
+you can still commit:
+
+    git commit --no-verify
+
+### Correcting Formatting Errors ## {#correcting-formatting-errors}
+
+There is a Git aliases file that provides the right commands to show and correct
+formatting errors. Add to your repository config by running this command from
+the source directory:
+
+    git config --add include.path $(pwd)/helpers/git/format_alias
+
+Then you can use the following aliases:
+
+* `git check-format`: show any formatting warnings (but make no changes)
+* `git fix-format`: correct formatting (you will need to `git add` afterwards)
+
+These aliases use a script, `tools/check-coding.sh`, which takes care of only
+checking the formatting for files that should be formatted. This script has
+other uses:
+
+* Make (or see only) violations in files modified in the previous commit (useful
+when interactive-rebasing):
+    * `check_coding.sh --amend [--diff]`
 
 # 2. Naming Conventions # {#naming_conventions}
 Before delving into anything as esoteric as indentation and formatting,
@@ -201,8 +258,8 @@ good practice to actually generate the Doxygen \*.html files by
 building target doxygen-docs, and then to review the quality of your
 Doxygen comments with a web browser before submitting a patch.
 
-[doccode]: http://www.stack.nl/~dimitri/doxygen/manual/docblocks.html
-[manual]:  http://www.stack.nl/~dimitri/doxygen/manual.html
+[doccode]: http://www.doxygen.nl/manual/docblocks.html
+[manual]:  http://www.doxygen.nl/manual
 
 ### 3.2.1 Function Comments ### {#function_comments}
 These go into a header file, unless the function is a private (i.e.
@@ -422,6 +479,20 @@ The case statement is to be indented to the same level as the switch.
     }
 ~~~~~~~~~~~~~
 
+It is permitted to place all cases on a single line each, if that makes the
+code more readable. This is often done for look-ups or translation functions. In
+this case, you will have to manually align for readability as appropriate and
+reject clang-format's suggested changes, if you use it:
+
+~~~~~~~~~~~~~{.cpp}
+    switch( m_orientation )
+    {
+    case PIN_RIGHT: m_orientation = PIN_UP;    break;
+    case PIN_UP:    m_orientation = PIN_LEFT;  break;
+    case PIN_LEFT:  m_orientation = PIN_DOWN;  break;
+    case PIN_DOWN:  m_orientation = PIN_RIGHT; break;
+    }
+~~~~~~~~~~~~~
 
 # 5. License Statement # {#license_statement}
 There is a the file copyright.h which you can copy into the top of
@@ -788,7 +859,8 @@ learn something new.
 - [C++ Operator Overloading Guidelines][overloading]
 - [Wikipedia's Programming Style Page][style]
 
+[clang-format]: https://clang.llvm.org/docs/ClangFormat.html
 [cppstandard]:http://www.possibility.com/Cpp/CppCodingStandard.html
-[kernel]:http://git.kernel.org/cgit/linux/kernel/git/stable/linux-stable.git/tree/Documentation/CodingStyle
+[kernel]:https://git.kernel.org/pub/scm/linux/kernel/git/stable/linux.git/tree/Documentation/process/coding-style.rst
 [overloading]:http://www.cs.caltech.edu/courses/cs11/material/cpp/donnie/cpp-ops.html
 [style]:http://en.wikipedia.org/wiki/Programming_style

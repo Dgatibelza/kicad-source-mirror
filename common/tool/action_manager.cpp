@@ -2,6 +2,7 @@
  * This program source code file is part of KiCad, a free EDA CAD application.
  *
  * Copyright (C) 2013 CERN
+ * Copyright (C) 2019 KiCad Developers, see AUTHORS.txt for contributors.
  * @author Maciej Suminski <maciej.suminski@cern.ch>
  *
  * This program is free software; you can redistribute it and/or
@@ -22,14 +23,14 @@
  * 51 Franklin Street, Fifth Floor, Boston, MA  02110-1301, USA
  */
 
+#include <eda_draw_frame.h>
 #include <tool/action_manager.h>
-#include <tool/tool_manager.h>
 #include <tool/tool_action.h>
-#include <draw_frame.h>
+#include <tool/tool_manager.h>
+#include <trace_helpers.h>
 
 #include <hotkeys_basic.h>
 #include <cctype>
-#include <cassert>
 
 ACTION_MANAGER::ACTION_MANAGER( TOOL_MANAGER* aToolManager ) :
     m_toolMgr( aToolManager )
@@ -42,19 +43,13 @@ ACTION_MANAGER::ACTION_MANAGER( TOOL_MANAGER* aToolManager ) :
         if( action->m_id == -1 )
             action->m_id = MakeActionId( action->m_name );
 
-        RegisterAction( new TOOL_ACTION( *action ) );
+        RegisterAction( action );
     }
 }
 
 
 ACTION_MANAGER::~ACTION_MANAGER()
 {
-    while( !m_actionNameIndex.empty() )
-    {
-        TOOL_ACTION* action = m_actionNameIndex.begin()->second;
-        UnregisterAction( action );
-        delete action;
-    }
 }
 
 
@@ -62,30 +57,12 @@ void ACTION_MANAGER::RegisterAction( TOOL_ACTION* aAction )
 {
     // TOOL_ACTIONs are supposed to be named [appName.]toolName.actionName (with dots between)
     // action name without specifying at least toolName is not valid
-    assert( aAction->GetName().find( '.', 0 ) != std::string::npos );
+    wxASSERT( aAction->GetName().find( '.', 0 ) != std::string::npos );
 
     // TOOL_ACTIONs must have unique names & ids
-    assert( m_actionNameIndex.find( aAction->m_name ) == m_actionNameIndex.end() );
+    wxASSERT( m_actionNameIndex.find( aAction->m_name ) == m_actionNameIndex.end() );
 
     m_actionNameIndex[aAction->m_name] = aAction;
-}
-
-
-void ACTION_MANAGER::UnregisterAction( TOOL_ACTION* aAction )
-{
-    m_actionNameIndex.erase( aAction->m_name );
-    int hotkey = GetHotKey( *aAction );
-
-    if( hotkey )
-    {
-        std::list<TOOL_ACTION*>& actions = m_actionHotKeys[hotkey];
-        std::list<TOOL_ACTION*>::iterator action = std::find( actions.begin(), actions.end(), aAction );
-
-        if( action != actions.end() )
-            actions.erase( action );
-        else
-            assert( false );
-    }
 }
 
 
@@ -116,6 +93,9 @@ bool ACTION_MANAGER::RunHotKey( int aHotKey ) const
     if( key >= 'a' && key <= 'z' )
         key = std::toupper( key );
 
+    wxLogTrace( kicadTraceToolStack, "ACTION_MANAGER::RunHotKey Key: %s",
+            KeyNameFromKeyCode( aHotKey ) );
+
     HOTKEY_LIST::const_iterator it = m_actionHotKeys.find( key | mod );
 
     // If no luck, try without Shift, to handle keys that require it
@@ -124,6 +104,9 @@ bool ACTION_MANAGER::RunHotKey( int aHotKey ) const
     // different combination
     if( it == m_actionHotKeys.end() )
     {
+        wxLogTrace( kicadTraceToolStack,
+                "ACTION_MANAGER::RunHotKey No actions found, searching with key: %s",
+                KeyNameFromKeyCode( key | ( mod & ~MD_SHIFT ) ) );
         it = m_actionHotKeys.find( key | ( mod & ~MD_SHIFT ) );
 
         if( it == m_actionHotKeys.end() )
@@ -135,17 +118,16 @@ bool ACTION_MANAGER::RunHotKey( int aHotKey ) const
     // Choose the action that has the highest priority on the active tools stack
     // If there is none, run the global action associated with the hot key
     int highestPriority = -1, priority = -1;
-    const TOOL_ACTION* context = NULL;  // pointer to context action of the highest priority tool
-    const TOOL_ACTION* global = NULL;   // pointer to global action, if there is no context action
+    const TOOL_ACTION* context = NULL;      // pointer to context action of the highest priority tool
+    std::vector<const TOOL_ACTION*> global; // pointers to global actions
+                                            // if there is no context action
 
     for( const TOOL_ACTION* action : actions )
     {
         if( action->GetScope() == AS_GLOBAL )
         {
-            // Store the global action for the hot key in case there was no possible
-            // context actions to run
-            assert( global == NULL );       // there should be only one global action per hot key
-            global = action;
+            // Store the global action in case there are no context actions to run
+            global.emplace_back( action );
             continue;
         }
 
@@ -167,16 +149,35 @@ bool ACTION_MANAGER::RunHotKey( int aHotKey ) const
 
     if( context )
     {
-        m_toolMgr->RunAction( *context, true );
-        return true;
+        wxLogTrace( kicadTraceToolStack,
+                "ACTION_MANAGER::RunHotKey Running action %s for hotkey %s", context->GetName(),
+                KeyNameFromKeyCode( aHotKey ) );
+
+        return m_toolMgr->RunAction( *context, true );
     }
-    else if( global )
+    else if( !global.empty() )
     {
-        m_toolMgr->RunAction( *global, true );
-        return true;
+        for( auto act : global )
+        {
+            wxLogTrace( kicadTraceToolStack,
+                    "ACTION_MANAGER::RunHotKey Running action: %s for hotkey %s", act->GetName(),
+                    KeyNameFromKeyCode( aHotKey ) );
+
+            if( m_toolMgr->RunAction( *act, true ) )
+                return true;
+        }
     }
 
+    wxLogTrace( kicadTraceToolStack, "ACTION_MANAGER::RunHotKey No action found for key %s",
+            KeyNameFromKeyCode( aHotKey ) );
+
     return false;
+}
+
+
+const std::map<std::string, TOOL_ACTION*>& ACTION_MANAGER::GetActions()
+{
+    return m_actionNameIndex;
 }
 
 
@@ -191,79 +192,48 @@ int ACTION_MANAGER::GetHotKey( const TOOL_ACTION& aAction ) const
 }
 
 
-void ACTION_MANAGER::UpdateHotKeys()
+void ACTION_MANAGER::UpdateHotKeys( bool aFullUpdate )
 {
+    std::map<std::string, int> legacyHotKeyMap;
+    std::map<std::string, int> userHotKeyMap;
+
     m_actionHotKeys.clear();
     m_hotkeys.clear();
 
-    for( const auto& actionName : m_actionNameIndex )
+    if( aFullUpdate && m_toolMgr->GetEditFrame() )
     {
-        TOOL_ACTION* action = actionName.second;
-        int hotkey = processHotKey( action );
+        ReadLegacyHotkeyConfig( m_toolMgr->GetEditFrame()->ConfigBaseName(), legacyHotKeyMap );
+        ReadHotKeyConfig( wxEmptyString, userHotKeyMap );
+    }
+
+    for( const auto& ii : m_actionNameIndex )
+    {
+        TOOL_ACTION* action = ii.second;
+        int          hotkey = 0;
+
+        if( aFullUpdate )
+            hotkey = processHotKey( action, legacyHotKeyMap, userHotKeyMap );
+        else
+            hotkey = action->GetHotKey();
 
         if( hotkey > 0 )
-        {
             m_actionHotKeys[hotkey].push_back( action );
-            m_hotkeys[action->GetId()] = hotkey;
-        }
+
+        m_hotkeys[action->GetId()] = hotkey;
     }
-
-#ifdef DEBUG
-    // Check if there are two global actions assigned to the same hotkey
-    for( const auto& action_list : m_actionHotKeys )
-    {
-        int global_actions_cnt = 0;
-
-        for( const TOOL_ACTION* action : action_list.second )
-        {
-            if( action->GetScope() == AS_GLOBAL )
-                ++global_actions_cnt;
-        }
-
-        assert( global_actions_cnt <= 1 );
-    }
-#endif /* not NDEBUG */
 }
 
 
-int ACTION_MANAGER::processHotKey( TOOL_ACTION* aAction )
+int ACTION_MANAGER::processHotKey( TOOL_ACTION* aAction, std::map<std::string, int> aLegacyMap,
+                                   std::map<std::string, int> aHotKeyMap )
 {
-    int hotkey = aAction->getDefaultHotKey();
+    aAction->m_hotKey = aAction->m_defaultHotKey;
 
-    if( ( hotkey & TOOL_ACTION::LEGACY_HK ) )
-    {
-        hotkey = hotkey & ~TOOL_ACTION::LEGACY_HK;  // it leaves only HK_xxx identifier
-        EDA_DRAW_FRAME* frame = static_cast<EDA_DRAW_FRAME*>( m_toolMgr->GetEditFrame() );
-        EDA_HOTKEY* hk_desc = frame->GetHotKeyDescription( hotkey );
+    if( !aAction->m_legacyName.empty() && aLegacyMap.count( aAction->m_legacyName ) )
+        aAction->SetHotKey( aLegacyMap[ aAction->m_legacyName ] );
 
-        if( hk_desc )
-        {
-            hotkey = hk_desc->m_KeyCode;
+    if( aHotKeyMap.count( aAction->m_name ) )
+        aAction->SetHotKey( aHotKeyMap[ aAction->m_name ] );
 
-            // Convert modifiers to the ones used by the Tool Framework
-            if( hotkey & GR_KB_CTRL )
-            {
-                hotkey &= ~GR_KB_CTRL;
-                hotkey |= MD_CTRL;
-            }
-
-            if( hotkey & GR_KB_ALT )
-            {
-                hotkey &= ~GR_KB_ALT;
-                hotkey |= MD_ALT;
-            }
-
-            if( hotkey & GR_KB_SHIFT )
-            {
-                hotkey &= ~GR_KB_SHIFT;
-                hotkey |= MD_SHIFT;
-            }
-        }
-        else
-        {
-            hotkey = 0;
-        }
-    }
-
-    return hotkey;
+    return aAction->m_hotKey;
 }

@@ -26,51 +26,49 @@
 #include <preview_items/preview_utils.h>
 
 #include <gal/graphics_abstraction_layer.h>
+#include <painter.h>
 #include <view/view.h>
-#include <pcb_painter.h>
 
 using namespace KIGFX::PREVIEW;
 
+const double POLYGON_ITEM::POLY_LINE_WIDTH = 150000.0;
 
 POLYGON_ITEM::POLYGON_ITEM():
         SIMPLE_OVERLAY_ITEM()
 {
 }
 
-void POLYGON_ITEM::SetPoints( const std::vector<VECTOR2I>& aLockedPts,
-                              const std::vector<VECTOR2I>& aLeaderPts )
+
+void POLYGON_ITEM::SetPoints( const SHAPE_LINE_CHAIN& aLockedInPts,
+                              const SHAPE_LINE_CHAIN& aLeaderPts )
 {
-    m_lockedChain.Clear();
-    m_leaderChain.Clear();
+    m_lockedChain = aLockedInPts;
+    m_leaderChain = aLeaderPts;
 
     m_polyfill.RemoveAllContours();
     m_polyfill.NewOutline();
 
-    for( auto& pt: aLockedPts )
-    {
-        m_lockedChain.Append( pt, false );
-        m_polyfill.Append( pt );
-    }
+    for( int i = 0; i < aLockedInPts.PointCount(); ++i )
+        m_polyfill.Append( aLockedInPts.CPoint( i ) );
 
-    for( auto& pt: aLeaderPts )
-    {
-        m_leaderChain.Append( pt, false );
-        m_polyfill.Append( pt );
-    }
+    for( int i = 0; i < aLeaderPts.PointCount(); ++i )
+        m_polyfill.Append( aLeaderPts.CPoint( i ) );
 }
 
 
 void POLYGON_ITEM::drawPreviewShape( KIGFX::VIEW* aView ) const
 {
     auto& gal = *aView->GetGAL();
-    auto rs = static_cast<KIGFX::PCB_RENDER_SETTINGS*>( aView->GetPainter()->GetSettings() );
+    auto rs = aView->GetPainter()->GetSettings();
 
+    gal.SetLineWidth( POLY_LINE_WIDTH );
     gal.DrawPolyline( m_lockedChain );
-    gal.DrawPolygon( m_polyfill );
 
     // draw the leader line in a different color
     gal.SetStrokeColor( rs->GetLayerColor( LAYER_AUX_ITEMS ) );
     gal.DrawPolyline( m_leaderChain );
+
+    gal.DrawPolygon( m_polyfill );
 }
 
 

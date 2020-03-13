@@ -1,13 +1,8 @@
 include_directories(
     "${CMAKE_SOURCE_DIR}/include"
-    "${CMAKE_SOURCE_DIR}/lib_dxf"
     "${CMAKE_SOURCE_DIR}/utils/idftools"
     ${OPENGL_INCLUDE_DIR}
     ${Boost_INCLUDE_DIR}
-)
-
-link_directories(
-    "${CMAKE_BINARY_DIR}/lib_dxf"
 )
 
 set( IDF3_FILES
@@ -23,15 +18,29 @@ if( MINGW )
 endif( MINGW )
 
 add_library( idf3 STATIC ${IDF3_FILES} )
+target_link_libraries( idf3
+    kimath
+    )
 
 add_executable( idfcyl idf_cylinder.cpp )
 add_executable( idfrect idf_rect.cpp )
 add_executable( dxf2idf dxf2idfmain.cpp dxf2idf.cpp )
 add_executable( idf2vrml idf2vrml.cpp )
 
-target_link_libraries( dxf2idf lib_dxf idf3 ${wxWidgets_LIBRARIES} )
+target_link_libraries( dxf2idf
+    dxflib_qcad
+    idf3
+    kimath
+    ${OPENGL_LIBRARIES}
+    ${wxWidgets_LIBRARIES}
+    )
 
-target_link_libraries( idf2vrml idf3 ${OPENGL_LIBRARIES} ${wxWidgets_LIBRARIES} )
+target_link_libraries( idf2vrml
+    idf3
+    kimath
+    ${OPENGL_LIBRARIES}
+    ${wxWidgets_LIBRARIES}
+    )
 
 if( APPLE )
     # puts binaries into the *.app bundle while linking
@@ -39,7 +48,8 @@ if( APPLE )
         RUNTIME_OUTPUT_DIRECTORY ${OSX_BUNDLE_BUILD_BIN_DIR}
         )
 else()
-    install( TARGETS idfcyl idfrect dxf2idf idf2vrml
+    install( TARGETS idfcyl idfrect idf2vrml
+        dxf2idf
         DESTINATION ${KICAD_BIN}
         COMPONENT binary )
 endif()

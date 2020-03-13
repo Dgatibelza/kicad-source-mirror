@@ -3,7 +3,7 @@
  *
  * Copyright (C) 2007, 2008 Lubo Racko <developer@lura.sk>
  * Copyright (C) 2007, 2008, 2012-2013 Alexander Lunev <al.lunev@yahoo.com>
- * Copyright (C) 2017 KiCad Developers, see AUTHORS.txt for contributors.
+ * Copyright (C) 2017-2020 KiCad Developers, see AUTHORS.txt for contributors.
  *
  * This program is free software; you can redistribute it and/or
  * modify it under the terms of the GNU General Public License
@@ -28,9 +28,9 @@
  */
 
 #include <wx/wx.h>
-#include <wx/config.h>
 
 #include <common.h>
+#include <math/util.h>      // for KiROUND
 
 #include <pcb_polygon.h>
 
@@ -44,7 +44,6 @@ PCB_POLYGON::PCB_POLYGON( PCB_CALLBACKS* aCallbacks, BOARD* aBoard, int aPCadLay
     m_objType    = wxT( 'Z' );
     m_PCadLayer  = aPCadLayer;
     m_KiCadLayer = GetKiCadLayer();
-    m_timestamp  = GetNewTimestamp();
     m_filled     = true;
 }
 
@@ -79,7 +78,7 @@ PCB_POLYGON::~PCB_POLYGON()
     }
 }
 
-void PCB_POLYGON::AssignNet( wxString aNetName )
+void PCB_POLYGON::AssignNet( const wxString& aNetName )
 {
     m_net = aNetName;
     m_netCode = GetNetCode( m_net );
@@ -102,7 +101,8 @@ void PCB_POLYGON::SetOutline( VERTICES_ARRAY* aOutline )
 }
 
 void PCB_POLYGON::FormPolygon( XNODE*   aNode, VERTICES_ARRAY* aPolygon,
-                               wxString aDefaultMeasurementUnit, wxString aActualConversion )
+                               const wxString& aDefaultMeasurementUnit,
+                               const wxString& aActualConversion )
 {
     XNODE*      lNode;
     double      x, y;
@@ -123,15 +123,12 @@ void PCB_POLYGON::FormPolygon( XNODE*   aNode, VERTICES_ARRAY* aPolygon,
 }
 
 
-bool PCB_POLYGON::Parse( XNODE*         aNode,
-                         wxString       aDefaultMeasurementUnit,
-                         wxString       aActualConversion,
-                         wxStatusBar*   aStatusBar )
+bool PCB_POLYGON::Parse( XNODE*          aNode,
+                         const wxString& aDefaultMeasurementUnit,
+                         const wxString& aActualConversion )
 {
     XNODE*      lNode;
     wxString    propValue;
-
-    // aStatusBar->SetStatusText( aStatusBar->GetStatusText() + wxT( " Polygon..." ) );
 
     lNode = FindNode( aNode, wxT( "netNameRef" ) );
 
@@ -160,6 +157,25 @@ bool PCB_POLYGON::Parse( XNODE*         aNode,
 
 void PCB_POLYGON::AddToModule( MODULE* aModule )
 {
+    if( IsNonCopperLayer( m_KiCadLayer ) )
+    {
+        EDGE_MODULE* dwg = new EDGE_MODULE( aModule, S_POLYGON );
+        aModule->Add( dwg );
+
+        dwg->SetWidth( 0 );
+        dwg->SetLayer( m_KiCadLayer );
+
+        auto outline = new std::vector<wxPoint>;
+        for( auto point : m_outline )
+            outline->push_back( wxPoint( point->x, point->y ) );
+
+        dwg->SetPolyPoints( *outline );
+        dwg->SetStart0( *outline->begin() );
+        dwg->SetEnd0( outline->back() );
+        dwg->SetDrawCoord();
+
+        delete( outline );
+    }
 }
 
 
@@ -170,15 +186,12 @@ void PCB_POLYGON::AddToBoard()
     if( m_outline.GetCount() > 0 )
     {
         ZONE_CONTAINER* zone = new ZONE_CONTAINER( m_board );
-        m_board->Add( zone, ADD_APPEND );
+        m_board->Add( zone, ADD_MODE::APPEND );
 
-        zone->SetTimeStamp( m_timestamp );
         zone->SetLayer( m_KiCadLayer );
         zone->SetNetCode( m_netCode );
 
         // add outline
-        int outline_hatch = ZONE_CONTAINER::DIAGONAL_EDGE;
-
         for( i = 0; i < (int) m_outline.GetCount(); i++ )
         {
             zone->AppendCorner( wxPoint( KiROUND( m_outline[i]->x ),
@@ -189,7 +202,7 @@ void PCB_POLYGON::AddToBoard()
 
         zone->SetPriority( m_priority );
 
-        zone->SetHatch( outline_hatch, zone->GetDefaultHatchPitch(), true );
+        zone->SetHatch( ZONE_HATCH_STYLE::DIAGONAL_EDGE, zone->GetDefaultHatchPitch(), true );
 
         if ( m_objType == wxT( 'K' ) )
         {
@@ -208,6 +221,14 @@ void PCB_POLYGON::AddToBoard()
         //if( m_filled )
         //    zone->BuildFilledPolysListData( m_board );
     }
+}
+
+
+void PCB_POLYGON::Flip()
+{
+    PCB_COMPONENT::Flip();
+
+    m_KiCadLayer = FlipLayer( m_KiCadLayer );
 }
 
 

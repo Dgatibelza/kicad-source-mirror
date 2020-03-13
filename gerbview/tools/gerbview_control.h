@@ -25,7 +25,7 @@
 
 
 /**
- * Class PCBNEW_CONTROL
+ * PCBNEW_CONTROL
  *
  * Handles actions that are shared between different frames in pcbnew.
  */
@@ -34,7 +34,7 @@ class GERBVIEW_CONTROL : public TOOL_INTERACTIVE
 {
 public:
     GERBVIEW_CONTROL();
-    ~GERBVIEW_CONTROL();
+    ~GERBVIEW_CONTROL() override { }
 
     /// @copydoc TOOL_INTERACTIVE::Reset()
     void Reset( RESET_REASON aReason ) override;
@@ -43,6 +43,7 @@ public:
     int HighContrastMode( const TOOL_EVENT& aEvent );
     int HighContrastInc( const TOOL_EVENT& aEvent );
     int HighContrastDec( const TOOL_EVENT& aEvent );
+    int DisplayControl( const TOOL_EVENT& aEvent );
 
     // Layer control
     int LayerSwitch( const TOOL_EVENT& aEvent );
@@ -54,6 +55,11 @@ public:
 
     // Highlight control
     int HighlightControl( const TOOL_EVENT& aEvent );
+
+    // Miscellaneous
+    int SwitchUnits( const TOOL_EVENT& aEvent );
+    int UpdateMessagePanel( const TOOL_EVENT& aEvent );
+    int Print( const TOOL_EVENT& aEvent );
 
     ///> Sets up handlers for various events.
     void setTransitions() override;

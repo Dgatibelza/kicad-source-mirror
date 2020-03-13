@@ -1,8 +1,8 @@
 ///////////////////////////////////////////////////////////////////////////
-// C++ code generated with wxFormBuilder (version May  6 2016)
+// C++ code generated with wxFormBuilder (version Jul 11 2018)
 // http://www.wxformbuilder.org/
 //
-// PLEASE DO "NOT" EDIT THIS FILE!
+// PLEASE DO *NOT* EDIT THIS FILE!
 ///////////////////////////////////////////////////////////////////////////
 
 #ifndef __DIALOG_FOOTPRINT_WIZARD_LIST_BASE_H__
@@ -11,8 +11,6 @@
 #include <wx/artprov.h>
 #include <wx/xrc/xmlres.h>
 #include <wx/intl.h>
-class DIALOG_SHIM;
-
 #include "dialog_shim.h"
 #include <wx/colour.h>
 #include <wx/settings.h>
@@ -46,9 +44,9 @@ class DIALOG_FOOTPRINT_WIZARD_LIST_BASE : public DIALOG_SHIM
 		wxPanel* m_panelGenerators;
 		wxGrid* m_footprintGeneratorsGrid;
 		wxPanel* m_panelInfo;
-		wxStaticText* m_staticText1;
+		wxStaticText* m_staticTextSearchPaths;
 		wxTextCtrl* m_tcSearchPaths;
-		wxStaticText* m_staticText11;
+		wxStaticText* m_staticTextNotLoaded;
 		wxTextCtrl* m_tcNotLoaded;
 		wxButton* m_buttonShowTrace;
 		wxButton* m_buttonUpdateModules;
@@ -65,7 +63,7 @@ class DIALOG_FOOTPRINT_WIZARD_LIST_BASE : public DIALOG_SHIM
 	
 	public:
 		
-		DIALOG_FOOTPRINT_WIZARD_LIST_BASE( wxWindow* parent, wxWindowID id = wxID_ANY, const wxString& title = _("Footprint Generators"), const wxPoint& pos = wxDefaultPosition, const wxSize& size = wxSize( 572,467 ), long style = wxDEFAULT_DIALOG_STYLE|wxRESIZE_BORDER ); 
+		DIALOG_FOOTPRINT_WIZARD_LIST_BASE( wxWindow* parent, wxWindowID id = wxID_ANY, const wxString& title = _("Footprint Generators"), const wxPoint& pos = wxDefaultPosition, const wxSize& size = wxSize( 525,374 ), long style = wxDEFAULT_DIALOG_STYLE|wxRESIZE_BORDER ); 
 		~DIALOG_FOOTPRINT_WIZARD_LIST_BASE();
 	
 };
@@ -84,7 +82,7 @@ class DIALOG_FOOTPRINT_WIZARD_LOG : public DIALOG_SHIM
 	public:
 		wxTextCtrl* m_Message;
 		
-		DIALOG_FOOTPRINT_WIZARD_LOG( wxWindow* parent, wxWindowID id = wxID_ANY, const wxString& title = _("Traceback of errors in not loadable python scripts"), const wxPoint& pos = wxDefaultPosition, const wxSize& size = wxSize( 646,361 ), long style = wxDEFAULT_DIALOG_STYLE|wxRESIZE_BORDER ); 
+		DIALOG_FOOTPRINT_WIZARD_LOG( wxWindow* parent, wxWindowID id = wxID_ANY, const wxString& title = _("Traceback of Python Script Errors"), const wxPoint& pos = wxDefaultPosition, const wxSize& size = wxSize( 646,361 ), long style = wxDEFAULT_DIALOG_STYLE|wxRESIZE_BORDER ); 
 		~DIALOG_FOOTPRINT_WIZARD_LOG();
 	
 };

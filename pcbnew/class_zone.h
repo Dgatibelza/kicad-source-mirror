@@ -1,8 +1,8 @@
 /*
  * This program source code file is part of KiCad, a free EDA CAD application.
  *
- * Copyright (C) 2017 Jean-Pierre Charras, jp.charras at wanadoo.fr
- * Copyright (C) 1992-2017 KiCad Developers, see AUTHORS.txt for contributors.
+ * Copyright (C) 2019 Jean-Pierre Charras, jp.charras at wanadoo.fr
+ * Copyright (C) 1992-2019 KiCad Developers, see AUTHORS.txt for contributors.
  *
  * This program is free software; you can redistribute it and/or
  * modify it under the terms of the GNU General Public License
@@ -24,7 +24,6 @@
 
 /**
  * @file class_zone.h
- * @brief Classes to handle copper zones
  */
 
 #ifndef CLASS_ZONE_H_
@@ -34,76 +33,58 @@
 #include <vector>
 #include <gr_basic.h>
 #include <class_board_item.h>
-#include <class_board_connected_item.h>
+#include <board_connected_item.h>
 #include <layers_id_colors_and_visibility.h>
-#include <PolyLine.h>
 #include <geometry/shape_poly_set.h>
-#include <class_zone_settings.h>
+#include <zone_settings.h>
 
 
 class EDA_RECT;
 class LINE_READER;
-class EDA_DRAW_PANEL;
 class PCB_EDIT_FRAME;
 class BOARD;
 class ZONE_CONTAINER;
 class MSG_PANEL_ITEM;
 
+typedef std::vector<SEG> ZONE_SEGMENT_FILL;
 
 /**
- * Struct SEGMENT
- * is a simple container used when filling areas with segments
- */
-struct SEGMENT
-{
-    wxPoint m_Start;        // starting point of a segment
-    wxPoint m_End;          // ending point of a segment
-
-    SEGMENT() {}
-
-    SEGMENT( const wxPoint& aStart, const wxPoint& aEnd )
-    {
-        m_Start = aStart;
-        m_End = aEnd;
-    }
-};
-
-
-/**
- * Class ZONE_CONTAINER
+ * ZONE_CONTAINER
  * handles a list of polygons defining a copper zone.
- * A zone is described by a main polygon, a time stamp, a layer, and a net name.
+ * A zone is described by a main polygon, a time stamp, a layer or a lyer set, and a net name.
  * Other polygons inside the main polygon are holes in the zone.
+ *
+ * a item ZONE_CONTAINER is living in a board
+ * a variant MODULE_ZONE_CONTAINER is living in a footprint
  */
 class ZONE_CONTAINER : public BOARD_CONNECTED_ITEM
 {
 public:
 
     /**
-     * Zone hatch styles
+     * The ctor to build ZONE_CONTAINER, but comaptible with MODULE_ZONE_CONTAINER
+     * requirement.
+     * if aInModule is true, a MODULE_ZONE_CONTAINER is actually built
+     * (same item, but with a specific type id:
+     * The type is PCB_ZONE_AREA_T for a ZONE_CONTAINER
+     * The type is PCB_MODULE_ZONE_AREA_T for a MODULE_ZONE_CONTAINER
      */
-    typedef enum HATCH_STYLE { NO_HATCH, DIAGONAL_FULL, DIAGONAL_EDGE } HATCH_STYLE;
-
-    ZONE_CONTAINER( BOARD* parent );
+    ZONE_CONTAINER( BOARD_ITEM_CONTAINER* parent, bool aInModule = false );
 
     ZONE_CONTAINER( const ZONE_CONTAINER& aZone );
     ZONE_CONTAINER& operator=( const ZONE_CONTAINER &aOther );
 
     ~ZONE_CONTAINER();
 
+    static inline bool ClassOf( const EDA_ITEM* aItem )
+    {
+        return aItem && aItem->Type() == PCB_ZONE_AREA_T;
+    }
+
     /**
-     * Function GetPosition
-     *
-     * Returns a reference to the first corner of the polygon set.
-     *
-     * \warning The implementation of this function relies on the fact that wxPoint and VECTOR2I
-     * have the same layout. If you intend to use the returned reference directly, please note
-     * that you are _only_ allowed to use members x and y. Any use on anything that is not one of
-     * these members will have undefined behaviour.
-     *
      * @return a wxPoint, position of the first point of the outline
      */
-    const wxPoint& GetPosition() const override;
+    const wxPoint GetPosition() const override;
     void SetPosition( const wxPoint& aPos ) override {}
 
     /**
@@ -118,49 +99,31 @@ public:
      */
     unsigned GetPriority() const { return m_priority; }
 
-    void GetMsgPanelInfo( std::vector< MSG_PANEL_ITEM >& aList ) override;
+    void GetMsgPanelInfo( EDA_UNITS aUnits, std::vector<MSG_PANEL_ITEM>& aList ) override;
 
     void SetLayerSet( LSET aLayerSet );
 
     virtual LSET GetLayerSet() const override;
 
     /**
-     * Function Draw
-     * Draws the zone outline.
-     * @param panel = current Draw Panel
+     * Function Print
+     * Prints the zone outline.
+     * @param aFrame = current Frame
      * @param DC = current Device Context
      * @param aDrawMode = GR_OR, GR_XOR, GR_COPY ..
      * @param offset = Draw offset (usually wxPoint(0,0))
      */
-    void Draw( EDA_DRAW_PANEL* panel,
-               wxDC*           DC,
-               GR_DRAWMODE     aDrawMode,
-               const wxPoint&  offset = ZeroOffset ) override;
+    void Print( PCB_BASE_FRAME* aFrame, wxDC* DC, const wxPoint&  offset = ZeroOffset ) override;
 
     /**
-     * Function DrawDrawFilledArea
+     * Function PrintFilledArea
      * Draws the filled  area for this zone (polygon list .m_FilledPolysList)
-     * @param panel = current Draw Panel
+     * @param aFrame = current Frame
      * @param DC = current Device Context
      * @param offset = Draw offset (usually wxPoint(0,0))
      * @param aDrawMode = GR_OR, GR_XOR, GR_COPY ..
      */
-    void DrawFilledArea( EDA_DRAW_PANEL* panel,
-                         wxDC*           DC,
-                         GR_DRAWMODE     aDrawMode,
-                         const wxPoint&  offset = ZeroOffset );
-
-    /**
-     * Function DrawWhileCreateOutline
-     * Draws the zone outline when it is created.
-     * The moving edges are in XOR graphic mode, old segment in draw_mode graphic mode
-     * (usually GR_OR).  The closing edge has its own shape.
-     * @param panel = current Draw Panel
-     * @param DC = current Device Context
-     * @param draw_mode = draw mode: OR, XOR ..
-     */
-    void DrawWhileCreateOutline( EDA_DRAW_PANEL* panel, wxDC* DC,
-                                 GR_DRAWMODE draw_mode = GR_OR );
+    void PrintFilledArea( PCB_BASE_FRAME* aFrame, wxDC* DC, const wxPoint&  offset = ZeroOffset );
 
     /** Function GetBoundingBox (virtual)
      * @return an EDA_RECT that is the bounding box of the zone outline
@@ -170,17 +133,10 @@ public:
     int GetClearance( BOARD_CONNECTED_ITEM* aItem = NULL ) const override;
 
     /**
-     * Function TestForCopperIslandAndRemoveInsulatedIslands
-     * Remove insulated copper islands found in m_FilledPolysList.
-     * @param aPcb = the board to analyze
-     */
-    void TestForCopperIslandAndRemoveInsulatedIslands( BOARD* aPcb );
-
-    /**
      * Function IsOnCopperLayer
      * @return true if this zone is on a copper layer, false if on a technical layer
      */
-    bool IsOnCopperLayer() const;
+    bool IsOnCopperLayer() const override;
 
     /**
      * Function CommonLayerExist
@@ -196,39 +152,86 @@ public:
 
     virtual void ViewGetLayers( int aLayers[], int& aCount ) const override;
 
-    /// How to fill areas: 0 = use filled polygons, 1 => fill with segments.
-    void SetFillMode( int aFillMode )                   { m_FillMode = aFillMode; }
-    int GetFillMode() const                             { return m_FillMode; }
+    void SetFillMode( ZONE_FILL_MODE aFillMode ) { m_FillMode = aFillMode; }
+    ZONE_FILL_MODE GetFillMode() const { return m_FillMode; }
 
     void SetThermalReliefGap( int aThermalReliefGap )   { m_ThermalReliefGap = aThermalReliefGap; }
     int GetThermalReliefGap( D_PAD* aPad = NULL ) const;
 
     void SetThermalReliefCopperBridge( int aThermalReliefCopperBridge )
     {
+        if( m_ThermalReliefCopperBridge != aThermalReliefCopperBridge )
+            SetNeedRefill( true );
+
         m_ThermalReliefCopperBridge = aThermalReliefCopperBridge;
     }
     int GetThermalReliefCopperBridge( D_PAD* aPad = NULL ) const;
 
-    void SetArcSegmentCount( int aArcSegCount ) { m_ArcToSegmentsCount = aArcSegCount; }
-    int GetArcSegmentCount() const { return m_ArcToSegmentsCount; }
+    /**
+     * Compute the area currently occupied by the zone fill.
+     *
+     * @return the currently filled area
+     */
+    double CalculateFilledArea();
+
+    /**
+     * Get the area currently occupied by the zone fill.
+     * This area is cached from the most recent call to CalculateFilledArea().
+     *
+     * @return the filled area
+     */
+    double GetFilledArea()
+    {
+        return m_area;
+    }
 
     bool IsFilled() const { return m_IsFilled; }
     void SetIsFilled( bool isFilled ) { m_IsFilled = isFilled; }
 
+    bool NeedRefill() const { return m_needRefill; }
+    void SetNeedRefill( bool aNeedRefill ) { m_needRefill = aNeedRefill; }
+
     int GetZoneClearance() const { return m_ZoneClearance; }
     void SetZoneClearance( int aZoneClearance ) { m_ZoneClearance = aZoneClearance; }
 
-    ZoneConnection GetPadConnection( D_PAD* aPad = NULL ) const;
-    void SetPadConnection( ZoneConnection aPadConnection ) { m_PadConnection = aPadConnection; }
+    ZONE_CONNECTION GetPadConnection( D_PAD* aPad = NULL ) const;
+
+    void SetPadConnection( ZONE_CONNECTION aPadConnection )
+    {
+        m_PadConnection = aPadConnection;
+    }
 
     int GetMinThickness() const { return m_ZoneMinThickness; }
-    void SetMinThickness( int aMinThickness ) { m_ZoneMinThickness = aMinThickness; }
+    void SetMinThickness( int aMinThickness )
+    {
+        if( m_ZoneMinThickness != aMinThickness )
+            SetNeedRefill( true );
+
+        m_ZoneMinThickness = aMinThickness;
+    }
+
+    int GetHatchFillTypeThickness() const { return m_HatchFillTypeThickness; }
+    void SetHatchFillTypeThickness( int aThickness ) { m_HatchFillTypeThickness = aThickness; }
+
+    int GetHatchFillTypeGap() const { return m_HatchFillTypeGap; }
+    void SetHatchFillTypeGap( int aStep ) { m_HatchFillTypeGap = aStep; }
+
+    double GetHatchFillTypeOrientation() const { return m_HatchFillTypeOrientation; }
+    void SetHatchFillTypeOrientation( double aStep ) { m_HatchFillTypeOrientation = aStep; }
+
+    int GetHatchFillTypeSmoothingLevel() const { return m_HatchFillTypeSmoothingLevel; }
+    void SetHatchFillTypeSmoothingLevel( int aLevel ) { m_HatchFillTypeSmoothingLevel = aLevel; }
+
+    double GetHatchFillTypeSmoothingValue() const { return m_HatchFillTypeSmoothingValue; }
+    void SetHatchFillTypeSmoothingValue( double aValue ) { m_HatchFillTypeSmoothingValue = aValue; }
 
     int GetSelectedCorner() const
     {
         // Transform relative indices to global index
-        int globalIndex;
-        m_Poly->GetGlobalIndex( *m_CornerSelection, globalIndex );
+        int globalIndex = -1;
+
+        if( m_CornerSelection )
+            m_Poly->GetGlobalIndex( *m_CornerSelection, globalIndex );
 
         return globalIndex;
     }
@@ -251,13 +254,13 @@ public:
 
     ///
     // Like HitTest but selects the current corner to be operated on
-    void SetSelectedCorner( const wxPoint& aPosition );
+    void SetSelectedCorner( const wxPoint& aPosition, int aAccuracy );
 
     int GetLocalFlags() const { return m_localFlgs; }
     void SetLocalFlags( int aFlags ) { m_localFlgs = aFlags; }
 
-    std::vector <SEGMENT>& FillSegments() { return m_FillSegmList; }
-    const std::vector <SEGMENT>& FillSegments() const { return m_FillSegmList; }
+    ZONE_SEGMENT_FILL& FillSegments() { return m_FillSegmList; }
+    const ZONE_SEGMENT_FILL& FillSegments() const { return m_FillSegmList; }
 
     SHAPE_POLY_SET* Outline() { return m_Poly; }
     const SHAPE_POLY_SET* Outline() const { return const_cast< SHAPE_POLY_SET* >( m_Poly ); }
@@ -270,19 +273,7 @@ public:
      * @param aPosition the wxPoint to test
      * @return bool - true if a hit, else false
      */
-    virtual bool HitTest( const wxPoint& aPosition ) const override;
-
-    /**
-     * Function HitTest
-     * tests if a point is inside the zone area, i.e. inside the main outline
-     * and outside holes.
-     * @param aPosition : the wxPoint to test
-     * @return bool - true if a hit, else false
-     */
-    bool HitTestInsideZone( const wxPoint& aPosition ) const
-    {
-        return m_Poly->Contains( VECTOR2I( aPosition ), 0 );
-    }
+    bool HitTest( const wxPoint& aPosition, int aAccuracy = 0 ) const override;
 
     /**
      * Function HitTestFilledArea
@@ -292,59 +283,26 @@ public:
      */
     bool HitTestFilledArea( const wxPoint& aRefPos ) const;
 
-     /**
+    /**
+     * Some intersecting zones, despite being on the same layer with the same net, cannot be
+     * merged due to other parameters such as fillet radius.  The copper pour will end up
+     * effectively merged though, so we want to keep the corners of such intersections sharp.
+     */
+    void GetColinearCorners( BOARD* aBoard, std::set<VECTOR2I>& colinearCorners );
+
+    /**
      * Function TransformSolidAreasShapesToPolygonSet
      * Convert solid areas full shapes to polygon set
      * (the full shape is the polygon area with a thick outline)
      * Used in 3D view
      * Arcs (ends of segments) are approximated by segments
      * @param aCornerBuffer = a buffer to store the polygons
-     * @param aCircleToSegmentsCount = the number of segments to approximate a circle
-     * @param aCorrectionFactor = the correction to apply to arcs radius to roughly
-     * keep arc radius when approximated by segments
+     * @param aError = Maximum error allowed between true arc and polygon approx
      */
-    void TransformSolidAreasShapesToPolygonSet( SHAPE_POLY_SET& aCornerBuffer,
-                                                int             aCircleToSegmentsCount,
-                                                double          aCorrectionFactor ) const;
-    /**
-     * Build the filled solid areas polygons from zone outlines (stored in m_Poly)
-     * The solid areas can be more than one on copper layers, and do not have holes
-      ( holes are linked by overlapping segments to the main outline)
-     * in order to have drawable (and plottable) filled polygons.
-     * @return true if OK, false if the solid polygons cannot be built
-     * @param aPcb: the current board (can be NULL for non copper zones)
-     * @param aOutlineBuffer: A reference to a SHAPE_POLY_SET buffer to store polygons, or NULL.
-     * if NULL (default):
-     * - m_FilledPolysList is used to store solid areas polygons.
-     * - on copper layers, tracks and other items shapes of other nets are
-     * removed from solid areas
-     * if not null:
-     * Only the zone outline (with holes, if any) is stored in aOutlineBuffer
-     * with holes linked. Therefore only one polygon is created
-     *
-     * When aOutlineBuffer is not null, his function calls
-     * AddClearanceAreasPolygonsToPolysList() to add holes for pads and tracks
-     * and other items not in net.
-     */
-    bool BuildFilledSolidAreasPolygons( BOARD* aPcb, SHAPE_POLY_SET* aOutlineBuffer = NULL );
+    void TransformSolidAreasShapesToPolygonSet(
+            SHAPE_POLY_SET& aCornerBuffer, int aError = ARC_HIGH_DEF ) const;
 
     /**
-     * Function AddClearanceAreasPolygonsToPolysList
-     * Add non copper areas polygons (pads and tracks with clearance)
-     * to a filled copper area
-     * used in BuildFilledSolidAreasPolygons when calculating filled areas in a zone
-     * Non copper areas are pads and track and their clearance area
-     * The filled copper area must be computed before
-     * BuildFilledSolidAreasPolygons() call this function just after creating the
-     *  filled copper area polygon (without clearance areas
-     * @param aPcb: the current board
-     * _NG version uses SHAPE_POLY_SET instead of Boost.Polygon
-     */
-    void AddClearanceAreasPolygonsToPolysList( BOARD* aPcb );
-    void AddClearanceAreasPolygonsToPolysList_NG( BOARD* aPcb );
-
-
-     /**
      * Function TransformOutlinesShapeWithClearanceToPolygon
      * Convert the outlines shape to a polygon with no holes
      * inflated (optional) by max( aClearanceValue, the zone clearance)
@@ -356,63 +314,76 @@ public:
      * @param aUseNetClearance = true to use a clearance which is the max value between
      *          aMinClearanceValue and the net clearance
      *          false to use aMinClearanceValue only
+     * @param aPreserveCorners an optional set of corners which should not be smoothed.
      * if both aMinClearanceValue = 0 and aUseNetClearance = false: create the zone outline polygon.
      */
     void TransformOutlinesShapeWithClearanceToPolygon( SHAPE_POLY_SET& aCornerBuffer,
-                                                        int aMinClearanceValue,
-                                                        bool aUseNetClearance );
+                                int aMinClearanceValue, bool aUseNetClearance,
+                                std::set<VECTOR2I>* aPreserveCorners = nullptr ) const;
+
     /**
-     * Function HitTestForCorner
-     * tests if the given wxPoint is near a corner.
-     * @param  refPos     is the wxPoint to test.
-     * @param  aCornerHit [out] is the index of the closest vertex found, useless when return
-     *                    value is false.
-     * @return bool - true if some corner was found to be closer to refPos than aClearance; false
-     *              otherwise.
+     * Function TransformShapeWithClearanceToPolygon
+     * Convert the zone shape to a closed polygon
+     * Used in filling zones calculations
+     * Circles and arcs are approximated by segments
+     * @param aCornerBuffer = a buffer to store the polygon
+     * @param aClearanceValue = the clearance around the pad
+     * @param aError = the maximum deviation from true circle
+     * @param ignoreLineWidth = used for edge cut items where the line width is only
+     * for visualization
      */
-    bool HitTestForCorner( const wxPoint& refPos, SHAPE_POLY_SET::VERTEX_INDEX& aCornerHit ) const;
+    void TransformShapeWithClearanceToPolygon( SHAPE_POLY_SET& aCornerBuffer, int aClearanceValue,
+            int aError = ARC_HIGH_DEF, bool ignoreLineWidth = false ) const override;
 
     /**
      * Function HitTestForCorner
      * tests if the given wxPoint is near a corner.
      * @param  refPos     is the wxPoint to test.
+     * @param  aAccuracy  increase the item bounding box by this amount.
+     * @param  aCornerHit [out] is the index of the closest vertex found, useless when return
+     *                    value is false.
      * @return bool - true if some corner was found to be closer to refPos than aClearance; false
      *              otherwise.
      */
-    bool HitTestForCorner( const wxPoint& refPos ) const;
+    bool HitTestForCorner( const wxPoint& refPos, int aAccuracy,
+                           SHAPE_POLY_SET::VERTEX_INDEX& aCornerHit ) const;
+
+    /**
+     * Function HitTestForCorner
+     * tests if the given wxPoint is near a corner.
+     * @param  refPos     is the wxPoint to test.
+     * @param  aAccuracy  increase the item bounding box by this amount.
+     * @return bool - true if some corner was found to be closer to refPos than aClearance; false
+     *              otherwise.
+     */
+    bool HitTestForCorner( const wxPoint& refPos, int aAccuracy ) const;
 
     /**
      * Function HitTestForEdge
      * tests if the given wxPoint is near a segment defined by 2 corners.
      * @param  refPos     is the wxPoint to test.
+     * @param  aAccuracy  increase the item bounding box by this amount.
      * @param  aCornerHit [out] is the index of the closest vertex found, useless when return
      *                    value is false.
      * @return bool - true if some edge was found to be closer to refPos than aClearance.
      */
-    bool HitTestForEdge( const wxPoint& refPos, SHAPE_POLY_SET::VERTEX_INDEX& aCornerHit ) const;
+    bool HitTestForEdge( const wxPoint& refPos, int aAccuracy,
+                         SHAPE_POLY_SET::VERTEX_INDEX& aCornerHit ) const;
 
     /**
      * Function HitTestForEdge
      * tests if the given wxPoint is near a segment defined by 2 corners.
      * @param  refPos     is the wxPoint to test.
+     * @param  aAccuracy  increase the item bounding box by this amount.
      * @return bool - true if some edge was found to be closer to refPos than aClearance.
      */
-    bool HitTestForEdge( const wxPoint& refPos ) const;
+    bool HitTestForEdge( const wxPoint& refPos, int aAccuracy ) const;
 
     /** @copydoc BOARD_ITEM::HitTest(const EDA_RECT& aRect,
      *                               bool aContained = true, int aAccuracy ) const
      */
     bool HitTest( const EDA_RECT& aRect, bool aContained = true, int aAccuracy = 0 ) const override;
 
-    /**
-     * Function FillZoneAreasWithSegments
-     *  Fill sub areas in a zone with segments with m_ZoneMinThickness width
-     * A scan is made line per line, on the whole filled areas, with a step of m_ZoneMinThickness.
-     * all intersecting points with the horizontal infinite line and polygons to fill are calculated
-     * a list of SEGZONE items is built, line per line
-     * @return true if success, false on error
-     */
-    bool FillZoneAreasWithSegments();
 
     /**
      * Function UnFill
@@ -453,15 +424,16 @@ public:
      * (like Mirror() but changes layer)
      * @param aCentre - the rotation point.
      */
-    virtual void Flip( const wxPoint& aCentre ) override;
+    virtual void Flip( const wxPoint& aCentre, bool aFlipLeftRight ) override;
 
     /**
      * Function Mirror
      * Mirror the outlines , relative to a given horizontal axis
      * the layer is not changed
-     * @param mirror_ref = vertical axis position
+     * @param aMirrorRef = axis position
+     * @param aMirrorLeftRight mirror across Y axis (otherwise mirror across X)
      */
-    void Mirror( const wxPoint& mirror_ref );
+    void Mirror( const wxPoint& aMirrorRef, bool aMirrorLeftRight );
 
     /**
      * Function GetClass
@@ -475,8 +447,6 @@ public:
 
     /** Access to m_Poly parameters
      */
-
-
     int GetNumCorners( void ) const
     {
         return m_Poly->TotalVertices();
@@ -535,8 +505,12 @@ public:
         // Convert global to relative indices
         if( m_Poly->GetRelativeIndices( aCornerIndex, &relativeIndices ) )
         {
-            m_Poly->Vertex( relativeIndices ).x = new_pos.x;
-            m_Poly->Vertex( relativeIndices ).y = new_pos.y;
+            if( m_Poly->CVertex( relativeIndices ).x != new_pos.x
+                    || m_Poly->CVertex( relativeIndices ).y != new_pos.y )
+            {
+                SetNeedRefill( true );
+                m_Poly->SetVertex( relativeIndices, new_pos );
+            }
         }
         else
             throw( std::out_of_range( "aCornerIndex-th vertex does not exist" ) );
@@ -561,12 +535,12 @@ public:
      */
     bool AppendCorner( wxPoint aPosition, int aHoleIdx, bool aAllowDuplication = false );
 
-    HATCH_STYLE GetHatchStyle() const
+    ZONE_HATCH_STYLE GetHatchStyle() const
     {
         return m_hatchStyle;
     }
 
-    void SetHatchStyle( HATCH_STYLE aStyle )
+    void SetHatchStyle( ZONE_HATCH_STYLE aStyle )
     {
         m_hatchStyle = aStyle;
     }
@@ -594,44 +568,55 @@ public:
      * returns a reference to the list of filled polygons.
      * @return Reference to the list of filled polygons.
      */
-
-    //TODO - This should be called for each layer on which the zone exists
-
     const SHAPE_POLY_SET& GetFilledPolysList() const
     {
         return m_FilledPolysList;
     }
 
+    /** (re)create a list of triangles that "fill" the solid areas.
+     * used for instance to draw these solid areas on opengl
+     */
+    void CacheTriangulation();
+
    /**
-     * Function AddFilledPolysList
+     * Function SetFilledPolysList
      * sets the list of filled polygons.
      */
-    void AddFilledPolysList( SHAPE_POLY_SET& aPolysList )
+    void SetFilledPolysList( SHAPE_POLY_SET& aPolysList )
     {
         m_FilledPolysList = aPolysList;
     }
 
     /**
+      * Function SetFilledPolysList
+      * sets the list of filled polygons.
+      */
+    void SetRawPolysList( SHAPE_POLY_SET& aPolysList )
+    {
+        m_RawPolysList = aPolysList;
+    }
+
+
+    /**
      * Function GetSmoothedPoly
-     * returns a pointer to the corner-smoothed version of
-     * m_Poly if it exists, otherwise it returns m_Poly.
+     * returns a pointer to the corner-smoothed version of m_Poly.
+     * @param aPreserveCorners - set of corners which should /not/ be smoothed
      * @return SHAPE_POLY_SET* - pointer to the polygon.
      */
-    SHAPE_POLY_SET* GetSmoothedPoly() const
-    {
-        if( m_smoothedPoly )
-            return m_smoothedPoly;
-        else
-            return m_Poly;
-    };
+    bool BuildSmoothedPoly( SHAPE_POLY_SET& aSmoothedPoly,
+                            std::set<VECTOR2I>* aPreserveCorners ) const;
 
     void SetCornerSmoothingType( int aType ) { m_cornerSmoothingType = aType; };
 
-    int  GetCornerSmoothingType() const { return m_cornerSmoothingType; };
+    int  GetCornerSmoothingType() const { return m_cornerSmoothingType; }
 
     void SetCornerRadius( unsigned int aRadius );
 
-    unsigned int GetCornerRadius() const { return m_cornerRadius; };
+    unsigned int GetCornerRadius() const { return m_cornerRadius; }
+
+    bool GetFilledPolysUseThickness() const { return m_FilledPolysUseThickness; }
+    void SetFilledPolysUseThickness( bool aOption ) { m_FilledPolysUseThickness = aOption; }
+
 
     /**
      * add a polygon to the zone outline
@@ -640,19 +625,11 @@ public:
      */
     void AddPolygon( std::vector< wxPoint >& aPolygon );
 
-    /**
-     * add a polygon to the zone filled areas list.
-     * these polygons have no hole, therefore any added polygon is a new
-     * filled area
-     */
-    void AddFilledPolygon( SHAPE_POLY_SET& aPolygon )
-    {
-        m_FilledPolysList.Append( aPolygon );
-    }
+    void AddPolygon( const SHAPE_LINE_CHAIN& aPolygon );
 
-    void AddFillSegments( std::vector< SEGMENT >& aSegments )
+    void SetFillSegments( const ZONE_SEGMENT_FILL& aSegments )
     {
-        m_FillSegmList.insert( m_FillSegmList.end(), aSegments.begin(), aSegments.end() );
+        m_FillSegmList = aSegments;
     }
 
     SHAPE_POLY_SET& RawPolysList()
@@ -660,7 +637,7 @@ public:
         return m_RawPolysList;
     }
 
-    wxString GetSelectMenuText() const override;
+    wxString GetSelectMenuText( EDA_UNITS aUnits ) const override;
 
     BITMAP_DEF GetMenuImage() const override;
 
@@ -704,7 +681,7 @@ public:
      * @param  aRebuildHatch is a flag to indicate whether to re-hatch after having set the
      *                       previous parameters.
      */
-    void SetHatch( int aHatchStyle, int aHatchPitch, bool aRebuildHatch );
+    void SetHatch( ZONE_HATCH_STYLE aHatchStyle, int aHatchPitch, bool aRebuildHatch );
 
     /**
      * Function SetHatchPitch
@@ -728,18 +705,36 @@ public:
 
     const std::vector<SEG>& GetHatchLines() const { return m_HatchLines; }
 
+    bool   GetHV45() const { return m_hv45; }
+    void   SetHV45( bool aConstrain ) { m_hv45 = aConstrain; }
+
+    /** @return the hash value previously calculated by BuildHashValue().
+     * used in zone filling calculations
+     */
+    MD5_HASH GetHashValue() { return m_filledPolysHash; }
+
+    /** Build the hash value of m_FilledPolysList, and store it internally
+     *  in m_filledPolysHash.
+     *  Used in zone filling calculations, to know if m_FilledPolysList is up to date.
+     */
+    void BuildHashValue() { m_filledPolysHash = m_FilledPolysList.GetHash(); }
+
+
 
 #if defined(DEBUG)
     virtual void Show( int nestLevel, std::ostream& os ) const override { ShowDummy( os ); }
 #endif
 
+    virtual void SwapData( BOARD_ITEM* aImage ) override;
 
-
-private:
-    void buildFeatureHoleList( BOARD* aPcb, SHAPE_POLY_SET& aFeatures );
+protected:
+    /** Copy aZone data to me
+     * members are expected non initialize in this.
+     * copyDataFromSrc() is expected to be called *only* from a copy constructor.
+     */
+    void initDataFromSrcInCopyCtor( const ZONE_CONTAINER& aZone );
 
     SHAPE_POLY_SET*       m_Poly;                ///< Outline of the zone.
-    SHAPE_POLY_SET*       m_smoothedPoly;        // Corner-smoothed version of m_Poly
     int                   m_cornerSmoothingType;
     unsigned int          m_cornerRadius;
 
@@ -763,16 +758,19 @@ private:
     bool                  m_doNotAllowVias;
     bool                  m_doNotAllowTracks;
 
-    ZoneConnection        m_PadConnection;
+    ZONE_CONNECTION       m_PadConnection;
     int                   m_ZoneClearance;           ///< Clearance value in internal units.
     int                   m_ZoneMinThickness;        ///< Minimum thickness value in filled areas.
-
-    /** The number of segments to convert a circle to a polygon.  Valid values are
-        #ARC_APPROX_SEGMENTS_COUNT_LOW_DEF or #ARC_APPROX_SEGMENTS_COUNT_HIGHT_DEF. */
-    int                   m_ArcToSegmentsCount;
+    bool                  m_FilledPolysUseThickness;    ///< outline of filled polygons have thickness.
 
     /** True when a zone was filled, false after deleting the filled areas. */
     bool                  m_IsFilled;
+
+    /** False when a zone was refilled, true after changes in zone params.
+     * m_needRefill = false does not imply filled areas are up to date, just
+     * the zone was refilled after edition, and does not need refilling
+     */
+    bool                  m_needRefill;
 
     ///< Width of the gap in thermal reliefs.
     int                   m_ThermalReliefGap;
@@ -781,8 +779,28 @@ private:
     int                   m_ThermalReliefCopperBridge;
 
 
-    /// How to fill areas: 0 => use filled polygons, 1 => fill with segments.
-    int                   m_FillMode;
+    /** How to fill areas:
+     * ZONE_FILL_MODE::POLYGONS => use solid polygons
+     * ZONE_FILL_MODE::HATCH_PATTERN => use a grid pattern as shape
+     */
+    ZONE_FILL_MODE        m_FillMode;
+
+    /// Grid style shape: thickness of lines (if 0 -> solid shape)
+    int m_HatchFillTypeThickness;
+
+    /// Grid style shape: dist between center of lines (grid size) (0 -> solid shape)
+    int m_HatchFillTypeGap;
+
+    /// Grid style shape: orientation in degrees of the grid lines
+    double m_HatchFillTypeOrientation;
+
+    /// Grid pattern smoothing type, similar to corner smoothing type
+    ///< 0 = no smoothing, 1 = fillet, >= 2 = arc
+    int  m_HatchFillTypeSmoothingLevel;
+
+    /// Grid pattern smoothing value for smoothing shape size calculations
+    /// this is the ratio between the gap and the chamfer size
+    double m_HatchFillTypeSmoothingValue;
 
     /// The index of the corner being moved or nullptr if no corner is selected.
     SHAPE_POLY_SET::VERTEX_INDEX* m_CornerSelection;
@@ -793,7 +811,7 @@ private:
     /** Segments used to fill the zone (#m_FillMode ==1 ), when fill zone by segment is used.
      *  In this case the segments have #m_ZoneMinThickness width.
      */
-    std::vector <SEGMENT> m_FillSegmList;
+    ZONE_SEGMENT_FILL          m_FillSegmList;
 
     /* set of filled polygons used to draw a zone as a filled area.
      * from outlines (m_Poly) but unlike m_Poly these filled polygons have no hole
@@ -805,48 +823,38 @@ private:
      */
     SHAPE_POLY_SET        m_FilledPolysList;
     SHAPE_POLY_SET        m_RawPolysList;
+    MD5_HASH              m_filledPolysHash;    // A hash value used in zone filling calculations
+                                                // to see if the filled areas are up to date
 
-    HATCH_STYLE           m_hatchStyle;     // hatch style, see enum above
+    ZONE_HATCH_STYLE      m_hatchStyle;     // hatch style, see enum above
     int                   m_hatchPitch;     // for DIAGONAL_EDGE, distance between 2 hatch lines
     std::vector<SEG>      m_HatchLines;     // hatch lines
+    std::vector<int>      m_insulatedIslands;
 
-    /**
-     * Union to handle conversion between references to wxPoint and to VECTOR2I.
-     *
-     * The function GetPosition(), that returns a reference to a wxPoint, needs some existing
-     * wxPoint object that it can point to. The header of this function cannot be changed, as it
-     * overrides the function from the base class BOARD_ITEM. This made sense when ZONE_CONTAINER
-     * was implemented using the legacy CPolyLine class, that worked with wxPoints. However,
-     * m_Poly is now a SHAPE_POLY_SET, whose corners are objects of type VECTOR2I, not wxPoint.
-     * Thus, we cannot directly reference the first corner of m_Poly, so a modified version of it
-     * that can be read as a wxPoint needs to be handled.
-     * Taking advantage of the fact that both wxPoint and VECTOR2I have the same memory layout
-     * (two integers: x, y), this union let us convert a reference to a VECTOR2I into a reference
-     * to a wxPoint.
-     *
-     * The idea is the following: in GetPosition(), m_Poly->GetCornerPosition( 0 ) returns a
-     * reference to the first corner of the polygon set. If we retrieve its memory direction, we
-     * can tell the compiler to cast that pointer to a WX_VECTOR_CONVERTER pointer. We can finally
-     * shape that memory layout as a wxPoint picking the wx member of the union.
-     *
-     * Although this solution is somewhat unstable, as it relies on the fact that the memory
-     * layout is exactly the same, it is the best attempt to keep backwards compatibility while
-     * using the new SHAPE_POLY_SET.
-     */
-    typedef union {
-        wxPoint wx;
-        VECTOR2I vector;
-    } WX_VECTOR_CONVERTER;
+    bool                  m_hv45;           // constrain edges to horizontal, vertical or 45º
 
-    // Sanity check: assure that the conversion VECTOR2I->wxPoint using the previous union is
-    // correct, making sure that the access for x and y attributes is still safe.
-    static_assert(offsetof(wxPoint,x) == offsetof(VECTOR2I,x),
-                  "wxPoint::x and VECTOR2I::x have different offsets");
-
-    static_assert(offsetof(wxPoint,y) == offsetof(VECTOR2I,y),
-                  "wxPoint::y and VECTOR2I::y have different offsets");
-
+    double                m_area;           // The filled zone area
 };
 
+
+/**
+ * MODULE_ZONE_CONTAINER is the same item as ZONE_CONTAINER, but with a specific type id
+ * ZONE_CONTAINER is living in a board
+ * MODULE_ZONE_CONTAINER is living in a footprint
+ * althougt the are similar, these items need a specific type to be easily managed
+ * in many functions using the type id in switches
+ * A few virtual methods are different
+ */
+class MODULE_ZONE_CONTAINER : public ZONE_CONTAINER
+{
+public:
+    MODULE_ZONE_CONTAINER( BOARD_ITEM_CONTAINER* aParent );
+    MODULE_ZONE_CONTAINER( const MODULE_ZONE_CONTAINER& aZone );
+    MODULE_ZONE_CONTAINER& operator=( const MODULE_ZONE_CONTAINER &aOther );
+
+    EDA_ITEM* Clone() const override;
+
+    unsigned int ViewGetLOD( int aLayer, KIGFX::VIEW* aView ) const override;
+};
 
 #endif  // CLASS_ZONE_H_

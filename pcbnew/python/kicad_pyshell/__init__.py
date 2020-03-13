@@ -63,11 +63,15 @@ class PcbnewPyShell(editor.EditorNotebookFrame):
         intro = 'Py %s' % version.VERSION
         import imp
         module = imp.new_module('__main__')
-        import __builtin__
-        module.__dict__['__builtins__'] = __builtin__
+        if sys.version_info >= (3,):
+            import builtins
+            module.__dict__['__builtins__'] = builtins
+        else:
+            import __builtin__
+            module.__dict__['__builtins__'] = __builtin__
         namespace = module.__dict__.copy()
 
-        self.config_dir = pcbnew.GetKicadConfigPath()
+        self.config_dir = pcbnew.SETTINGS_MANAGER.GetUserSettingsPath()
         self.dataDir = self.config_dir
 
         self._setup_startup()
@@ -81,6 +85,11 @@ class PcbnewPyShell(editor.EditorNotebookFrame):
         self.autoSaveSettings = False
         self.autoSaveHistory = False
         self.LoadSettings()
+
+        # in case of wxPhoenix we need to create a wxApp first and store it
+        # to prevent removal by gabage collector
+        if 'phoenix' in wx.PlatformInfo:
+            self.theApp = wx.App()
 
         self.crust = crust.Crust(parent=self.notebook,
                                  intro=intro, locals=namespace,
@@ -104,7 +113,7 @@ class PcbnewPyShell(editor.EditorNotebookFrame):
     def OnAbout(self, event):
         """Display an About window."""
         title = 'About : KiCad:PCBNEW - Python Shell'
-        text = "Enahnced Python Shell for KiCad:PCBNEW\n\n" + \
+        text = "Enhanced Python Shell for KiCad:PCBNEW\n\n" + \
                "This KiCad Python Shell is based on wxPython PyAlaMode.\n\n" + \
                "see: http://wiki.wxpython.org/PyAlaMode\n\n" + \
                "KiCad Revision: %s\n" % "??.??" + \

@@ -29,7 +29,7 @@
 #include <set>
 #include <vector>
 
-#include <class_undoredo_container.h>
+#include <undo_redo_container.h>
 
 class EDA_ITEM;
 
@@ -60,7 +60,7 @@ CHANGE_TYPE operator&( CHANGE_TYPE aTypeA, T aTypeB )
 
 
 /**
- * Class COMMIT
+ * COMMIT
  *
  * Represents a set of changes (additions, deletions or modifications)
  * of a data model (e.g. the BOARD) class.
@@ -123,14 +123,15 @@ public:
 
 
     ///> Adds a change of the item aItem of type aChangeType to the change list.
-    COMMIT& Stage( EDA_ITEM* aItem, CHANGE_TYPE aChangeType );
+    virtual COMMIT& Stage( EDA_ITEM* aItem, CHANGE_TYPE aChangeType );
 
-    COMMIT& Stage( std::vector<EDA_ITEM*>& container, CHANGE_TYPE aChangeType );
+    virtual COMMIT& Stage( std::vector<EDA_ITEM*>& container, CHANGE_TYPE aChangeType );
 
-    COMMIT& Stage( const PICKED_ITEMS_LIST& aItems, UNDO_REDO_T aModFlag = UR_UNSPECIFIED );
+    virtual COMMIT& Stage( const PICKED_ITEMS_LIST& aItems, UNDO_REDO_T aModFlag = UR_UNSPECIFIED );
 
     ///> Executes the changes.
-    virtual void Push( const wxString& aMessage = wxT( "A commit" ), bool aCreateUndoEntry = true ) = 0;
+    virtual void Push( const wxString& aMessage = wxT( "A commit" ),
+                       bool aCreateUndoEntry = true, bool aSetDirtyBit = true ) = 0;
 
     ///> Revertes the commit by restoring the modifed items state.
     virtual void Revert() = 0;

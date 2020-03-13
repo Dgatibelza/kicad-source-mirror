@@ -2,7 +2,7 @@
  * This program source code file is part of KiCad, a free EDA CAD application.
  *
  * Copyright (C) 2015-2016 Mario Luzeiro <mrluzeiro@ua.pt>
- * Copyright (C) 1992-2016 KiCad Developers, see AUTHORS.txt for contributors.
+ * Copyright (C) 1992-2018 KiCad Developers, see AUTHORS.txt for contributors.
  *
  * This program is free software; you can redistribute it and/or
  * modify it under the terms of the GNU General Public License
@@ -70,10 +70,9 @@ static bool polygon_IsPointInside( const SEGMENTS &aSegments, const SFVEC2F &aPo
 }
 
 
-CPOLYGONBLOCK2D::CPOLYGONBLOCK2D( const SEGMENTS_WIDTH_NORMALS &aOpenSegmentList,
-                                  const OUTERS_AND_HOLES &aOuter_and_holes,
-                                  const BOARD_ITEM &aBoardItem ) :
-                 COBJECT2D( OBJ2D_POLYGON, aBoardItem )
+CPOLYGONBLOCK2D::CPOLYGONBLOCK2D( const SEGMENTS_WIDTH_NORMALS& aOpenSegmentList,
+        const OUTERS_AND_HOLES& aOuter_and_holes, const BOARD_ITEM& aBoardItem )
+        : COBJECT2D( OBJECT2D_TYPE::POLYGON, aBoardItem )
 {
     m_open_segments.resize( aOpenSegmentList.size() );
 
@@ -190,7 +189,7 @@ bool CPOLYGONBLOCK2D::Intersect( const RAYSEG2D &aSegRay,
 INTERSECTION_RESULT CPOLYGONBLOCK2D::IsBBoxInside( const CBBOX2D &aBBox ) const
 {
 
-    return INTR_MISSES;
+    return INTERSECTION_RESULT::MISSES;
 }
 
 
@@ -221,9 +220,9 @@ bool CPOLYGONBLOCK2D::IsPointInside( const SFVEC2F &aPoint ) const
 // CDUMMYBLOCK2D
 // /////////////////////////////////////////////////////////////////////////////
 
-CDUMMYBLOCK2D::CDUMMYBLOCK2D( const SFVEC2F &aPbMin, const SFVEC2F &aPbMax,
-                              const BOARD_ITEM &aBoardItem ) :
-               COBJECT2D( OBJ2D_DUMMYBLOCK, aBoardItem )
+CDUMMYBLOCK2D::CDUMMYBLOCK2D(
+        const SFVEC2F& aPbMin, const SFVEC2F& aPbMax, const BOARD_ITEM& aBoardItem )
+        : COBJECT2D( OBJECT2D_TYPE::DUMMYBLOCK, aBoardItem )
 {
     m_bbox.Set( aPbMin, aPbMax );
     m_bbox.ScaleNextUp();
@@ -231,9 +230,8 @@ CDUMMYBLOCK2D::CDUMMYBLOCK2D( const SFVEC2F &aPbMin, const SFVEC2F &aPbMax,
 }
 
 
-CDUMMYBLOCK2D::CDUMMYBLOCK2D( const CBBOX2D &aBBox,
-                              const BOARD_ITEM &aBoardItem ) :
-               COBJECT2D( OBJ2D_DUMMYBLOCK, aBoardItem )
+CDUMMYBLOCK2D::CDUMMYBLOCK2D( const CBBOX2D& aBBox, const BOARD_ITEM& aBoardItem )
+        : COBJECT2D( OBJECT2D_TYPE::DUMMYBLOCK, aBoardItem )
 {
     m_bbox.Set( aBBox );
     m_bbox.ScaleNextUp();
@@ -267,7 +265,7 @@ bool CDUMMYBLOCK2D::Intersect( const RAYSEG2D &aSegRay,
 INTERSECTION_RESULT CDUMMYBLOCK2D::IsBBoxInside( const CBBOX2D &aBBox ) const
 {
     //!TODO:
-    return INTR_MISSES;
+    return INTERSECTION_RESULT::MISSES;
 }
 
 
@@ -408,17 +406,16 @@ void Convert_path_polygon_to_polygon_blocks_and_dummy_blocks(
         CGENERICCONTAINER2D &aDstContainer,
         float aBiuTo3DunitsScale,
         float aDivFactor,
-        const BOARD_ITEM &aBoardItem )
+        const BOARD_ITEM &aBoardItem,
+        int aPolyIndex )
 {
-    BOX2I pathBounds = aMainPath.BBox();
-
     // Get the path
 
-    wxASSERT( aMainPath.OutlineCount() == 1 );
-    const SHAPE_POLY_SET::POLYGON& curr_polywithholes = aMainPath.CPolygon( 0 );
+    wxASSERT( aPolyIndex < aMainPath.OutlineCount() );
 
-    wxASSERT( curr_polywithholes.size() == 1 );
-    const SHAPE_LINE_CHAIN& path = curr_polywithholes[0];   // a simple polygon
+    const SHAPE_LINE_CHAIN& path = aMainPath.COutline( aPolyIndex );
+
+    BOX2I pathBounds = path.BBox();
 
     // Convert the points to segments class
     CBBOX2D bbox;
@@ -430,8 +427,10 @@ void Convert_path_polygon_to_polygon_blocks_and_dummy_blocks(
     // Contains a closed polygon used to calc if points are inside
     SEGMENTS segments;
 
-    segments_and_normals.resize( path.PointCount() );
-    segments.resize( path.PointCount() );
+    segments_and_normals.reserve( path.PointCount() );
+    segments.reserve( path.PointCount() );
+
+    SFVEC2F prevPoint;
 
     for( int i = 0; i < path.PointCount(); i++ )
     {
@@ -440,9 +439,23 @@ void Convert_path_polygon_to_polygon_blocks_and_dummy_blocks(
         const SFVEC2F point ( (float)( a.x) * aBiuTo3DunitsScale,
                               (float)(-a.y) * aBiuTo3DunitsScale );
 
-        bbox.Union( point );
-        segments_and_normals[i].m_Start = point;
-        segments[i].m_Start = point;
+        // Only add points that are not coincident
+        if( (i == 0) ||
+            (fabs(prevPoint.x - point.x) > FLT_EPSILON) ||
+            (fabs(prevPoint.y - point.y) > FLT_EPSILON) )
+        {
+            prevPoint = point;
+
+            bbox.Union( point );
+
+            SEGMENT_WITH_NORMALS sn;
+            sn.m_Start = point;
+            segments_and_normals.push_back( sn );
+
+            POLYSEGMENT ps;
+            ps.m_Start = point;
+            segments.push_back( ps );
+        }
     }
 
     bbox.ScaleNextUp();
@@ -518,13 +531,13 @@ void Convert_path_polygon_to_polygon_blocks_and_dummy_blocks(
             segments_and_normals[i].m_Normals.m_Start = normalSeg;
         else
             segments_and_normals[i].m_Normals.m_Start =
-                glm::normalize( (((normalBeforeSeg * dotBefore ) + normalSeg) * 0.5f) );
+                glm::normalize( (normalBeforeSeg * dotBefore ) + normalSeg );
 
         if( dotAfter < 0.7f )
             segments_and_normals[i].m_Normals.m_End = normalSeg;
         else
             segments_and_normals[i].m_Normals.m_End =
-                glm::normalize( (((normalAfterSeg  * dotAfter  ) + normalSeg) * 0.5f) );
+                glm::normalize( (normalAfterSeg * dotAfter ) + normalSeg );
     }
 
     if( aDivFactor == 0.0f )
@@ -627,15 +640,10 @@ void Convert_path_polygon_to_polygon_blocks_and_dummy_blocks(
 
                 SHAPE_POLY_SET subBlockPoly;
 
-                SHAPE_LINE_CHAIN sb = SHAPE_LINE_CHAIN(
-                                        VECTOR2I( leftToRight,
-                                                  topToBottom ),
-                                        VECTOR2I( leftToRight + leftToRight_inc,
-                                                  topToBottom ),
-                                        VECTOR2I( leftToRight + leftToRight_inc,
-                                                  topToBottom + topToBottom_inc ),
-                                        VECTOR2I( leftToRight,
-                                                  topToBottom + topToBottom_inc ) );
+                SHAPE_LINE_CHAIN sb = SHAPE_LINE_CHAIN( { VECTOR2I( leftToRight, topToBottom ),
+                        VECTOR2I( leftToRight + leftToRight_inc, topToBottom ),
+                        VECTOR2I( leftToRight + leftToRight_inc, topToBottom + topToBottom_inc ),
+                        VECTOR2I( leftToRight, topToBottom + topToBottom_inc ) } );
 
                 //sb.Append( leftToRight, topToBottom );
                 sb.SetClosed( true );
@@ -711,60 +719,6 @@ void Convert_path_polygon_to_polygon_blocks_and_dummy_blocks(
 }
 
 
-void Polygon_Calc_BBox_3DU( const SHAPE_POLY_SET &aPolysList,
-                            CBBOX2D &aOutBBox ,
-                            float aBiuTo3DunitsScale )
-{
-    aOutBBox.Reset();
-
-    for( int idx = 0; idx < aPolysList.OutlineCount(); ++idx )
-    {
-        // Each polygon in aPolysList is a polygon with holes
-        const SHAPE_POLY_SET::POLYGON& curr_polywithholes = aPolysList.CPolygon( idx );
-
-        for( unsigned ipoly = 0; ipoly < curr_polywithholes.size(); ++ipoly )
-        {
-            const SHAPE_LINE_CHAIN& path = curr_polywithholes[ipoly]; // a simple polygon
-
-             for( int jj = 0; jj < path.PointCount(); jj++ )
-             {
-                 const VECTOR2I& a = path.CPoint( jj );
-
-                 aOutBBox.Union( SFVEC2F( (float) a.x * aBiuTo3DunitsScale,
-                                          (float)-a.y * aBiuTo3DunitsScale ) );
-             }
-        }
-    }
-
-    aOutBBox.ScaleNextUp();
-}
-
-
-void Polygon_Convert( const KI_POLYGON &aPolygon,
-                      ClipperLib::Path &aOutPath,
-                      CBBOX2D &aOutBBox,
-                      float aBiuTo3DunitsScale )
-{
-    aOutPath.resize( aPolygon.size() );
-    aOutBBox.Reset();
-
-    for( unsigned i = 0; i < aPolygon.size(); i++ )
-    {
-        const KI_POLY_POINT point = *(aPolygon.begin() + i);
-
-        aOutPath[i] = ClipperLib::IntPoint( (ClipperLib::cInt)point.x(),
-                                            (ClipperLib::cInt)point.y() );
-
-        aOutBBox.Union( SFVEC2F( (float) point.x() * aBiuTo3DunitsScale,
-                                 (float)-point.y() * aBiuTo3DunitsScale ) );
-    }
-
-    aOutBBox.ScaleNextUp();
-
-    ClipperLib::CleanPolygon( aOutPath );
-}
-
-
 #ifdef DEBUG
 static void polygon_Convert( const ClipperLib::Path &aPath,
                              SEGMENTS &aOutSegment,
@@ -805,7 +759,7 @@ void Polygon2d_TestModule()
     aPath[2] = ClipperLib::IntPoint(  2,  2 );
     aPath[3] = ClipperLib::IntPoint( -2,  2 );
 
-    // It must be an outter polygon
+    // It must be an outer polygon
     wxASSERT( ClipperLib::Orientation( aPath ) );
 
     polygon_Convert( aPath, aSegments, 1.0f );

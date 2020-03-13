@@ -2,7 +2,7 @@
  * This program source code file is part of KiCad, a free EDA CAD application.
  *
  * Copyright (C) 2017 Jean-Pierre Charras, jp.charras at wanadoo.fr
- * Copyright (C) 2011-2017 Wayne Stambaugh <stambaughw@verizon.net>
+ * Copyright (C) 2011 Wayne Stambaugh <stambaughw@gmail.com>
  * Copyright (C) 1992-2017 KiCad Developers, see AUTHORS.txt for contributors.
  *
  * This program is free software; you can redistribute it and/or
@@ -23,32 +23,43 @@
  * 51 Franklin Street, Fifth Floor, Boston, MA  02110-1301, USA
  */
 
-/**
- * @file sch_sheet_path.cpp
- * @brief SCH_SHEET_PATH class implementation.
- */
-
 #include <fctsys.h>
 
-#include <general.h>
-#include <dlist.h>
-#include <class_sch_screen.h>
-#include <sch_item_struct.h>
+#include <sch_screen.h>
+#include <sch_item.h>
 
 #include <sch_reference_list.h>
 #include <class_library.h>
 #include <sch_sheet_path.h>
 #include <sch_component.h>
+#include <sch_sheet.h>
 #include <template_fieldnames.h>
-
-#include <dialogs/dialog_schematic_find.h>
-
+#include <boost/functional/hash.hpp>
 #include <wx/filename.h>
+
+
+namespace std
+{
+    size_t hash<SCH_SHEET_PATH>::operator()( const SCH_SHEET_PATH& path ) const
+    {
+        return path.GetCurrentHash();
+    }
+}
 
 
 SCH_SHEET_PATH::SCH_SHEET_PATH()
 {
     m_pageNumber = 0;
+    m_current_hash = 0;
+}
+
+
+void SCH_SHEET_PATH::Rehash()
+{
+    m_current_hash = 0;
+
+    for( auto sheet : m_sheets )
+        boost::hash_combine( m_current_hash, sheet->m_Uuid.Hash() );
 }
 
 
@@ -63,11 +74,11 @@ int SCH_SHEET_PATH::Cmp( const SCH_SHEET_PATH& aSheetPathToTest ) const
     //otherwise, same number of sheets.
     for( unsigned i = 0; i < size(); i++ )
     {
-        if( at( i )->GetTimeStamp() > aSheetPathToTest.at( i )->GetTimeStamp() )
-            return 1;
-
-        if( at( i )->GetTimeStamp() < aSheetPathToTest.at( i )->GetTimeStamp() )
+        if( at( i )->m_Uuid < aSheetPathToTest.at( i )->m_Uuid )
             return -1;
+
+        if( at( i )->m_Uuid != aSheetPathToTest.at( i )->m_Uuid )
+            return 1;
     }
 
     return 0;
@@ -77,9 +88,20 @@ int SCH_SHEET_PATH::Cmp( const SCH_SHEET_PATH& aSheetPathToTest ) const
 SCH_SHEET* SCH_SHEET_PATH::Last() const
 {
     if( !empty() )
-        return at( size() - 1 );
+        return m_sheets.back();
 
-    return NULL;
+    return nullptr;
+}
+
+
+SCH_SCREEN* SCH_SHEET_PATH::LastScreen()
+{
+    SCH_SHEET* lastSheet = Last();
+
+    if( lastSheet )
+        return lastSheet->GetScreen();
+
+    return nullptr;
 }
 
 
@@ -90,60 +112,43 @@ SCH_SCREEN* SCH_SHEET_PATH::LastScreen() const
     if( lastSheet )
         return lastSheet->GetScreen();
 
-    return NULL;
+    return nullptr;
 }
 
 
-SCH_ITEM* SCH_SHEET_PATH::LastDrawList() const
+wxString SCH_SHEET_PATH::PathAsString() const
 {
-    SCH_SHEET* lastSheet = Last();
-
-    if( lastSheet && lastSheet->GetScreen() )
-        return lastSheet->GetScreen()->GetDrawItems();
-
-    return NULL;
-}
-
-
-SCH_ITEM* SCH_SHEET_PATH::FirstDrawList() const
-{
-    SCH_ITEM* item = NULL;
-
-    if( !empty() && at( 0 )->GetScreen() )
-        item = at( 0 )->GetScreen()->GetDrawItems();
-
-    /* @fixme - These lists really should be one of the boost pointer containers.  This
-     *          is a brain dead hack to allow reverse iteration of EDA_ITEM linked
-     *          list.
-     */
-    SCH_ITEM* lastItem = NULL;
-
-    while( item )
-    {
-        lastItem = item;
-        item = item->Next();
-    }
-
-    return lastItem;
-}
-
-
-wxString SCH_SHEET_PATH::Path() const
-{
-    wxString s, t;
+    wxString s;
 
     s = wxT( "/" );     // This is the root path
 
-    // start at 1 to avoid the root sheet,
-    // which does not need to be added to the path
-    // it's timestamp changes anyway.
+    // Start at 1 to avoid the root sheet, which does not need to be added to the path.
+    // It's timestamp changes anyway.
     for( unsigned i = 1; i < size(); i++ )
-    {
-        t.Printf( _( "%8.8lX/" ), (long unsigned) at( i )->GetTimeStamp() );
-        s = s + t;
-    }
+        s += at( i )->m_Uuid.AsString() + "/";
 
     return s;
+}
+
+
+KIID_PATH SCH_SHEET_PATH::Path() const
+{
+    KIID_PATH path;
+
+    for( const SCH_SHEET* sheet : m_sheets )
+        path.push_back( sheet->m_Uuid );
+
+    return path;
+}
+
+
+wxString SCH_SHEET_PATH::GetRootPathName( bool aUseShortName )
+{
+    // return a PathName for the root sheet (like "/" or "<root>"
+    // DO NOT use it in netlists, because it can easily break these netlists
+    // especially after translation, because many netlists (i.e. spice) do not accept any char
+    // Use only the short name ("/") and the full name only in messages
+    return aUseShortName ? wxT( "/" ) : _( "<root_sheet>" );
 }
 
 
@@ -151,13 +156,14 @@ wxString SCH_SHEET_PATH::PathHumanReadable() const
 {
     wxString s;
 
+    if( size() == 1 )
+        return GetRootPathName( true );  // Use only the short name in netlists
+
     s = wxT( "/" );
 
-    // start at 1 to avoid the root sheet, as above.
+    // Start at 1 to avoid the root sheet, as above.
     for( unsigned i = 1; i < size(); i++ )
-    {
         s = s + at( i )->GetName() + wxT( "/" );
-    }
 
     return s;
 }
@@ -165,149 +171,68 @@ wxString SCH_SHEET_PATH::PathHumanReadable() const
 
 void SCH_SHEET_PATH::UpdateAllScreenReferences()
 {
-    EDA_ITEM* t = LastDrawList();
-
-    while( t )
+    for( auto item : LastScreen()->Items().OfType( SCH_COMPONENT_T ) )
     {
-        if( t->Type() == SCH_COMPONENT_T )
-        {
-            SCH_COMPONENT* component = (SCH_COMPONENT*) t;
-            component->GetField( REFERENCE )->SetText( component->GetRef( this ) );
-            component->UpdateUnit( component->GetUnitSelection( this ) );
-        }
-
-        t = t->Next();
+        auto component = static_cast<SCH_COMPONENT*>( item );
+        component->GetField( REFERENCE )->SetText( component->GetRef( this ) );
+        component->UpdateUnit( component->GetUnitSelection( this ) );
     }
 }
 
 
 
-void SCH_SHEET_PATH::GetComponents( PART_LIBS* aLibs, SCH_REFERENCE_LIST& aReferences,
-                                    bool aIncludePowerSymbols )
+void SCH_SHEET_PATH::GetComponents( SCH_REFERENCE_LIST& aReferences, bool aIncludePowerSymbols,
+                                    bool aForceIncludeOrphanComponents )
 {
-    for( SCH_ITEM* item = LastDrawList(); item; item = item->Next() )
+    for( auto item : LastScreen()->Items().OfType( SCH_COMPONENT_T ) )
     {
-        if( item->Type() == SCH_COMPONENT_T )
+        auto component = static_cast<SCH_COMPONENT*>( item );
+
+        // Skip pseudo components, which have a reference starting with #.  This mainly
+        // affects power symbols.
+        if( aIncludePowerSymbols || component->GetRef( this )[0] != wxT( '#' ) )
         {
-            SCH_COMPONENT* component = (SCH_COMPONENT*) item;
+            LIB_PART* part = component->GetPartRef().get();
 
-            // Skip pseudo components, which have a reference starting with #.  This mainly
-            // affects power symbols.
-            if( !aIncludePowerSymbols && component->GetRef( this )[0] == wxT( '#' ) )
-                continue;
-
-            LIB_PART* part = component->GetPartRef().lock().get();
-
-            if( part )
+            if( part || aForceIncludeOrphanComponents )
             {
-                SCH_REFERENCE reference( component, part, *this );
+                SCH_REFERENCE schReference( component, part, *this );
 
-                reference.SetSheetNumber( m_pageNumber );
-                aReferences.AddItem( reference );
+                schReference.SetSheetNumber( m_pageNumber );
+                aReferences.AddItem( schReference );
             }
         }
     }
 }
 
 
-void SCH_SHEET_PATH::GetMultiUnitComponents( PART_LIBS* aLibs,
-                                             SCH_MULTI_UNIT_REFERENCE_MAP& aRefList,
+void SCH_SHEET_PATH::GetMultiUnitComponents( SCH_MULTI_UNIT_REFERENCE_MAP& aRefList,
                                              bool aIncludePowerSymbols )
 {
-
-    for( SCH_ITEM* item = LastDrawList(); item; item = item->Next() )
+    for( auto item : LastScreen()->Items().OfType( SCH_COMPONENT_T ) )
     {
-        if( item->Type() != SCH_COMPONENT_T )
-            continue;
-
-        SCH_COMPONENT* component = (SCH_COMPONENT*) item;
+        auto component = static_cast<SCH_COMPONENT*>( item );
 
         // Skip pseudo components, which have a reference starting with #.  This mainly
         // affects power symbols.
         if( !aIncludePowerSymbols && component->GetRef( this )[0] == wxT( '#' ) )
             continue;
 
-        LIB_PART* part = component->GetPartRef().lock().get();
+        LIB_PART* part = component->GetPartRef().get();
 
         if( part && part->GetUnitCount() > 1 )
         {
-            SCH_REFERENCE reference = SCH_REFERENCE( component, part, *this );
-            reference.SetSheetNumber( m_pageNumber );
-            wxString reference_str = reference.GetRef();
+            SCH_REFERENCE schReference = SCH_REFERENCE( component, part, *this );
+            schReference.SetSheetNumber( m_pageNumber );
+            wxString reference_str = schReference.GetRef();
 
             // Never lock unassigned references
             if( reference_str[reference_str.Len() - 1] == '?' )
                 continue;
 
-            aRefList[reference_str].AddItem( reference );
+            aRefList[reference_str].AddItem( schReference );
         }
     }
-}
-
-
-SCH_ITEM* SCH_SHEET_PATH::FindNextItem( KICAD_T aType, SCH_ITEM* aLastItem, bool aWrap ) const
-{
-    bool hasWrapped = false;
-    bool firstItemFound = false;
-    SCH_ITEM* drawItem = LastDrawList();
-
-    while( drawItem )
-    {
-        if( drawItem->Type() == aType )
-        {
-            if( !aLastItem || firstItemFound )
-            {
-                return drawItem;
-            }
-            else if( !firstItemFound && drawItem == aLastItem )
-            {
-                firstItemFound = true;
-            }
-        }
-
-        drawItem = drawItem->Next();
-
-        if( !drawItem && aLastItem && aWrap && !hasWrapped )
-        {
-            hasWrapped = true;
-            drawItem = LastDrawList();
-        }
-    }
-
-    return NULL;
-}
-
-
-SCH_ITEM* SCH_SHEET_PATH::FindPreviousItem( KICAD_T aType, SCH_ITEM* aLastItem, bool aWrap ) const
-{
-    bool hasWrapped = false;
-    bool firstItemFound = false;
-    SCH_ITEM* drawItem = FirstDrawList();
-
-    while( drawItem )
-    {
-        if( drawItem->Type() == aType )
-        {
-            if( aLastItem == NULL || firstItemFound )
-            {
-                return drawItem;
-            }
-            else if( !firstItemFound && drawItem == aLastItem )
-            {
-                firstItemFound = true;
-            }
-        }
-
-        drawItem = drawItem->Back();
-
-        if( drawItem == NULL && aLastItem && aWrap && !hasWrapped )
-        {
-            hasWrapped = true;
-            drawItem = FirstDrawList();
-        }
-    }
-
-    return NULL;
 }
 
 
@@ -325,16 +250,7 @@ bool SCH_SHEET_PATH::SetComponentFootprint( const wxString& aReference, const wx
 
 bool SCH_SHEET_PATH::operator==( const SCH_SHEET_PATH& d1 ) const
 {
-    if( size() != d1.size() )
-        return false;
-
-    for( unsigned i = 0; i < size(); i++ )
-    {
-        if( at( i ) != d1[i] )
-            return false;
-    }
-
-    return true;
+    return m_current_hash == d1.GetCurrentHash();
 }
 
 
@@ -401,30 +317,6 @@ bool SCH_SHEET_PATH::TestForRecursion( const wxString& aSrcFileName,
 }
 
 
-int SCH_SHEET_PATH::FindSheet( const wxString& aFileName ) const
-{
-    for( unsigned i = 0; i < size(); i++ )
-    {
-        if( at( i )->GetFileName().CmpNoCase( aFileName ) == 0 )
-            return (int)i;
-    }
-
-    return SHEET_NOT_FOUND;
-}
-
-
-SCH_SHEET* SCH_SHEET_PATH::FindSheetByName( const wxString& aSheetName )
-{
-    for( unsigned i = 0; i < size(); i++ )
-    {
-        if( at( i )->GetName().CmpNoCase( aSheetName ) == 0 )
-            return at( i );
-    }
-
-    return NULL;
-}
-
-
 /********************************************************************/
 /* Class SCH_SHEET_LIST to handle the list of Sheets in a hierarchy */
 /********************************************************************/
@@ -437,25 +329,11 @@ SCH_SHEET_LIST::SCH_SHEET_LIST( SCH_SHEET* aSheet )
 }
 
 
-SCH_SHEET_PATH* SCH_SHEET_LIST::GetSheetByPath( const wxString aPath, bool aHumanReadable )
-{
-    wxString sheetPath;
-
-    for( unsigned i = 0; i < size(); i++ )
-    {
-        sheetPath = ( aHumanReadable ) ? at( i ).PathHumanReadable() : at( i ).Path();
-
-        if( sheetPath == aPath )
-            return &at( i );
-    }
-
-    return NULL;
-}
-
-
 void SCH_SHEET_LIST::BuildSheetList( SCH_SHEET* aSheet )
 {
     wxCHECK_RET( aSheet != NULL, wxT( "Cannot build sheet list from undefined sheet." ) );
+
+    std::vector<SCH_SHEET*> badSheets;
 
     if( aSheet == g_RootSheet )
         m_isRootSheet = true;
@@ -470,20 +348,24 @@ void SCH_SHEET_LIST::BuildSheetList( SCH_SHEET* aSheet )
     m_currentSheetPath.SetPageNumber( size() + 1 );
     push_back( m_currentSheetPath );
 
-    if( aSheet->GetScreen() )
+    if( m_currentSheetPath.LastScreen() )
     {
-        EDA_ITEM* item = m_currentSheetPath.LastDrawList();
-
-        while( item )
+        for( auto item : m_currentSheetPath.LastScreen()->Items().OfType( SCH_SHEET_T ) )
         {
-            if( item->Type() == SCH_SHEET_T )
-            {
-                SCH_SHEET* sheet = (SCH_SHEET*) item;
-                BuildSheetList( sheet );
-            }
+            auto sheet = static_cast<SCH_SHEET*>( item );
 
-            item = item->Next();
+            if( !m_currentSheetPath.TestForRecursion(
+                        sheet->GetFileName(), aSheet->GetFileName() ) )
+                BuildSheetList( sheet );
+            else
+                badSheets.push_back( sheet );
         }
+    }
+
+    for( auto sheet : badSheets )
+    {
+        m_currentSheetPath.LastScreen()->Remove( sheet );
+        m_currentSheetPath.LastScreen()->SetModify();
     }
 
     m_currentSheetPath.pop_back();
@@ -512,7 +394,7 @@ void SCH_SHEET_LIST::ClearModifyStatus()
 }
 
 
-void SCH_SHEET_LIST::AnnotatePowerSymbols( PART_LIBS* aLibs )
+void SCH_SHEET_LIST::AnnotatePowerSymbols()
 {
     // List of reference for power symbols
     SCH_REFERENCE_LIST references;
@@ -525,21 +407,18 @@ void SCH_SHEET_LIST::AnnotatePowerSymbols( PART_LIBS* aLibs )
     {
         SCH_SHEET_PATH& spath = *it;
 
-        for( EDA_ITEM* item = spath.LastDrawList(); item; item = item->Next() )
+        for( auto item : spath.LastScreen()->Items().OfType( SCH_COMPONENT_T ) )
         {
-            if( item->Type() != SCH_COMPONENT_T )
-                continue;
-
-            SCH_COMPONENT*  component = (SCH_COMPONENT*) item;
-            LIB_PART* part = component->GetPartRef().lock().get();
+            auto      component = static_cast<SCH_COMPONENT*>( item );
+            LIB_PART* part = component->GetPartRef().get();
 
             if( !part || !part->IsPower() )
                 continue;
 
             if( part )
             {
-                SCH_REFERENCE reference( component, part, spath );
-                references.AddItem( reference );
+                SCH_REFERENCE schReference( component, part, spath );
+                references.AddItem( schReference );
             }
         }
     }
@@ -585,26 +464,25 @@ void SCH_SHEET_LIST::AnnotatePowerSymbols( PART_LIBS* aLibs )
     }
 
     // Recalculate and update reference numbers in schematic
-    references.Annotate( false, 100, lockedComponents );
+    references.Annotate( false, 0, 100, lockedComponents );
     references.UpdateAnnotation();
 }
 
 
-void SCH_SHEET_LIST::GetComponents( PART_LIBS* aLibs, SCH_REFERENCE_LIST& aReferences,
-                                    bool aIncludePowerSymbols )
+void SCH_SHEET_LIST::GetComponents( SCH_REFERENCE_LIST& aReferences, bool aIncludePowerSymbols,
+                                    bool aForceIncludeOrphanComponents )
 {
     for( SCH_SHEET_PATHS_ITER it = begin(); it != end(); ++it )
-        (*it).GetComponents( aLibs, aReferences, aIncludePowerSymbols );
+        (*it).GetComponents( aReferences, aIncludePowerSymbols, aForceIncludeOrphanComponents );
 }
 
-void SCH_SHEET_LIST::GetMultiUnitComponents( PART_LIBS* aLibs,
-                                             SCH_MULTI_UNIT_REFERENCE_MAP &aRefList,
+void SCH_SHEET_LIST::GetMultiUnitComponents( SCH_MULTI_UNIT_REFERENCE_MAP &aRefList,
                                              bool aIncludePowerSymbols )
 {
     for( SCH_SHEET_PATHS_ITER it = begin(); it != end(); ++it )
     {
         SCH_MULTI_UNIT_REFERENCE_MAP tempMap;
-        (*it).GetMultiUnitComponents( aLibs, tempMap );
+        (*it).GetMultiUnitComponents( tempMap );
 
         for( SCH_MULTI_UNIT_REFERENCE_MAP::value_type& pair : tempMap )
         {
@@ -617,97 +495,6 @@ void SCH_SHEET_LIST::GetMultiUnitComponents( PART_LIBS* aLibs,
             }
         }
     }
-}
-
-
-SCH_ITEM* SCH_SHEET_LIST::FindNextItem( KICAD_T aType, SCH_SHEET_PATH** aSheetFoundIn,
-                                        SCH_ITEM* aLastItem, bool aWrap )
-{
-    bool hasWrapped = false;
-    bool firstItemFound = false;
-
-    SCH_ITEM*       drawItem = NULL;
-    SCH_SHEET_PATHS_ITER it = begin();
-
-    while( it != end() )
-    {
-        drawItem = (*it).LastDrawList();
-
-        while( drawItem )
-        {
-            if( drawItem->Type() == aType )
-            {
-                if( aLastItem == NULL || firstItemFound )
-                {
-                    if( aSheetFoundIn )
-                        *aSheetFoundIn = &(*it);
-
-                    return drawItem;
-                }
-                else if( !firstItemFound && drawItem == aLastItem )
-                {
-                    firstItemFound = true;
-                }
-            }
-
-            drawItem = drawItem->Next();
-        }
-
-        ++it;
-
-        if( it == end() && aLastItem && aWrap && !hasWrapped )
-        {
-            hasWrapped = true;
-            it = begin();
-        }
-    }
-
-    return NULL;
-}
-
-
-SCH_ITEM* SCH_SHEET_LIST::FindPreviousItem( KICAD_T aType, SCH_SHEET_PATH** aSheetFoundIn,
-                                            SCH_ITEM* aLastItem, bool aWrap )
-{
-    bool hasWrapped = false;
-    bool firstItemFound = false;
-    SCH_ITEM* drawItem = NULL;
-    SCH_SHEET_PATHS_RITER it = rbegin();
-
-    while( it != rend() )
-    {
-        drawItem = (*it).FirstDrawList();
-
-        while( drawItem )
-        {
-            if( drawItem->Type() == aType )
-            {
-                if( aLastItem == NULL || firstItemFound )
-                {
-                    if( aSheetFoundIn )
-                        *aSheetFoundIn = &(*it);
-
-                    return drawItem;
-                }
-                else if( !firstItemFound && drawItem == aLastItem )
-                {
-                    firstItemFound = true;
-                }
-            }
-
-            drawItem = drawItem->Back();
-        }
-
-        ++it;
-
-        if( it == rend() && aLastItem && aWrap && !hasWrapped )
-        {
-            hasWrapped = true;
-            it = rbegin();
-        }
-    }
-
-    return NULL;
 }
 
 
@@ -776,15 +563,13 @@ bool SCH_SHEET_LIST::TestForRecursion( const SCH_SHEET_LIST& aSrcSheetHierarchy,
 }
 
 
-SCH_SHEET* SCH_SHEET_LIST::FindSheetByName( const wxString& aSheetName )
+SCH_SHEET_PATH* SCH_SHEET_LIST::FindSheetForScreen( SCH_SCREEN* aScreen )
 {
-    for( unsigned i = 0; i < size(); i++ )
+    for( SCH_SHEET_PATH& sheetpath : *this )
     {
-        SCH_SHEET* sheet = at( i ).FindSheetByName( aSheetName );
-
-        if( sheet )
-            return sheet;
+        if( sheetpath.LastScreen() == aScreen )
+            return &sheetpath;
     }
 
-    return NULL;
+    return nullptr;
 }

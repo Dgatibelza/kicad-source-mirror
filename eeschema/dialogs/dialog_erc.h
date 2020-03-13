@@ -30,29 +30,20 @@
 #include <lib_pin.h>        // For PINTYPE_COUNT definition
 
 #include <dialog_erc_base.h>
+#include <erc_settings.h>
 #include "dialog_erc_listbox.h"
 
 // DIALOG_ERC class declaration
 
 class DIALOG_ERC : public DIALOG_ERC_BASE
 {
-    DECLARE_EVENT_TABLE()
-
 private:
-    SCH_EDIT_FRAME* m_parent;
-    wxBitmapButton* m_buttonList[PINTYPE_COUNT][PINTYPE_COUNT];
-    bool            m_initialized;
+    SCH_EDIT_FRAME*   m_parent;
+    bool              m_initialized;
     const SCH_MARKER* m_lastMarkerFound;
-    static bool     m_writeErcFile;
-    static bool     m_diagErcTableInit; // go to true after DiagErc init
-    static bool     m_tstUniqueGlobalLabels;
-
-public:
-    static bool     m_TestSimilarLabels;
 
 public:
     DIALOG_ERC( SCH_EDIT_FRAME* parent );
-    ~DIALOG_ERC();
 
 private:
     void Init();
@@ -62,7 +53,8 @@ private:
     void OnErcCmpClick( wxCommandEvent& event ) override;
     void OnEraseDrcMarkersClick( wxCommandEvent& event ) override;
     void OnButtonCloseClick( wxCommandEvent& event ) override;
-    void OnResetMatrixClick( wxCommandEvent& event ) override;
+
+    void RedrawDrawPanel();
 
     // Click on a marker info:
     void OnLeftClickMarkersList( wxHtmlLinkEvent& event ) override;
@@ -70,14 +62,8 @@ private:
     // Double click on a marker info:
     void OnLeftDblClickMarkersList( wxMouseEvent& event ) override;
 
-    void TestErc( wxArrayString* aMessagesList );
+    void TestErc( REPORTER& aReporter );
     void DisplayERC_MarkersList();
-    void SelLocal( wxCommandEvent& event );
-    void SelNewCmp( wxCommandEvent& event );
-    void ResetDefaultERCDiag( wxCommandEvent& event );
-    void ChangeErrorLevel( wxCommandEvent& event );
-    void ReBuildMatrixPanel();
-    void setDRCMatrixButtonState( wxBitmapButton *aButton, int aState );
     void updateMarkerCounts( SCH_SCREENS *screens );
 };
 

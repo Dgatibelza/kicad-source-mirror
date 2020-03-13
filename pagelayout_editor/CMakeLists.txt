@@ -8,7 +8,7 @@ add_definitions(-DPL_EDITOR)
 include_directories(BEFORE ${INC_BEFORE})
 include_directories(
     dialogs
-    ../common/dialogs
+    ${CMAKE_SOURCE_DIR}/common/dialogs
     ${INC_AFTER}
     )
 
@@ -17,31 +17,35 @@ set( PL_EDITOR_SRCS
     dialogs/dialogs_for_printing.cpp
     dialogs/dialog_new_dataitem_base.cpp
     dialogs/dialog_new_dataitem.cpp
-    class_pl_editor_screen.cpp
-    class_pl_editor_layout.cpp
-    design_tree_frame.cpp
-    events_functions.cpp
-    controle.cpp
+    dialogs/dialog_design_inspector_base.cpp
+    design_inspector.cpp
+    pl_editor_screen.cpp
+    pl_editor_layout.cpp
     files.cpp
-    onleftclick.cpp
-    onrightclick.cpp
-    page_layout_writer.cpp
-    pl_editor_config.cpp
     pl_editor_frame.cpp
+    pl_editor_settings.cpp
+    pl_draw_panel_gal.cpp
     pl_editor_undo_redo.cpp
     properties_frame.cpp
-    hotkeys.cpp
     menubar.cpp
     toolbars_pl_editor.cpp
-    block.cpp
+
+    tools/pl_actions.cpp
+    tools/pl_selection.cpp
+    tools/pl_selection_tool.cpp
+    tools/pl_drawing_tools.cpp
+    tools/pl_edit_tool.cpp
+    tools/pl_editor_control.cpp
+    tools/pl_point_editor.cpp
     )
 
 set( PL_EDITOR_EXTRA_SRCS
-    ../common/base_screen.cpp
-    ../common/base_units.cpp
-    ../common/eda_text.cpp
-    ../common/class_page_info.cpp
-    ../common/dialogs/dialog_page_settings.cpp
+    ${CMAKE_SOURCE_DIR}/common/base_screen.cpp
+    ${CMAKE_SOURCE_DIR}/common/base_units.cpp
+    ${CMAKE_SOURCE_DIR}/common/eda_text.cpp
+    ${CMAKE_SOURCE_DIR}/common/dialogs/dialog_page_settings.cpp
+    ${CMAKE_SOURCE_DIR}/common/dialogs/panel_display_options.cpp
+    ${CMAKE_SOURCE_DIR}/common/page_info.cpp
 )
 
 
@@ -69,25 +73,24 @@ endif()
 
 # a very small program launcher for pl_editor_kiface
 add_executable( pl_editor WIN32 MACOSX_BUNDLE
-    ../common/single_top.cpp
-    ../common/pgm_base.cpp
+    ${CMAKE_SOURCE_DIR}/common/single_top.cpp
+    ${CMAKE_SOURCE_DIR}/common/pgm_base.cpp
     ${PL_EDITOR_RESOURCES}
     )
-set_source_files_properties( ../common/single_top.cpp PROPERTIES
+set_source_files_properties( ${CMAKE_SOURCE_DIR}/common/single_top.cpp PROPERTIES
     COMPILE_DEFINITIONS "TOP_FRAME=FRAME_PL_EDITOR;PGM_DATA_FILE_EXT=\"kicad_wks\";BUILD_KIWAY_DLL"
     )
 target_link_libraries( pl_editor
     #singletop  # replaces common, giving us restrictive control and link warnings.
     # There's way too much crap coming in from common yet.
-    common
-    bitmaps
     gal
+    common
     ${wxWidgets_LIBRARIES}
     )
 
 if( MAKE_LINK_MAPS )
     set_target_properties( pl_editor PROPERTIES
-        LINK_FLAGS "${TO_LINKER},-cref ${TO_LINKER},-Map=pl_editor.map" )
+        LINK_FLAGS "-Wl,-cref,-Map=pl_editor.map" )
 endif()
 
 # the main pl_editor program, in DSO form.
@@ -98,10 +101,8 @@ add_library( pl_editor_kiface MODULE
     ${PL_EDITOR_EXTRA_SRCS}
     )
 target_link_libraries( pl_editor_kiface
-    common
-    polygon
-    bitmaps
     gal
+    common
     ${wxWidgets_LIBRARIES}
     ${GDI_PLUS_LIBRARIES}
     )
@@ -117,7 +118,7 @@ set_source_files_properties( pl_editor.cpp PROPERTIES
 
 if( MAKE_LINK_MAPS )
     set_target_properties( pl_editor_kiface PROPERTIES
-        LINK_FLAGS "${TO_LINKER},-cref ${TO_LINKER},-Map=_pl_editor.kiface.map" )
+        LINK_FLAGS "-Wl,-cref,-Map=_pl_editor.kiface.map" )
 endif()
 
 # if building pl_editor, then also build pl_editor_kiface if out of date.
@@ -126,7 +127,7 @@ add_dependencies( pl_editor pl_editor_kiface )
 # these 2 binaries are a matched set, keep them together:
 if( APPLE )
     set_target_properties( pl_editor PROPERTIES
-        MACOSX_BUNDLE_INFO_PLIST ${CMAKE_CURRENT_SOURCE_DIR}/Info.plist
+        MACOSX_BUNDLE_INFO_PLIST ${PROJECT_BINARY_DIR}/pagelayout_editor/Info.plist
         )
 
     # puts binaries into the *.app bundle while linking

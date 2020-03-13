@@ -2,7 +2,7 @@
  * This program source code file is part of KICAD, a free EDA CAD application.
  *
  * Copyright 2012 Torsten Hueter, torstenhtr <at> gmx.de
- * Copyright 2017 Kicad Developers, see AUTHORS.txt for contributors.
+ * Copyright 2017-2019 Kicad Developers, see AUTHORS.txt for contributors.
  *
  *
  * This program is free software; you can redistribute it and/or
@@ -24,7 +24,7 @@
  */
 
 #include <map>
-
+#include <nlohmann/json.hpp>
 #include <gal/color4d.h>
 
 using namespace KIGFX;
@@ -79,6 +79,20 @@ COLOR4D::COLOR4D( EDA_COLOR_T aColor )
     }
 
 
+    wxColour COLOR4D::ToColour() const
+    {
+        using CHAN_T = wxColourBase::ChannelType;
+
+        const wxColour colour(
+            static_cast<CHAN_T>( r * 255 + 0.5 ),
+            static_cast<CHAN_T>( g * 255 + 0.5 ),
+            static_cast<CHAN_T>( b * 255 + 0.5 ),
+            static_cast<CHAN_T>( a * 255 + 0.5 )
+        );
+        return colour;
+    }
+
+
     COLOR4D COLOR4D::LegacyMix( COLOR4D aColor ) const
     {
         COLOR4D candidate;
@@ -93,37 +107,6 @@ COLOR4D::COLOR4D( EDA_COLOR_T aColor )
         candidate.a = ( aColor.a + a ) / 2;
 
         return candidate;
-    }
-
-
-    COLOR4D& COLOR4D::SetToLegacyHighlightColor()
-    {
-        EDA_COLOR_T legacyColor = GetNearestLegacyColor( *this );
-        EDA_COLOR_T highlightColor = g_ColorRefs[legacyColor].m_LightColor;
-
-        // The alpha channel is not modified. Only R, G, B values are set,
-        // because legacy color does not know the alpha chanel.
-
-        r = g_ColorRefs[highlightColor].m_Red / 255.0;
-        g = g_ColorRefs[highlightColor].m_Green / 255.0;
-        b = g_ColorRefs[highlightColor].m_Blue / 255.0;
-
-        return *this;
-    }
-
-
-    COLOR4D& COLOR4D::SetToNearestLegacyColor()
-    {
-        EDA_COLOR_T legacyColor = GetNearestLegacyColor( *this );
-
-        // The alpha channel is not modified. Only R, G, B values are set,
-        // because legacy color does not know the alpha chanel.
-
-        r = g_ColorRefs[legacyColor].m_Red / 255.0;
-        g = g_ColorRefs[legacyColor].m_Green / 255.0;
-        b = g_ColorRefs[legacyColor].m_Blue / 255.0;
-
-        return *this;
     }
 
 
@@ -143,110 +126,6 @@ COLOR4D::COLOR4D( EDA_COLOR_T aColor )
         a = c.Alpha() / 255.0;
     }
 
-
-    EDA_COLOR_T COLOR4D::GetNearestLegacyColor( COLOR4D &aColor )
-    {
-        // Cache layer implemented here, because all callers are using wxColour
-        static std::map< unsigned int, unsigned int > nearestCache;
-        static double hues[NBCOLORS];
-        static double values[NBCOLORS];
-
-        unsigned int colorInt = aColor.ToU32();
-
-        auto search = nearestCache.find( colorInt );
-
-        if( search != nearestCache.end() )
-            return static_cast<EDA_COLOR_T>( search->second );
-
-        // First use ColorFindNearest to check for exact matches
-        EDA_COLOR_T nearest = ColorFindNearest( aColor.r * 255.0, aColor.g * 255.0, aColor.b * 255.0 );
-
-        if( COLOR4D( nearest ) == aColor )
-        {
-            nearestCache.insert( std::pair< unsigned int, unsigned int >(
-                                 colorInt, static_cast<unsigned int>( nearest ) ) );
-            return nearest;
-        }
-
-        // If not, use hue and value to match.
-        // Hue will be NAN for grayscale colors.
-        // The legacy color palette is a grid across hue and value.
-        // We can exploit that to find a good match -- hue is most apparent to the user.
-        // So, first we determine the closest hue match, and then the closest value from that
-        // "grid row" in the legacy palette.
-
-        double h, s, v;
-        aColor.ToHSV( h, s, v );
-
-        double minDist = 360.0;
-        double legacyHue = 0.0;
-
-        if( std::isnan( h ) )
-        {
-            legacyHue = NAN;
-        }
-        else
-        {
-            for( EDA_COLOR_T candidate = ::BLACK;
-                    candidate < NBCOLORS; candidate = NextColor( candidate ) )
-            {
-                double ch, cs, cv;
-
-                if( hues[candidate] == 0.0 && values[candidate] == 0.0 )
-                {
-                    COLOR4D candidate4d( candidate );
-
-                    candidate4d.ToHSV( ch, cs, cv );
-
-                    values[candidate] = cv;
-                    // Set the hue to non-zero for black so that we won't do this more than once
-                    hues[candidate] = ( cv == 0.0 ) ? 1.0 : ch;
-                }
-                else
-                {
-                    ch = hues[candidate];
-                    cv = values[candidate];
-                    cv = 0.0;
-                }
-
-                if( fabs( ch - h ) < minDist )
-                {
-                    minDist = fabs( ch - h );
-                    legacyHue = ch;
-                }
-            }
-        }
-
-        // Now we have the desired hue; let's find the nearest value
-        minDist = 1.0;
-        for( EDA_COLOR_T candidate = ::BLACK;
-                candidate < NBCOLORS; candidate = NextColor( candidate ) )
-        {
-            // If the target hue is NAN, we didn't extract the value for any colors above
-            if( std::isnan( legacyHue ) )
-            {
-                double ch, cs, cv;
-                COLOR4D candidate4d( candidate );
-                candidate4d.ToHSV( ch, cs, cv );
-                values[candidate] = cv;
-                hues[candidate] = ( cv == 0.0 ) ? 1.0 : ch;
-            }
-
-            if( ( std::isnan( legacyHue ) != std::isnan( hues[candidate] ) ) || hues[candidate] != legacyHue )
-                continue;
-
-            if( fabs( values[candidate] - v ) < minDist )
-            {
-                minDist = fabs( values[candidate] - v );
-                nearest = candidate;
-            }
-        }
-
-        nearestCache.insert( std::pair< unsigned int, unsigned int >(
-                             colorInt, static_cast<unsigned int>( nearest ) ) );
-
-        return nearest;
-    }
 #endif
 
 namespace KIGFX {
@@ -267,6 +146,89 @@ std::ostream &operator<<( std::ostream &aStream, COLOR4D const &aColor )
     return aStream << aColor.ToWxString( wxC2S_CSS_SYNTAX );
 }
 
+void to_json( nlohmann::json& aJson, const COLOR4D& aColor )
+{
+    aJson = nlohmann::json( aColor.ToWxString( wxC2S_CSS_SYNTAX ).ToStdString() );
+}
+
+
+void from_json( const nlohmann::json& aJson, COLOR4D& aColor )
+{
+    aColor.SetFromWxString( aJson.get<std::string>() );
+}
+
+}
+
+
+void COLOR4D::ToHSL( double& aOutHue, double& aOutSaturation, double& aOutLightness ) const
+{
+    auto min = std::min( r, std::min( g, b ) );
+    auto max = std::max( r, std::max( g, b ) );
+    auto diff = max - min;
+
+    aOutLightness = ( max + min ) / 2.0;
+
+    if( aOutLightness >= 1.0 )
+        aOutSaturation = 0.0;
+    else
+        aOutSaturation = diff / ( 1.0 - std::abs( 2.0 * aOutLightness - 1.0 ) );
+
+    double hue;
+
+    if( diff <= 0.0 )
+        hue = 0.0;
+    else if( max == r )
+        hue = ( g - b ) / diff;
+    else if( max == g )
+        hue = ( b - r ) / diff + 2.0;
+    else
+        hue = ( r - g ) / diff + 4.0;
+
+    aOutHue = hue > 0.0 ? hue * 60.0 : hue * 60.0 + 360.0;
+
+    while( aOutHue < 0.0 )
+        aOutHue += 360.0;
+}
+
+
+void COLOR4D::FromHSL( double aInHue, double aInSaturation, double aInLightness )
+{
+    const auto P = ( 1.0 - std::abs( 2.0 * aInLightness - 1.0 ) ) * aInSaturation;
+    const auto scaled_hue = aInHue / 60.0;
+    const auto Q = P * ( 1.0 - std::abs( std::fmod( scaled_hue, 2.0 ) - 1.0 ) );
+
+    r = g = b = aInLightness - P / 2.0;
+
+    if (scaled_hue < 1.0)
+    {
+        r += P;
+        g += Q;
+    }
+    else if (scaled_hue < 2.0)
+    {
+        r += Q;
+        g += P;
+    }
+    else if (scaled_hue < 3.0)
+    {
+        g += P;
+        b += Q;
+    }
+    else if (scaled_hue < 4.0)
+    {
+        g += Q;
+        b += P;
+    }
+    else if (scaled_hue < 5.0)
+    {
+        r += Q;
+        b += P;
+    }
+    else
+    {
+        r += P;
+        b += Q;
+    }
 }
 
 
@@ -399,14 +361,18 @@ void COLOR4D::FromHSV( double aInH, double aInS, double aInV )
 
 COLOR4D& COLOR4D::Saturate( double aFactor )
 {
+    // One can saturate a color only when r, v, b are not equal
+    if( r == g && r == b )
+        return *this;
+
     double h, s, v;
 
-    ToHSV( h, s, v );
+    ToHSV( h, s, v, true );
     FromHSV( h, aFactor, 1.0 );
 
     return *this;
 }
 
-const COLOR4D COLOR4D::UNSPECIFIED( 0, 0, 0, 0 );
-const COLOR4D COLOR4D::WHITE( 1, 1, 1, 1 );
-const COLOR4D COLOR4D::BLACK( 0, 0, 0, 1 );
+constexpr COLOR4D COLOR4D::UNSPECIFIED( 0, 0, 0, 0 );
+constexpr COLOR4D COLOR4D::WHITE( 1, 1, 1, 1 );
+constexpr COLOR4D COLOR4D::BLACK( 0, 0, 0, 1 );

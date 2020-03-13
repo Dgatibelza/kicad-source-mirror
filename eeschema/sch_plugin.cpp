@@ -24,7 +24,7 @@
 
 #include <sch_io_mgr.h>
 
-#define FMT_UNIMPLEMENTED   _( "Plugin '%s' does not implement the '%s' function." )
+#define FMT_UNIMPLEMENTED   _( "Plugin \"%s\" does not implement the \"%s\" function." )
 
 /**
  * Function not_implemented
@@ -33,14 +33,6 @@
  * @param aPlugin is a SCH_PLUGIN instance
  * @param aCaller is the name of the unimplemented API function.
  */
-static void not_implemented( SCH_PLUGIN* aPlugin, const char* aCaller )
-{
-    THROW_IO_ERROR( wxString::Format( FMT_UNIMPLEMENTED,
-                                      aPlugin->GetName().GetData(),
-                                      wxString::FromUTF8( aCaller ).GetData() ) );
-}
-
-
 static void not_implemented( const SCH_PLUGIN* aPlugin, const char* aCaller )
 {
     THROW_IO_ERROR( wxString::Format( FMT_UNIMPLEMENTED,
@@ -71,15 +63,6 @@ void SCH_PLUGIN::Save( const wxString& aFileName, SCH_SCREEN* aSchematic, KIWAY*
 }
 
 
-size_t SCH_PLUGIN::GetSymbolLibCount( const wxString&   aLibraryPath,
-                                      const PROPERTIES* aProperties )
-{
-    // not pure virtual so that plugins only have to implement subset of the SCH_PLUGIN interface.
-    not_implemented( this, __FUNCTION__ );
-    return 0;
-}
-
-
 void SCH_PLUGIN::EnumerateSymbolLib( wxArrayString&    aAliasNameList,
                                      const wxString&   aLibraryPath,
                                      const PROPERTIES* aProperties )
@@ -89,7 +72,7 @@ void SCH_PLUGIN::EnumerateSymbolLib( wxArrayString&    aAliasNameList,
 }
 
 
-void SCH_PLUGIN::EnumerateSymbolLib( std::vector<LIB_ALIAS*>& aAliasList,
+void SCH_PLUGIN::EnumerateSymbolLib( std::vector<LIB_PART*>& aSymbolList,
                                      const wxString&   aLibraryPath,
                                      const PROPERTIES* aProperties )
 {
@@ -98,8 +81,8 @@ void SCH_PLUGIN::EnumerateSymbolLib( std::vector<LIB_ALIAS*>& aAliasList,
 }
 
 
-LIB_ALIAS* SCH_PLUGIN::LoadSymbol( const wxString& aLibraryPath, const wxString& aSymbolName,
-                                   const PROPERTIES* aProperties )
+LIB_PART* SCH_PLUGIN::LoadSymbol( const wxString& aLibraryPath, const wxString& aSymbolName,
+                                  const PROPERTIES* aProperties )
 {
     // not pure virtual so that plugins only have to implement subset of the SCH_PLUGIN interface.
     not_implemented( this, __FUNCTION__ );
@@ -115,15 +98,7 @@ void SCH_PLUGIN::SaveSymbol( const wxString& aLibraryPath, const LIB_PART* aSymb
 }
 
 
-void SCH_PLUGIN::DeleteAlias( const wxString& aLibraryPath, const wxString& aAliasName,
-                              const PROPERTIES* aProperties )
-{
-    // not pure virtual so that plugins only have to implement subset of the SCH_PLUGIN interface.
-    not_implemented( this, __FUNCTION__ );
-}
-
-
-void SCH_PLUGIN::DeleteSymbol( const wxString& aLibraryPath, const wxString& aAliasName,
+void SCH_PLUGIN::DeleteSymbol( const wxString& aLibraryPath, const wxString& aSymbolName,
                                const PROPERTIES* aProperties )
 {
     // not pure virtual so that plugins only have to implement subset of the SCH_PLUGIN interface.
@@ -194,5 +169,14 @@ bool SCH_PLUGIN::CheckHeader( const wxString& aFileName )
 {
     // not pure virtual so that plugins only have to implement subset of the SCH_PLUGIN interface.
     not_implemented( this, __FUNCTION__ );
-    return NULL;
+    return false;
+}
+
+
+const wxString& SCH_PLUGIN::GetError() const
+{
+    // not pure virtual so that plugins only have to implement subset of the SCH_PLUGIN interface.
+    not_implemented( this, __FUNCTION__ );
+    static wxString error;
+    return error;
 }

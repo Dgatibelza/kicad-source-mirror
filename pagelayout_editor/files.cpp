@@ -1,11 +1,9 @@
-/**
- * @file pagelayout_editor/files.cpp
- */
-
 /*
  * This program source code file is part of KiCad, a free EDA CAD application.
  *
  * Copyright (C) 2013 CERN
+ * Copyright (C) 2017-2019 KiCad Developers, see AUTHORS.txt for contributors.
+ *
  * @author Jean-Pierre Charras, jp.charras at wanadoo.fr
  *
  * This program is free software; you can redistribute it and/or
@@ -28,16 +26,26 @@
 
 #include <fctsys.h>
 #include <common.h>
-#include <class_drawpanel.h>
 #include <confirm.h>
 #include <gestfich.h>
 #include <macros.h>
-#include <worksheet_shape_builder.h>
-
+#include <ws_draw_item.h>
+#include <ws_data_model.h>
 #include <pl_editor_frame.h>
 #include <properties_frame.h>
 #include <pl_editor_id.h>
 #include <wildcards_and_files_ext.h>
+
+
+bool PL_EDITOR_FRAME::saveCurrentPageLayout()
+{
+    wxCommandEvent saveEvent;
+    saveEvent.SetId( wxID_SAVE );
+    Files_io( saveEvent );
+
+    return !IsContentModified();
+}
+
 
 void PL_EDITOR_FRAME::OnFileHistory( wxCommandEvent& event )
 {
@@ -47,17 +55,22 @@ void PL_EDITOR_FRAME::OnFileHistory( wxCommandEvent& event )
 
     if( filename != wxEmptyString )
     {
-        if( GetScreen()->IsModify() && !IsOK( this,
-                   _( "The current page layout has been modified.\n"
-                      "Do you wish to discard the changes?" ) ) )
-            return;
+        if( IsContentModified() )
+        {
+            if( !HandleUnsavedChanges( this, _( "The current page layout has been modified. "
+                                                "Save changes?" ),
+                                       [&]()->bool { return saveCurrentPageLayout(); } ) )
+            {
+                return;
+            }
+        }
 
-         m_canvas->EndMouseCapture( ID_NO_TOOL_SELECTED, m_canvas->GetDefaultCursor() );
         ::wxSetWorkingDirectory( ::wxPathOnly( filename ) );
+
         if( LoadPageLayoutDescrFile( filename ) )
         {
             wxString msg;
-            msg.Printf( _("File <%s> loaded"), GetChars( filename ) );
+            msg.Printf( _( "File \"%s\" loaded"), GetChars( filename ) );
             SetStatusText( msg );
         }
 
@@ -65,31 +78,33 @@ void PL_EDITOR_FRAME::OnFileHistory( wxCommandEvent& event )
     }
 }
 
+
+void PL_EDITOR_FRAME::OnClearFileHistory( wxCommandEvent& aEvent )
+{
+    ClearFileHistory();
+}
+
+
 /* File commands. */
 void PL_EDITOR_FRAME::Files_io( wxCommandEvent& event )
 {
-    wxString msg;
-    int        id = event.GetId();
-    wxString   filename = GetCurrFileName();
-    WORKSHEET_LAYOUT& pglayout = WORKSHEET_LAYOUT::GetTheInstance();
+    wxString       msg;
+    int            id = event.GetId();
+    wxString       filename = GetCurrFileName();
+    WS_DATA_MODEL& pglayout = WS_DATA_MODEL::GetTheInstance();
 
     if( filename.IsEmpty() && id == wxID_SAVE )
         id = wxID_SAVEAS;
 
-    switch( id )
+    if( ( id == wxID_NEW || id == wxID_OPEN ) && IsContentModified() )
     {
-    case wxID_NEW:
-    case wxID_OPEN:
-        if( GetScreen()->IsModify() && !IsOK( this,
-                   _( "The current page layout has been modified.\n"
-                      "Do you wish to discard the changes?" ) ) )
+        if( !HandleUnsavedChanges( this, _( "The current page layout has been modified.  "
+                                            "Save changes?" ),
+                                   [&]()->bool { return saveCurrentPageLayout(); } ) )
+        {
             return;
-        break;
-
-    default:
-        break;
+        }
     }
-
 
     switch( id )
     {
@@ -102,25 +117,25 @@ void PL_EDITOR_FRAME::Files_io( wxCommandEvent& event )
 
     case ID_APPEND_DESCR_FILE:
     {
-         wxFileDialog openFileDialog(this, _("Append Existing Page Layout File"),
-                wxEmptyString,
-                wxEmptyString, PageLayoutDescrFileWildcard, wxFD_OPEN);
+         wxFileDialog openFileDialog( this, _( "Append Existing Page Layout File" ),
+                                      wxEmptyString, wxEmptyString,
+                                      PageLayoutDescrFileWildcard(), wxFD_OPEN );
 
-        if (openFileDialog.ShowModal() == wxID_CANCEL)
+        if( openFileDialog.ShowModal() == wxID_CANCEL )
             return;
 
         filename = openFileDialog.GetPath();
+
         if( ! InsertPageLayoutDescrFile( filename ) )
         {
-            msg.Printf( _("Unable to load %s file"), GetChars( filename ) );
+            msg.Printf( _( "Unable to load %s file" ), GetChars( filename ) );
             wxMessageBox( msg );
         }
         else
         {
             GetScreen()->SetModify();
-            RebuildDesignTree();
-            m_canvas->Refresh();
-            msg.Printf( _("File <%s> inserted"), GetChars( filename ) );
+            HardRedraw();
+            msg.Printf( _( "File \"%s\" inserted" ), GetChars( filename ) );
             SetStatusText( msg );
         }
     }
@@ -128,22 +143,23 @@ void PL_EDITOR_FRAME::Files_io( wxCommandEvent& event )
 
     case wxID_OPEN:
     {
-         wxFileDialog openFileDialog(this, _("Open"), wxEmptyString,
-                wxEmptyString, PageLayoutDescrFileWildcard, wxFD_OPEN);
+         wxFileDialog openFileDialog( this, _( "Open" ), wxEmptyString, wxEmptyString,
+                                      PageLayoutDescrFileWildcard(), wxFD_OPEN );
 
-        if (openFileDialog.ShowModal() == wxID_CANCEL)
+        if( openFileDialog.ShowModal() == wxID_CANCEL )
             return;
 
         filename = openFileDialog.GetPath();
+
         if( ! LoadPageLayoutDescrFile( filename ) )
         {
-            msg.Printf( _("Unable to load %s file"), GetChars( filename ) );
+            msg.Printf( _( "Unable to load %s file" ), GetChars( filename ) );
             wxMessageBox( msg );
         }
         else
         {
             OnNewPageLayout();
-            msg.Printf( _("File <%s> loaded"), GetChars( filename ) );
+            msg.Printf( _( "File \"%s\" loaded" ), GetChars( filename ) );
             SetStatusText( msg );
         }
     }
@@ -152,22 +168,22 @@ void PL_EDITOR_FRAME::Files_io( wxCommandEvent& event )
     case wxID_SAVE:
         if( !SavePageLayoutDescrFile( filename ) )
         {
-            msg.Printf( _("Unable to write <%s>"), GetChars( filename ) );
+            msg.Printf( _( "Unable to write \"%s\"" ), GetChars( filename ) );
             wxMessageBox( msg );
         }
         else
         {
-            msg.Printf( _("File <%s> written"), GetChars( filename ) );
+            msg.Printf( _("File \"%s\" written"), GetChars( filename ) );
             SetStatusText( msg );
         }
         break;
 
     case wxID_SAVEAS:
     {
-         wxFileDialog openFileDialog(this, _("Save As"), wxEmptyString,
-                wxEmptyString, PageLayoutDescrFileWildcard, wxFD_SAVE);
+         wxFileDialog openFileDialog( this, _( "Save As" ), wxEmptyString, wxEmptyString,
+                                      PageLayoutDescrFileWildcard(), wxFD_SAVE );
 
-        if (openFileDialog.ShowModal() == wxID_CANCEL)
+        if( openFileDialog.ShowModal() == wxID_CANCEL )
             return;
 
         filename = openFileDialog.GetPath();
@@ -182,14 +198,15 @@ void PL_EDITOR_FRAME::Files_io( wxCommandEvent& event )
 
         if( !SavePageLayoutDescrFile( filename ) )
         {
-            msg.Printf( _("Unable to create <%s>"), GetChars( filename ) );
+            msg.Printf( _("Unable to create \"%s\""), GetChars( filename ) );
             wxMessageBox( msg );
         }
 
         else
         {
-            msg.Printf( _("File <%s> written"), GetChars( filename ) );
+            msg.Printf( _("File \"%s\" written"), GetChars( filename ) );
             SetStatusText( msg );
+
             if( GetCurrFileName().IsEmpty() )
                 SetCurrFileName( filename );
         }
@@ -202,13 +219,12 @@ void PL_EDITOR_FRAME::Files_io( wxCommandEvent& event )
     }
 }
 
-/* Loads a .kicad_wks page layout descr file
- */
+
 bool PL_EDITOR_FRAME::LoadPageLayoutDescrFile( const wxString& aFullFileName )
 {
     if( wxFileExists( aFullFileName ) )
     {
-        WORKSHEET_LAYOUT::GetTheInstance().SetPageLayout( aFullFileName );
+        WS_DATA_MODEL::GetTheInstance().SetPageLayout( aFullFileName );
         SetCurrFileName( aFullFileName );
         UpdateFileHistory( aFullFileName );
         GetScreen()->ClrModify();
@@ -218,17 +234,14 @@ bool PL_EDITOR_FRAME::LoadPageLayoutDescrFile( const wxString& aFullFileName )
     return false;
 }
 
-/* Inserts a .kicad_wks page layout descr file
- * same as LoadPageLayoutDescrFile, but the new data is added
- * to the previous data.
- */
+
 bool PL_EDITOR_FRAME::InsertPageLayoutDescrFile( const wxString& aFullFileName )
 {
     if( wxFileExists( aFullFileName ) )
     {
         const bool append = true;
         SaveCopyInUndoList();
-        WORKSHEET_LAYOUT::GetTheInstance().SetPageLayout( aFullFileName, append );
+        WS_DATA_MODEL::GetTheInstance().SetPageLayout( aFullFileName, append );
         return true;
     }
 
@@ -236,13 +249,11 @@ bool PL_EDITOR_FRAME::InsertPageLayoutDescrFile( const wxString& aFullFileName )
 }
 
 
-/* Save the current layout in a .kicad_wks page layout descr file
- */
 bool PL_EDITOR_FRAME::SavePageLayoutDescrFile( const wxString& aFullFileName )
 {
     if( ! aFullFileName.IsEmpty() )
     {
-        WORKSHEET_LAYOUT::GetTheInstance().Save( aFullFileName );
+        WS_DATA_MODEL::GetTheInstance().Save( aFullFileName );
         GetScreen()->ClrModify();
         return true;
     }

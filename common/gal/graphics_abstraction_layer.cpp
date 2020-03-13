@@ -29,12 +29,11 @@
 #include <gal/graphics_abstraction_layer.h>
 #include <gal/definitions.h>
 
+#include <math/util.h>      // for KiROUND
+
 #include <cmath>
 
 using namespace KIGFX;
-
-
-const double GAL::METRIC_UNIT_LENGTH = 1e9;
 
 
 GAL::GAL( GAL_DISPLAY_OPTIONS& aDisplayOptions ) :
@@ -48,19 +47,24 @@ GAL::GAL( GAL_DISPLAY_OPTIONS& aDisplayOptions ) :
     SetStrokeColor( COLOR4D( 1.0, 1.0, 1.0, 1.0 ) );
     SetLookAtPoint( VECTOR2D( 0, 0 ) );
     SetZoomFactor( 1.0 );
-    SetWorldUnitLength( 1.0 / METRIC_UNIT_LENGTH * 2.54 );   // 1 inch in nanometers
-    SetScreenDPI( 106 );                                     // Display resolution setting
+    SetRotation( 0.0 );
+    // this value for SetWorldUnitLength is only suitable for Pcbnew.
+    // Other editors/viewer must call SetWorldUnitLength with their internal units
+    SetWorldUnitLength( 1e-9 /* 1 nm */ / 0.0254 /* 1 inch in meters */ );
+    // wxDC::GetPPI() reports 96 DPI, but somehow this value
+    // is the closest match to the legacy renderer
+    SetScreenDPI( 91 );
     SetDepthRange( VECTOR2D( GAL::MIN_DEPTH, GAL::MAX_DEPTH ) );
     SetLayerDepth( 0.0 );
     SetFlip( false, false );
-    SetLineWidth( 1.0 );
+    SetLineWidth( 1.0f );
     computeWorldScale();
     SetAxesEnabled( false );
 
     // Set grid defaults
     SetGridVisibility( true );
     SetCoarseGrid( 10 );
-    gridLineWidth = 0.5;
+    gridLineWidth = 0.5f;
     gridStyle = GRID_STYLE::LINES;
     gridMinSpacing = 10;
 
@@ -106,7 +110,7 @@ bool GAL::updatedGalDisplayOptions( const GAL_DISPLAY_OPTIONS& aOptions )
 
     if( options.m_gridLineWidth != gridLineWidth )
     {
-        gridLineWidth = options.m_gridLineWidth ;
+        gridLineWidth = std::floor( options.m_gridLineWidth + 0.5 );
         refresh = true;
     }
 
@@ -165,12 +169,12 @@ void GAL::ResetTextAttributes()
 }
 
 
-VECTOR2D GAL::GetTextLineSize( const UTF8& aText ) const
+VECTOR2D GAL::GetTextLineSize( const UTF8& aText, int aMarkupFlags ) const
 {
     // Compute the X and Y size of a given text.
     // Because computeTextLineSize expects a one line text,
     // aText is expected to be only one line text.
-    return strokeFont.computeTextLineSize( aText );
+    return strokeFont.computeTextLineSize( aText, aMarkupFlags );
 }
 
 
@@ -178,18 +182,19 @@ void GAL::ComputeWorldScreenMatrix()
 {
     computeWorldScale();
 
-    worldScreenMatrix.SetIdentity();
-
     MATRIX3x3D translation;
     translation.SetIdentity();
     translation.SetTranslation( 0.5 * VECTOR2D( screenSize ) );
+
+    MATRIX3x3D rotate;
+    rotate.SetIdentity();
+    rotate.SetRotation( rotation );
 
     MATRIX3x3D scale;
     scale.SetIdentity();
     scale.SetScale( VECTOR2D( worldScale, worldScale ) );
 
     MATRIX3x3D flip;
-
     flip.SetIdentity();
     flip.SetScale( VECTOR2D( globalFlipX ? -1.0 : 1.0, globalFlipY ? -1.0 : 1.0 ) );
 
@@ -197,7 +202,7 @@ void GAL::ComputeWorldScreenMatrix()
     lookat.SetIdentity();
     lookat.SetTranslation( -lookAtPoint );
 
-    worldScreenMatrix = translation * flip * scale * lookat * worldScreenMatrix;
+    worldScreenMatrix = translation * rotate * flip * scale * lookat;
     screenWorldMatrix = worldScreenMatrix.Inverse();
 }
 
@@ -210,192 +215,21 @@ double GAL::computeMinGridSpacing() const
 }
 
 
-void GAL::DrawGrid()
-{
-    SetTarget( TARGET_NONCACHED );
-
-    // Draw the grid
-    // For the drawing the start points, end points and increments have
-    // to be calculated in world coordinates
-    VECTOR2D worldStartPoint = screenWorldMatrix * VECTOR2D( 0.0, 0.0 );
-    VECTOR2D worldEndPoint   = screenWorldMatrix * VECTOR2D( screenSize );
-
-    const double gridThreshold = computeMinGridSpacing();
-
-    int gridScreenSizeDense  = KiROUND( gridSize.x * worldScale );
-    int gridScreenSizeCoarse = KiROUND( gridSize.x * static_cast<double>( gridTick ) * worldScale );
-
-    // Compute the line marker or point radius of the grid
-    // Note: generic grids can't handle sub-pixel lines without
-    // either losing fine/course distinction or having some dots
-    // fail to render
-    double marker = std::max( 1.0, gridLineWidth ) / worldScale;
-    double doubleMarker = 2.0 * marker;
-
-    // Draw axes if desired
-    if( axesEnabled )
-    {
-        SetIsFill( false );
-        SetIsStroke( true );
-        SetStrokeColor( axesColor );
-        SetLineWidth( marker );
-
-        drawGridLine( VECTOR2D( worldStartPoint.x, 0 ),
-                      VECTOR2D( worldEndPoint.x, 0 ) );
-
-        drawGridLine( VECTOR2D( 0, worldStartPoint.y ),
-                      VECTOR2D( 0, worldEndPoint.y ) );
-    }
-
-    if( !gridVisibility )
-        return;
-
-    // Check if the grid would not be too dense
-    if( std::max( gridScreenSizeDense, gridScreenSizeCoarse ) <= gridThreshold )
-        return;
-
-    // Compute grid staring and ending indexes to draw grid points on the
-    // visible screen area
-    // Note: later any point coordinate will be offsetted by gridOrigin
-    int gridStartX = KiROUND( (worldStartPoint.x-gridOrigin.x) / gridSize.x );
-    int gridEndX = KiROUND( (worldEndPoint.x-gridOrigin.x) / gridSize.x );
-    int gridStartY = KiROUND( (worldStartPoint.y-gridOrigin.y) / gridSize.y );
-    int gridEndY = KiROUND( (worldEndPoint.y-gridOrigin.y) / gridSize.y );
-
-    // Ensure start coordinate > end coordinate
-    if( gridStartX > gridEndX )
-        std::swap( gridStartX, gridEndX );
-
-    if( gridStartY > gridEndY )
-        std::swap( gridStartY, gridEndY );
-
-    // Draw the grid behind all other layers
-    SetLayerDepth( depthRange.y * 0.75 );
-
-    if( gridStyle == GRID_STYLE::LINES )
-    {
-        SetIsFill( false );
-        SetIsStroke( true );
-        SetStrokeColor( gridColor );
-
-        // Now draw the grid, every coarse grid line gets the double width
-
-        // Vertical lines
-        for( int j = gridStartY-1; j <= gridEndY; j++ )
-        {
-            const double y = j * gridSize.y + gridOrigin.y;
-
-            if( axesEnabled && y == 0 )
-                continue;
-
-            if( j % gridTick == 0 && gridScreenSizeDense > gridThreshold )
-                SetLineWidth( doubleMarker );
-            else
-                SetLineWidth( marker );
-
-            if( ( j % gridTick == 0 && gridScreenSizeCoarse > gridThreshold )
-                || gridScreenSizeDense > gridThreshold )
-            {
-                drawGridLine( VECTOR2D( gridStartX * gridSize.x + gridOrigin.x, y ),
-                              VECTOR2D( gridEndX * gridSize.x + gridOrigin.x, y ) );
-            }
-        }
-
-        // Horizontal lines
-        for( int i = gridStartX-1; i <= gridEndX; i++ )
-        {
-            const double x = i * gridSize.x + gridOrigin.x;
-
-            if( axesEnabled && x == 0 )
-                continue;
-
-            if( i % gridTick == 0 && gridScreenSizeDense > gridThreshold )
-                SetLineWidth( doubleMarker );
-            else
-                SetLineWidth( marker );
-
-            if( ( i % gridTick == 0 && gridScreenSizeCoarse > gridThreshold )
-                || gridScreenSizeDense > gridThreshold )
-            {
-                drawGridLine( VECTOR2D( x, gridStartY * gridSize.y + gridOrigin.y ),
-                              VECTOR2D( x, gridEndY * gridSize.y + gridOrigin.y ) );
-            }
-        }
-    }
-    else if( gridStyle == GRID_STYLE::SMALL_CROSS )
-    {
-        SetIsFill( false );
-        SetIsStroke( true );
-        SetStrokeColor( gridColor );
-
-        SetLineWidth( marker );
-        double lineLen = GetLineWidth() * 2;
-
-        // Vertical positions:
-        for( int j = gridStartY-1; j <= gridEndY; j++ )
-        {
-            if( ( j % gridTick == 0 && gridScreenSizeCoarse > gridThreshold )
-                || gridScreenSizeDense > gridThreshold )
-            {
-                int posY =  j * gridSize.y + gridOrigin.y;
-
-                // Horizontal positions:
-                for( int i = gridStartX-1; i <= gridEndX; i++ )
-                {
-                    if( ( i % gridTick == 0 && gridScreenSizeCoarse > gridThreshold )
-                        || gridScreenSizeDense > gridThreshold )
-                    {
-                        int posX = i * gridSize.x + gridOrigin.x;
-
-                        drawGridLine( VECTOR2D( posX - lineLen, posY ),
-                                        VECTOR2D( posX + lineLen,   posY ) );
-
-                        drawGridLine( VECTOR2D( posX, posY - lineLen ),
-                                        VECTOR2D( posX, posY + lineLen ) );
-                    }
-                }
-            }
-        }
-    }
-    else    // Dotted grid
-    {
-        bool tickX, tickY;
-        SetIsFill( true );
-        SetIsStroke( false );
-        SetFillColor( gridColor );
-
-        for( int j = gridStartY-1; j <= gridEndY; j++ )
-        {
-            if( j % gridTick == 0 && gridScreenSizeDense > gridThreshold )
-                tickY = true;
-            else
-                tickY = false;
-
-            for( int i = gridStartX-1; i <= gridEndX; i++ )
-            {
-                if( i % gridTick == 0 && gridScreenSizeDense > gridThreshold )
-                    tickX = true;
-                else
-                    tickX = false;
-
-                if( tickX || tickY || gridScreenSizeDense > gridThreshold )
-                {
-                    double radius = ( ( tickX && tickY ) ? doubleMarker : marker ) / 2.0;
-                    DrawRectangle( VECTOR2D( i * gridSize.x - radius + gridOrigin.x,
-                                                j * gridSize.y - radius + gridOrigin.y ),
-                                    VECTOR2D( i * gridSize.x + radius + gridOrigin.x,
-                                                j * gridSize.y + radius + gridOrigin.y ) );
-                }
-            }
-        }
-    }
-}
-
-
 VECTOR2D GAL::GetGridPoint( const VECTOR2D& aPoint ) const
 {
+#if 0
+    // This old code expects a non zero grid size, which can be wrong here.
     return VECTOR2D( KiROUND( ( aPoint.x - gridOffset.x ) / gridSize.x ) * gridSize.x + gridOffset.x,
                      KiROUND( ( aPoint.y - gridOffset.y ) / gridSize.y ) * gridSize.y + gridOffset.y );
+#else
+    // if grid size == 0.0 there is no grid, so use aPoint as grid reference position
+    double cx = gridSize.x > 0.0 ? KiROUND( ( aPoint.x - gridOffset.x ) / gridSize.x ) * gridSize.x + gridOffset.x
+            : aPoint.x;
+    double cy = gridSize.y > 0.0 ? KiROUND( ( aPoint.y - gridOffset.y ) / gridSize.y ) * gridSize.y + gridOffset.y
+            : aPoint.y;
+
+    return VECTOR2D( cx, cy );
+#endif
 }
 
 const int GAL::MIN_DEPTH = -1024;

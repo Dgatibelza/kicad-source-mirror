@@ -30,13 +30,13 @@
 
 
 /**
- * Class WX_HTML_REPORT_PANEL
+ * WX_HTML_REPORT_PANEL
  *
  * A widget for browsing a rich text error/status report. Used in numerous
  * dialogs in eeschema and pcbnew. Provides error filtering functionality
  * and saving report files.
  *
- * The messages are reported throuth a REPORTER object
+ * The messages are reported through a REPORTER object
  */
 class WX_HTML_REPORT_PANEL : public WX_HTML_REPORT_PANEL_BASE
 {
@@ -52,11 +52,20 @@ public:
     ///> returns the reporter object that reports to this panel
     REPORTER& Reporter();
 
-    ///> reports a string directly.
-    void Report( const wxString& aText, REPORTER::SEVERITY aSeverity );
+    /**
+     * Reports the string
+     * @param aText string message to report
+     * @param aSeverity string classification level bitfield
+     * @param aLocation REPORTER::LOCATION enum for placement of message
+     */
+    void Report( const wxString& aText, SEVERITY aSeverity,
+                 REPORTER::LOCATION aLocation = REPORTER::LOC_BODY );
 
     ///> clears the report panel
     void Clear();
+
+    ///> return the number of messages matching the given severity mask.
+    int Count( int severityMask );
 
     ///> sets the frame label
     void SetLabel( const wxString& aLabel ) override;
@@ -67,7 +76,8 @@ public:
     void SetLazyUpdate( bool aLazyUpdate );
 
     ///> Forces updating the HTML page, after the report is built in lazy mode
-    void Flush();
+    ///> If aSort = true, the body messages will be ordered by severity
+    void Flush( bool aSort = false );
 
     ///> Set the visible severity filter.
     ///> if aSeverities < 0 the m_showAll option is set
@@ -80,7 +90,7 @@ public:
 private:
     struct REPORT_LINE
     {
-        REPORTER::SEVERITY severity;
+        SEVERITY severity;
         wxString message;
     };
 
@@ -89,11 +99,13 @@ private:
     wxString addHeader( const wxString& aBody );
     wxString generateHtml( const REPORT_LINE& aLine );
     wxString generatePlainText( const REPORT_LINE& aLine );
+    void updateBadges();
 
-    void refreshView();
     void scrollToBottom();
     void syncCheckboxes();
 
+    void onRightClick( wxMouseEvent& event ) override;
+    void onMenuEvent( wxMenuEvent& event );
     void onCheckBoxShowAll( wxCommandEvent& event ) override;
     void onCheckBoxShowWarnings( wxCommandEvent& event ) override;
     void onCheckBoxShowErrors( wxCommandEvent& event ) override;
@@ -105,16 +117,17 @@ private:
     ///> copy of the report, stored for filtering
     REPORT_LINES m_report;
 
+    ///> Lines to print at the very end of the report, regardless of sorting
+    REPORT_LINES m_reportTail;
+
+    ///> Lines to print at the very beginning of the report, regardless of sorting
+    REPORT_LINES m_reportHead;
+
     ///> the reporter
     WX_HTML_PANEL_REPORTER m_reporter;
 
     ///> message severities to display (mask)
     int m_severities;
-
-    ///> show all messages flag (overrides m_severities)
-    bool m_showAll;
-
-    wxString m_html;
 
     bool m_lazyUpdate;
 };

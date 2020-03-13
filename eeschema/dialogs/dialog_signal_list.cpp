@@ -54,12 +54,16 @@ bool DIALOG_SIGNAL_LIST::TransferDataToWindow()
         // Voltage list
         for( const auto& net : m_exporter->GetNetIndexMap() )
         {
-            if( net.first != "GND" )
-                m_signals->Append( wxString::Format( "V(%s)", net.first ) );
+            // netnames are escaped (can contain "{slash}" for '/') Unscape them:
+            wxString netname = UnescapeString( net.first );
+
+            if( netname != "GND" && netname != "0" )
+                m_signals->Append( wxString::Format( "V(%s)", netname ) );
         }
 
-        // For some reason, it is not possible to plot currents in any but transient analysis
-        if( m_exporter->GetSimType() == ST_TRANSIENT )
+        auto simType = m_exporter->GetSimType();
+
+        if( simType == ST_TRANSIENT || simType == ST_DC )
         {
             for( const auto& item : m_exporter->GetSpiceItems() )
             {
@@ -82,6 +86,37 @@ bool DIALOG_SIGNAL_LIST::TransferDataToWindow()
 }
 
 
+bool DIALOG_SIGNAL_LIST::addSignalToPlotFrame( const wxString& aPlotName )
+{
+
+    // Get the part in the parentheses
+    wxString name = aPlotName.AfterFirst( '(' ).BeforeLast( ')' );
+
+    if( !name.IsEmpty() )
+    {
+        wxUniChar firstChar = aPlotName[0];
+        if( firstChar == 'V' || firstChar == 'v' )
+        {
+            m_plotFrame->AddVoltagePlot( name );
+        }
+        else if( firstChar == 'I' || firstChar == 'i' )
+        {
+            m_plotFrame->AddCurrentPlot( name, aPlotName.BeforeFirst( '(' ) );
+        }
+        else
+        {
+            return false;
+        }
+    }
+    else
+    {
+        return false;
+    }
+
+    return true;
+}
+
+
 void DIALOG_SIGNAL_LIST::addSelectionToPlotFrame()
 {
     for( unsigned int i = 0; i < m_signals->GetCount(); ++i )
@@ -89,22 +124,19 @@ void DIALOG_SIGNAL_LIST::addSelectionToPlotFrame()
         if( m_signals->IsSelected( i ) )
         {
             const wxString& plotName = m_signals->GetString( i );
-
-            // Get the part in the parentheses
-            wxString name = plotName.AfterFirst( '(' ).BeforeLast( ')' );
-
-            if( plotName[0] == 'V' )
-            {
-                m_plotFrame->AddVoltagePlot( name );
-            }
-            else if( plotName[0] == 'I' )
-            {
-                m_plotFrame->AddCurrentPlot( name, plotName.BeforeFirst( '(' ) );
-            }
-            else
-            {
+            if( !addSignalToPlotFrame( plotName ) )
                 wxASSERT_MSG( false, "Unhandled plot type" );
-            }
         }
+    }
+
+    // Add manually entered signal, if any
+    const wxString& plotName = m_signalEntry->GetValue();
+
+    if( !plotName.IsEmpty() )
+    {
+        if( !addSignalToPlotFrame( plotName ) )
+            m_plotFrame->AddVoltagePlot( plotName ); // Assume it's a V plot by default
+
+        m_signalEntry->SetSelection( -1, -1 );
     }
 }

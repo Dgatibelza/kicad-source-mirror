@@ -2,7 +2,7 @@
  * This program source code file is part of KiCad, a free EDA CAD application.
  *
  * Copyright (C) 2012 CERN.
- * Copyright (C) 1992-2017 KiCad Developers, see AUTHORS.txt for contributors.
+ * Copyright (C) 1992-2020 KiCad Developers, see AUTHORS.txt for contributors.
  *
  * This program is free software; you can redistribute it and/or
  * modify it under the terms of the GNU General Public License
@@ -34,6 +34,16 @@ class BOARD_ITEM;
 class FP_CACHE;
 class PCB_PARSER;
 class NETINFO_MAPPING;
+class BOARD_DESIGN_SETTINGS;
+class DIMENSION;
+class EDGE_MODULE;
+class DRAWSEGMENT;
+class PCB_TARGET;
+class D_PAD;
+class TEXTE_MODULE;
+class TRACK;
+class ZONE_CONTAINER;
+class TEXTE_PCB;
 
 
 /// Current s-expression file format version.  2 was the last legacy format version.
@@ -44,7 +54,19 @@ class NETINFO_MAPPING;
 //#define SEXPR_BOARD_FILE_VERSION    20160815  // differential pair settings per net class
 //#define SEXPR_BOARD_FILE_VERSION    20170123  // EDA_TEXT refactor, moved 'hide'
 //#define SEXPR_BOARD_FILE_VERSION    20170920  // long pad names and custom pad shape
-#define SEXPR_BOARD_FILE_VERSION      20170922  // Keepout zones can exist on multiple layers
+//#define SEXPR_BOARD_FILE_VERSION    20170922  // Keepout zones can exist on multiple layers
+//#define SEXPR_BOARD_FILE_VERSION    20171114  // Save 3D model offset in mm, instead of inches
+//#define SEXPR_BOARD_FILE_VERSION    20171125  // Locked/unlocked TEXTE_MODULE
+//#define SEXPR_BOARD_FILE_VERSION    20171130  // 3D model offset written using "offset" parameter
+//#define SEXPR_BOARD_FILE_VERSION    20190331  // hatched zones and chamfered round rect pads
+//#define SEXPR_BOARD_FILE_VERSION    20190421  // curves in custom pads
+//#define SEXPR_BOARD_FILE_VERSION    20190516  // Remove segment count from zones
+//#define SEXPR_BOARD_FILE_VERSION    20190605  // Add layer defaults
+//#define SEXPR_BOARD_FILE_VERSION    20190905  // Add board physical stackup info in setup section
+//#define SEXPR_BOARD_FILE_VERSION    20190907  // Keepout areas in footprints
+//#define SEXPR_BOARD_FILE_VERSION    20191123  // pin function in pads
+//#define SEXPR_BOARD_FILE_VERSION    20200104    // pad property for fabrication
+#define SEXPR_BOARD_FILE_VERSION      20200119  // arcs in tracks
 
 #define CTL_STD_LAYER_NAMES         (1 << 0)    ///< Use English Standard layer names
 #define CTL_OMIT_NETS               (1 << 1)    ///< Omit pads net names (useless in library)
@@ -69,20 +91,8 @@ class NETINFO_MAPPING;
 #define CTL_FOR_BOARD               (CTL_OMIT_INITIAL_COMMENTS)
 
 
-class DIMENSION;
-class EDGE_MODULE;
-class DRAWSEGMENT;
-class PCB_TARGET;
-class D_PAD;
-class TEXTE_MODULE;
-class TRACK;
-class ZONE_CONTAINER;
-class TEXTE_PCB;
-
-
-
 /**
- * Class PCB_IO
+ * PCB_IO
  * is a PLUGIN derivation for saving and loading Pcbnew s-expression formatted files.
  *
  * @note This class is not thread safe, but it is re-entrant multiple times in sequence.
@@ -116,16 +126,25 @@ public:
                  const PROPERTIES* aProperties = NULL ) override;
 
     void FootprintEnumerate( wxArrayString& aFootprintNames, const wxString& aLibraryPath,
-            const PROPERTIES* aProperties = NULL ) override;
+                             bool aBestEfforts, const PROPERTIES* aProperties = NULL ) override;
+
+    const MODULE* GetEnumeratedFootprint( const wxString& aLibraryPath,
+                                          const wxString& aFootprintName,
+                                          const PROPERTIES* aProperties = NULL ) override;
+
+    bool FootprintExists( const wxString& aLibraryPath, const wxString& aFootprintName,
+                          const PROPERTIES* aProperties = NULL ) override;
 
     MODULE* FootprintLoad( const wxString& aLibraryPath, const wxString& aFootprintName,
-            const PROPERTIES* aProperties = NULL ) override;
+                           const PROPERTIES* aProperties = NULL ) override;
 
     void FootprintSave( const wxString& aLibraryPath, const MODULE* aFootprint,
                         const PROPERTIES* aProperties = NULL ) override;
 
     void FootprintDelete( const wxString& aLibraryPath, const wxString& aFootprintName,
                           const PROPERTIES* aProperties = NULL ) override;
+
+    long long GetLibraryTimestamp( const wxString& aLibraryPath ) const override;
 
     void FootprintLibCreate( const wxString& aLibraryPath, const PROPERTIES* aProperties = NULL) override;
 
@@ -183,13 +202,18 @@ protected:
     NETINFO_MAPPING*    m_mapping;  ///< mapping for net codes, so only not empty net codes
                                     ///< are stored with consecutive integers as net codes
 
-    /// we only cache one footprint library, this determines which one.
-    void cacheLib( const wxString& aLibraryPath, const wxString& aFootprintName = wxEmptyString );
+    void validateCache( const wxString& aLibraryPath, bool checkModified = true );
+
+    const MODULE* getFootprint( const wxString& aLibraryPath, const wxString& aFootprintName,
+                  const PROPERTIES* aProperties, bool checkModified );
 
     void init( const PROPERTIES* aProperties );
 
     /// formats the board setup information
     void formatSetup( BOARD* aBoard, int aNestLevel = 0 ) const;
+
+    /// formats the defaults subsection of the board setup
+    void formatDefaults( const BOARD_DESIGN_SETTINGS& aSettings, int aNestLevel ) const;
 
     /// formats the General section of the file
     void formatGeneral( BOARD* aBoard, int aNestLevel = 0 ) const;

@@ -25,21 +25,18 @@
 using namespace std::placeholders;
 
 #include <fctsys.h>
-#include <class_drawpanel.h>
 #include <confirm.h>
 #include <pcbnew.h>
-#include <wxPcbStruct.h>
+#include <pcb_edit_frame.h>
 #include <ratsnest_data.h>
 #include <board_commit.h>
-
 #include <class_board.h>
 #include <class_module.h>
 #include <class_track.h>
 #include <class_zone.h>
-
 #include <tool/tool_manager.h>
 #include <tools/pcb_actions.h>
-
+#include <tools/global_edit_tool.h>
 #include <dialog_global_deletion.h>
 
 
@@ -61,12 +58,14 @@ DIALOG_GLOBAL_DELETION::DIALOG_GLOBAL_DELETION( PCB_EDIT_FRAME* parent ) :
 }
 
 
-void PCB_EDIT_FRAME::InstallPcbGlobalDeleteFrame( const wxPoint& pos )
+int GLOBAL_EDIT_TOOL::GlobalDeletions( const TOOL_EVENT& aEvent )
 {
-    DIALOG_GLOBAL_DELETION dlg( this );
-    dlg.SetCurrentLayer( GetActiveLayer() );
-
+    PCB_EDIT_FRAME* editFrame = getEditFrame<PCB_EDIT_FRAME>();
+    DIALOG_GLOBAL_DELETION dlg( editFrame );
+    
+    dlg.SetCurrentLayer( frame()->GetActiveLayer() );
     dlg.ShowModal();
+    return 0;
 }
 
 
@@ -100,8 +99,6 @@ void DIALOG_GLOBAL_DELETION::AcceptPcbDelete()
     // Clear selection before removing any items
     m_Parent->GetToolManager()->RunAction( PCB_ACTIONS::selectionClear, true );
 
-    m_Parent->SetCurItem( NULL );
-
     bool delAll = false;
 
     if( m_DelAlls->GetValue() )
@@ -116,7 +113,6 @@ void DIALOG_GLOBAL_DELETION::AcceptPcbDelete()
 
     BOARD*            pcb = m_Parent->GetBoard();
     BOARD_COMMIT      commit( m_Parent );
-    BOARD_ITEM*       item;
 
     LSET layers_filter = LSET().set();
 
@@ -126,7 +122,7 @@ void DIALOG_GLOBAL_DELETION::AcceptPcbDelete()
     if( delAll || m_DelZones->GetValue() )
     {
         int area_index = 0;
-        item = pcb->GetArea( area_index );
+        auto item = pcb->GetArea( area_index );
 
         while( item )
         {
@@ -176,7 +172,7 @@ void DIALOG_GLOBAL_DELETION::AcceptPcbDelete()
 
     if( delAll || m_DelModules->GetValue() )
     {
-        for( item = pcb->m_Modules; item; item = item->Next() )
+        for( auto item : pcb->Modules() )
         {
             bool del_fp = delAll;
 
@@ -203,18 +199,15 @@ void DIALOG_GLOBAL_DELETION::AcceptPcbDelete()
         if( !m_TrackFilterAR->GetValue() )
             track_mask_filter |= TRACK_AR;
 
-        TRACK* nexttrack;
-
-        for( TRACK *track = pcb->m_Track; track; track = nexttrack )
+        for( auto track : pcb->Tracks() )
         {
-            nexttrack = track->Next();
-
             if( !delAll )
             {
                 if( ( track->GetState( TRACK_LOCKED | TRACK_AR ) & track_mask_filter ) != 0 )
                     continue;
 
-                if( ( track->GetState( TRACK_LOCKED | TRACK_AR ) == 0 ) &&
+                if( ( track->Type() == PCB_TRACE_T ) &&
+                    ( track->GetState( TRACK_LOCKED | TRACK_AR ) == 0 ) &&
                     !m_TrackFilterNormal->GetValue() )
                     continue;
 
@@ -236,7 +229,7 @@ void DIALOG_GLOBAL_DELETION::AcceptPcbDelete()
         pcb->DeleteMARKERs();
 
     if( gen_rastnest )
-        m_Parent->Compile_Ratsnest( NULL, true );
+        m_Parent->Compile_Ratsnest( true );
 
     // There is a chance that some of tracks have changed their nets, so rebuild ratsnest from scratch
     m_Parent->GetCanvas()->Refresh();

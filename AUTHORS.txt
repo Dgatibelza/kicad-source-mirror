@@ -1,11 +1,13 @@
 * Copyright (C) 1992-2015 Jean-Pierre Charras
-* Copyright (C) 1992-2017 Kicad Developers Team
+* Copyright (C) 1992-2019 Kicad Developers Team
 * under GNU General Public License (see copyright.txt)
 
 == Main Authors
-Jean-Pierre Charras <jean-pierre.charras[at]gipsa-lab-dot-inpg-dot-fr>
+Jean-Pierre Charras <jean-pierre.charras[at]wanadoo-dot-fr>
 Dick Hollenbeck <dick[at]softplc-dot-com>
 Wayne Stambaugh <stambaughw[at]gmail-dot-com>
+Maciej Sumiński <maciej.suminski[at]cern-dot-ch>
+Tomasz Wlostowski <tomasz.wlostowski[at]cern-dot-ch>
 
 
 == Contributors
@@ -22,8 +24,6 @@ Miguel Angel Ajo Pelayo <miguelangel[at]nbee-dot-es> (Python Scripting)
 Alexander Lunev <al.lunev[at]yahoo-dot-com>  (Pcad to Kicad converter)
 Jacobo Aragunde Perez <jaragunde[at]igalia-dot-com> for Igalia and the CERN
 Brian Sidebotham <brian.sidebotham[at]gmail-dot-com>
-Maciej Sumiński <maciej.suminski[at]cern-dot-ch>
-Tomasz Wlostowski <tomasz.wlostowski[at]cern-dot-ch>
 Henner Zeller <h.zeller[at]acm-dot-org>
 Mark Roszko <mark.roszko[at]gmail-dot-com>
 Daniel Majewski <lordblick[at]gmail-dot-com>
@@ -34,7 +34,7 @@ Andrew Zonenberg <azonenberg[at]drawersteak-dot-com>
 Cirilo Bernardo <cirilo_bernardo[at]yahoo-dot-com>
 Adam Wolf <adamwolf[at]feelslikeburning-dot-com>
 Bernhard Stegmaier <stegmaier[at]sw-systems-dot-de>
-Chris Pavlina <pavlina.chris[at]gmail-dot-com>
+Alexis Lockwood <alexlockwood[at]fastmail-dot-com>
 Simon Richter <Simon.Richter[at]hogyros-dot-de>
 Mario Luzeiro <mrluzeiro[at]ua-dot-pt>
 Mateusz Skowroński <skowri[at]gmail-dot-com>
@@ -43,15 +43,20 @@ Kristoffer Ödmark <kristoffer.odmark90[at]gmail-dot-com>
 Oliver Walters <oliver.henry.walters[at]gmail-dot-com>
 Jon Evans <jon[at]craftyjon-dot-com>
 Russell Oliver <roliver8143[at]gmail-dot-com>
+Seth Hillbrand <hillbrand[at]ucdavis-dot-edu>
+Jeff Young <jeff[at]rokeby-dot-ie>
+Kevin Cozens <kevin[at]ve3syb-dot-ca>
+Ian McInerney <ian.s.mcinerney[at]ieee-dot-org>
 
-See also CHANGELOG.txt for contributors.
+See git repo on GitLab for contributors at
+https://gitlab.com/kicad/code/kicad/-/graphs/master
 
 
 == Document Writers
 Jean-Pierre Charras <jean-pierre.charras[at]gipsa-lab.inpg-dot-fr>
 Igor Plyatov <plyatov[at]gmail-dot-com>
 Fabrizio Tappero <fabrizio-dot-tappero[at]gmail-dot-com>
-Marco Ciampa <ciampix[at]libero-dot-it>
+Marco Ciampa <ciampix[at]posteo-dot-net>
 Wayne Stambaugh <stambaughw[at]gmail-dot-com
 
 
@@ -60,6 +65,7 @@ Czech (CZ) Martin KratoÅ¡ka <martin[at]ok1rr-dot-com>
 Dutch (NL) Jerry Jacobs <xor.gate.engineering[at]gmail-dot-com>
 Finnish (FI) Vesa Solonen <vesa.solonen[at]hut-dot-fi>
 French (FR) Jean-Pierre Charras <jean-pierre.charras[at]inpg-dot-fr>
+Italian (IT) Marco Ciampa  <ciampix[at]posteo-dot-net>
 Polish (PL) Mateusz Skowro¿ski <skowri[at]gmail-dot-com>
 Polish (PL) Kerusey Karyu <keruseykaryu[at]o2.pl>
 Portuguese (PT) Renie Marquet <reniemarquet[at]uol-dot-com-dot-br>"
@@ -70,6 +76,7 @@ Spanish (ES) Pedro Martin del Valle <pkicad[at]yahoo-dot-es>
 Spanish (ES) Iñigo Zuluaga <inigo_zuluaga[at]yahoo-dot-es>
 German (DE) Rafael Sokolowski <Rafael.Sokolowski[at]web-dot-de
 Japanese (JA) Kenta Yonekura <yoneken[at]kicad-dot-jp>
+Simplified Chinese (zh_CN) taotieren <admin[at]taotieren-dot-com>
 
 Remy Halvick, David Briscoe, Dominique Laigle, Paul Burke
 

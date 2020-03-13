@@ -2,7 +2,7 @@
  * This program source code file is part of KiCad, a free EDA CAD application.
  *
  * Copyright (C) 2004 Jean-Pierre Charras, jaen-pierre.charras@gipsa-lab.inpg.com
- * Copyright (C) 2004-2011 KiCad Developers, see change_log.txt for contributors.
+ * Copyright (C) 2004-2020 KiCad Developers, see change_log.txt for contributors.
  *
  * This program is free software; you can redistribute it and/or
  * modify it under the terms of the GNU General Public License
@@ -22,19 +22,14 @@
  * 51 Franklin Street, Fifth Floor, Boston, MA  02110-1301, USA
  */
 
-/**
- * @file lib_bezier.h
- */
+#ifndef LIB_BEZIER_H
+#define LIB_BEZIER_H
 
-#ifndef _LIB_BEZIER_H_
-#define _LIB_BEZIER_H_
-
-#include <lib_draw_item.h>
+#include <lib_item.h>
 
 
 /**
- * Class LIB_BEZIER
- * defines bezier curve graphic body item.
+ * Define a bezier curve graphic body item.
  */
 class LIB_BEZIER : public LIB_ITEM
 {
@@ -42,9 +37,8 @@ class LIB_BEZIER : public LIB_ITEM
     std::vector<wxPoint> m_BezierPoints;   // list of parameter (3|4)
     std::vector<wxPoint> m_PolyPoints;     // list of points (>= 2)
 
-    void drawGraphic( EDA_DRAW_PANEL* aPanel, wxDC* aDC, const wxPoint& aOffset,
-                      COLOR4D aColor, GR_DRAWMODE aDrawMode, void* aData,
-                      const TRANSFORM& aTransform ) override;
+    void print( wxDC* aDC, const wxPoint& aOffset, void* aData,
+                const TRANSFORM& aTransform ) override;
 
 public:
     LIB_BEZIER( LIB_PART * aParent );
@@ -58,48 +52,48 @@ public:
         return wxT( "LIB_BEZIER" );
     }
 
+    wxString GetTypeName() override
+    {
+        return _( "Bezier" );
+    }
 
-    bool Save( OUTPUTFORMATTER& aFormatter ) override;
-
-    bool Load( LINE_READER& aLineReader, wxString& aErrorMsg ) override;
-
+    void Reserve( size_t aCount ) { m_BezierPoints.reserve( aCount ); }
     void AddPoint( const wxPoint& aPoint ) { m_BezierPoints.push_back( aPoint ); }
 
-    void SetOffset( const wxPoint& aOffset ) override;
+    void Offset( const wxPoint& aOffset ) override;
+    const wxPoint GetOffset() const;
 
     /**
      * @return the number of corners
      */
     unsigned GetCornerCount() const { return m_PolyPoints.size(); }
 
-    bool HitTest( const wxPoint& aPosition ) const override;
+    const std::vector< wxPoint >& GetPoints() const { return m_BezierPoints; }
 
-    bool HitTest( const wxPoint& aPosRef, int aThreshold, const TRANSFORM& aTransform ) const override;
+    bool HitTest( const wxPoint& aPosition, int aAccuracy = 0 ) const override;
+    bool HitTest( const EDA_RECT& aRect, bool aContained, int aAccuracy = 0 ) const override;
 
     const EDA_RECT GetBoundingBox() const override;
 
     bool Inside( EDA_RECT& aRect ) const override;
 
-    void Move( const wxPoint& aPosition ) override;
+    void MoveTo( const wxPoint& aPosition ) override;
 
-    wxPoint GetPosition() const override { return m_PolyPoints[0]; }
+    wxPoint GetPosition() const override;
 
     void MirrorHorizontal( const wxPoint& aCenter ) override;
-
     void MirrorVertical( const wxPoint& aCenter ) override;
-
     void Rotate( const wxPoint& aCenter, bool aRotateCCW = true ) override;
 
     void Plot( PLOTTER* aPlotter, const wxPoint& aOffset, bool aFill,
                const TRANSFORM& aTransform ) override;
 
     int GetWidth() const override { return m_Width; }
-
     void SetWidth( int aWidth ) override { m_Width = aWidth; }
 
     int GetPenSize( ) const override;
 
-    void GetMsgPanelInfo( std::vector< MSG_PANEL_ITEM >& aList ) override;
+    void GetMsgPanelInfo( EDA_UNITS aUnits, std::vector<MSG_PANEL_ITEM>& aList ) override;
 
     EDA_ITEM* Clone() const override;
 
@@ -112,8 +106,9 @@ private:
      *      - Bezier horizontal (X) point position.
      *      - Bezier vertical (Y) point position.
      */
-    int compare( const LIB_ITEM& aOther ) const override;
+    int compare( const LIB_ITEM& aOther,
+            LIB_ITEM::COMPARE_FLAGS aCompareFlags = LIB_ITEM::COMPARE_FLAGS::NORMAL ) const override;
 };
 
 
-#endif     // _LIB_BEZIER_H_
+#endif     // LIB_BEZIER_H

@@ -1,14 +1,14 @@
-/** @file dialog_plot_schematic.cpp
+/** @file dialog_plot_schematic.h
  */
 
 /*
  * This program source code file is part of KiCad, a free EDA CAD application.
  *
- * Copyright (C) 1992-2014 Jean-Pierre Charras <jp.charras at wanadoo.fr
+ * Copyright (C) 1992-2018 Jean-Pierre Charras jp.charras at wanadoo.fr
  * Copyright (C) 1992-2010 Lorenzo Marcantonio
  * Copyright (C) 2011 Wayne Stambaugh <stambaughw@verizon.net>
  *
- * Copyright (C) 1992-2012 KiCad Developers, see change_log.txt for contributors.
+ * Copyright (C) 1992-2018 KiCad Developers, see AUTHORS.txt for contributors.
  *
  * This program is free software; you can redistribute it and/or
  * modify it under the terms of the GNU General Public License
@@ -29,12 +29,12 @@
  */
 
 #include <fctsys.h>
-#include <plot_common.h>
-#include <class_sch_screen.h>
-#include <schframe.h>
+#include <plotter.h>
+#include <sch_screen.h>
+#include <sch_edit_frame.h>
 #include <dialog_plot_schematic_base.h>
 #include <reporter.h>
-
+#include <widgets/unit_binder.h>
 
 enum PageFormatReq {
     PAGE_SIZE_AUTO,
@@ -47,13 +47,14 @@ class DIALOG_PLOT_SCHEMATIC : public DIALOG_PLOT_SCHEMATIC_BASE
 {
 private:
     SCH_EDIT_FRAME* m_parent;
-    wxConfigBase*   m_config;
-    bool            m_configChanged;        // true if a project config param has changed
-    static int      m_pageSizeSelect;       // Static to keep last option for some format:
-                                            // Static to keep last option:
-                                            // use default size or force A or A4 size
-    int             m_HPGLPaperSizeSelect;  // for HPGL format only: last selected paper size
+    bool            m_configChanged; // true if a project config param has changed
+    PLOT_FORMAT     m_plotFormat;
+    static int      m_pageSizeSelect;       // Static to keep last option for some format
+    static int      m_HPGLPaperSizeSelect;  // for HPGL format only: last selected paper size
     double          m_HPGLPenSize;          // for HPGL format only: pen size
+
+    UNIT_BINDER     m_defaultLineWidth;
+    UNIT_BINDER     m_penWidth;
 
 public:
     // / Constructors
@@ -63,10 +64,10 @@ public:
                                                         // and therefore should be saved
 
 private:
-    void OnPlotFormatSelection( wxCommandEvent& event ) override;
-    void OnButtonPlotCurrentClick( wxCommandEvent& event ) override;
-    void OnButtonPlotAllClick( wxCommandEvent& event ) override;
-    void OnButtonCancelClick( wxCommandEvent& event ) override;
+    void OnPageSizeSelected( wxCommandEvent& event ) override;
+    void OnPlotCurrent( wxCommandEvent& event ) override;
+    void OnPlotAll( wxCommandEvent& event ) override;
+    void OnUpdateUI( wxUpdateUIEvent& event ) override;
 
     void    initDlg();
 
@@ -84,7 +85,7 @@ private:
      */
     void OnOutputDirectoryBrowseClicked( wxCommandEvent& event ) override;
 
-    PlotFormat GetPlotFileFormat();
+    PLOT_FORMAT GetPlotFileFormat();
 
     bool getPlotFrameRef() { return m_PlotFrameRefOpt->GetValue(); }
     void setPlotFrameRef( bool aPlot) {m_PlotFrameRefOpt->SetValue( aPlot ); }
@@ -136,8 +137,8 @@ private:
 
     /**
      * Create a file name with an absolute path name
-     * @param aOutputDirectoryName the diretory name to plot,
-     *      this can be a relative name of the current project diretory or an absolute directory name.
+     * @param aOutputDirectoryName the directory name to plot, this can be a relative name of the
+     *                             current project directory or an absolute directory name.
      * @param aPlotFileName the name for the file to plot without a path
      * @param aExtension the extension for the file to plot
      * @param aReporter a point to a REPORTER object use to show messages (can be NULL)
@@ -153,5 +154,7 @@ public:
     // outside a dialog. This is the reason we need aFrame as parameter
     static bool plotOneSheetSVG( EDA_DRAW_FRAME* aFrame, const wxString& aFileName,
                                  SCH_SCREEN* aScreen,
-                                 bool aPlotBlackAndWhite, bool aPlotFrameRef );
+                                 bool aPlotBlackAndWhite, bool aPlotFrameRef,
+                                 bool aPlotBackgroundColor = false,
+                                 COLOR_SETTINGS* aColors = nullptr );
 };

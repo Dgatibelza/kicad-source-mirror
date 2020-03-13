@@ -29,7 +29,7 @@
 
 
 /**
- * Class KIFACE_I
+ * KIFACE_I
  * is a KIFACE (I)mplementation,
  * with some features useful for DSOs which implement a KIFACE.
  * It is abstract, a few functions must be implemented in derivations.
@@ -100,7 +100,9 @@ public:
 
     const wxString Name()                               { return wxString::FromUTF8( m_bm.m_name ); }
 
-    wxConfigBase* KifaceSettings() const                { return m_bm.m_config; }
+    APP_SETTINGS_BASE* KifaceSettings() const           { return m_bm.m_config; }
+
+    void InitSettings( APP_SETTINGS_BASE* aSettings )   { m_bm.InitSettings( aSettings ); }
 
     /**
      * Function StartFlags
@@ -120,7 +122,7 @@ public:
      */
     const wxString& GetHelpFileName() const             { return m_bm.m_help_file; }
 
-    wxFileHistory& GetFileHistory()                     { return m_bm.m_history; }
+    FILE_HISTORY&   GetFileHistory()                    { return *m_bm.m_history; }
 
     /// Only for DSO specific 'non-library' files.
     /// (The library search path is in the PROJECT class.)

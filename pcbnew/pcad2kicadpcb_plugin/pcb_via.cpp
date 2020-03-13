@@ -28,7 +28,6 @@
  */
 
 #include <wx/wx.h>
-#include <wx/config.h>
 
 #include <pcb_via.h>
 #include <pcb_via_shape.h>
@@ -46,8 +45,9 @@ PCB_VIA::~PCB_VIA()
 }
 
 
-void PCB_VIA::Parse( XNODE*   aNode, wxString aDefaultMeasurementUnit,
-                     wxString aActualConversion )
+void PCB_VIA::Parse( XNODE*          aNode,
+                     const wxString& aDefaultMeasurementUnit,
+                     const wxString& aActualConversion )
 {
     XNODE*          lNode, * tNode;
     wxString        propValue;

@@ -25,9 +25,40 @@
 #include <pcb_base_edit_frame.h>
 #include <tool/tool_manager.h>
 #include <pcb_draw_panel_gal.h>
+#include <pcb_layer_widget.h>
 #include <gal/graphics_abstraction_layer.h>
 #include <class_board.h>
 #include <view/view.h>
+#include "footprint_info_impl.h"
+#include <project.h>
+#include <settings/color_settings.h>
+#include <tools/pcb_actions.h>
+
+PCB_BASE_EDIT_FRAME::PCB_BASE_EDIT_FRAME( KIWAY* aKiway, wxWindow* aParent,
+                                          FRAME_T aFrameType, const wxString& aTitle,
+                                          const wxPoint& aPos, const wxSize& aSize, long aStyle,
+                                          const wxString& aFrameName ) :
+        PCB_BASE_FRAME( aKiway, aParent, aFrameType, aTitle, aPos, aSize, aStyle, aFrameName ),
+                        m_rotationAngle( 900 ), m_undoRedoBlocked( false ),
+        m_Layers( nullptr )
+{
+    if( !GFootprintList.GetCount() )
+    {
+        wxTextFile footprintInfoCache( Prj().GetProjectPath() + "fp-info-cache" );
+        GFootprintList.ReadCacheFromFile( &footprintInfoCache );
+    }
+}
+
+PCB_BASE_EDIT_FRAME::~PCB_BASE_EDIT_FRAME()
+{
+    if( wxFileName::IsDirWritable( Prj().GetProjectPath() ) )
+    {
+        wxTextFile footprintInfoCache( Prj().GetProjectPath() + "fp-info-cache" );
+        GFootprintList.WriteCacheToFile( &footprintInfoCache );
+    }
+
+    GetCanvas()->GetView()->Clear();
+}
 
 
 void PCB_BASE_EDIT_FRAME::SetRotationAngle( int aRotationAngle )
@@ -39,15 +70,11 @@ void PCB_BASE_EDIT_FRAME::SetRotationAngle( int aRotationAngle )
 }
 
 
-void PCB_BASE_EDIT_FRAME::UseGalCanvas( bool aEnable )
+void PCB_BASE_EDIT_FRAME::ActivateGalCanvas()
 {
-    PCB_BASE_FRAME::UseGalCanvas( aEnable );
+    PCB_BASE_FRAME::ActivateGalCanvas();
 
-    // No matter what, reenable undo/redo on switching to the legacy canvas
-    if( !aEnable )
-        UndoRedoBlock( false );
-    else
-        static_cast<PCB_DRAW_PANEL_GAL*>( GetGalCanvas() )->SyncLayersVisibility( m_Pcb );
+    GetCanvas()->SyncLayersVisibility( m_Pcb );
 }
 
 
@@ -60,24 +87,47 @@ void PCB_BASE_EDIT_FRAME::SetBoard( BOARD* aBoard )
         if( m_toolManager )
             m_toolManager->ResetTools( TOOL_BASE::MODEL_RELOAD );
 
-        GetGalCanvas()->GetView()->Clear();
+        GetCanvas()->GetView()->Clear();
     }
 
     PCB_BASE_FRAME::SetBoard( aBoard );
 
-    GetGalCanvas()->GetGAL()->SetGridOrigin( VECTOR2D( aBoard->GetGridOrigin() ) );
+    GetCanvas()->GetGAL()->SetGridOrigin( VECTOR2D( aBoard->GetGridOrigin() ) );
 
     // update the tool manager with the new board and its view.
     if( m_toolManager )
     {
-        PCB_DRAW_PANEL_GAL* drawPanel = static_cast<PCB_DRAW_PANEL_GAL*>( GetGalCanvas() );
+        GetCanvas()->DisplayBoard( aBoard );
 
-        drawPanel->DisplayBoard( aBoard );
-        drawPanel->UseColorScheme( &Settings().Colors() );
-        m_toolManager->SetEnvironment( aBoard, drawPanel->GetView(),
-                                       drawPanel->GetViewControls(), this );
+        GetCanvas()->UpdateColors();
+        m_toolManager->SetEnvironment( aBoard, GetCanvas()->GetView(),
+                                       GetCanvas()->GetViewControls(), this );
 
         if( new_board )
             m_toolManager->ResetTools( TOOL_BASE::MODEL_RELOAD );
     }
+}
+
+
+void PCB_BASE_EDIT_FRAME::unitsChangeRefresh()
+{
+    PCB_BASE_FRAME::unitsChangeRefresh();
+
+    ReCreateAuxiliaryToolbar();
+
+    if( m_toolManager )
+        m_toolManager->RunAction( PCB_ACTIONS::updateUnits, true );
+}
+
+
+void PCB_BASE_EDIT_FRAME::SetGridVisibility( bool aVisible )
+{
+    PCB_BASE_FRAME::SetGridVisibility( aVisible );
+
+    // Update the grid checkbox in the layer widget
+    if( m_Layers )
+        m_Layers->SetRenderState( LAYER_GRID, aVisible );
+
+    // TODO (ISM): Remove this by changing toolbars to use the EVT_UPDATE_UI to get the state
+    SyncToolbars();
 }

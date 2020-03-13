@@ -31,7 +31,7 @@
 #define VRML1_NODE_H
 
 #define GLM_FORCE_RADIANS
-#include <glm/gtx/transform.hpp>
+
 #include <glm/gtc/matrix_transform.hpp>
 
 #include <list>
@@ -98,14 +98,14 @@ struct WRL1STATUS
         coord = NULL;
         txmatrix = glm::scale( glm::mat4( 1.0 ), glm::vec3( 1.0 ) );
         order = ORD_UNKNOWN;
-        creaseLimit = 0.878;
+        creaseLimit = 0.878f;
         return;
     }
 };
 
 
 /**
- * Class WRL1NODE
+ * WRL1NODE
  * represents the base class of all VRML1 nodes
  */
 class WRL1NODE

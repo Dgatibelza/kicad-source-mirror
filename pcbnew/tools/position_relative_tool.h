@@ -25,7 +25,7 @@
 #define __POSITION_RELATIVE_TOOL_H
 
 #include <math/vector2d.h>
-#include <tools/pcb_tool.h>
+#include <tools/pcb_tool_base.h>
 #include "selection_tool.h"
 #include "dialogs/dialog_position_relative.h"
 #include "dialogs/dialog_position_relative_base.h"
@@ -36,13 +36,13 @@ class SELECTION_TOOL;
 class DIALOG_POSITION_RELATIVE;
 
 /**
- * Class POSITION_RELATIVE_TOOL
+ * POSITION_RELATIVE_TOOL
  *
- * The interactive edit tool. Allows to move, rotate, flip and change properties of items selected
+ * The interactive edit tool. Allows one to move, rotate, flip and change properties of items selected
  * using the pcbnew.InteractiveSelection tool.
  */
 
-class POSITION_RELATIVE_TOOL : public PCB_TOOL
+class POSITION_RELATIVE_TOOL : public PCB_TOOL_BASE
 {
 public:
     POSITION_RELATIVE_TOOL();
@@ -62,60 +62,43 @@ public:
     /**
      * Function SelectPositionRelativeItem()
      *
-     * Invokes the picker tool to select the item to which the previos selection will be placed relative to.
+     * Invokes the picker tool to select the item to which the previous selection will be placed
+     * relative to.
      */
     int SelectPositionRelativeItem( const TOOL_EVENT& aEvent  );
 
     /**
+     * Function GetSelectionAnchorPosition()
+     *
+     * Returns the postion of the selected item(s)
+     *
+     */
+    wxPoint GetSelectionAnchorPosition() const;
+
+    /**
      * Function RelativeItemSelectionMove()
      *
-     * Positions the m_position_relative_selection selection relative to anchorpostion using the given translation and rotation.
-     * Rotation is around the center of the selection.
+     * Positions the m_position_relative_selection selection relative to anchorpostion using
+     * the given translation.
      */
-    int RelativeItemSelectionMove( wxPoint anchorposition, wxPoint translation, double rotation );
-
-    /**
-     * Function GetAnchorItem()
-     *
-     * Gets the last selected anchor item.
-     */
-    BOARD_ITEM* GetAnchorItem()
-    {
-        return m_anchor_item;
-    }
-
-    /**
-     * Function UpdateAnchor()
-     *
-     * Selects the item to be used as the reference for relative move operation.
-     */
-    void UpdateAnchor( BOARD_ITEM* aItem );
+    int RelativeItemSelectionMove( wxPoint anchor, wxPoint translation );
 
     ///> Sets up handlers for various events.
     void setTransitions() override;
 
 private:
-    DIALOG_POSITION_RELATIVE* m_position_relative_dialog;
+    DIALOG_POSITION_RELATIVE* m_dialog;
 
     ///> Selection tool used for obtaining selected items
-    SELECTION_TOOL* m_selectionTool;
+    SELECTION_TOOL*  m_selectionTool;
+    PCBNEW_SELECTION m_selection;
 
     std::unique_ptr<BOARD_COMMIT> m_commit;
 
-    ///> Last anchor item selected by Position Relative To function.
-    BOARD_ITEM* m_anchor_item;
+    EDA_ITEM* m_anchor_item;
+    wxPoint   m_anchor;
 
-    ///> Translation for position relative function.
-    wxPoint m_position_relative_translation;
-
-    ///> Anchor position for positive relative function.
-    wxPoint m_anchor_position;
-
-    ///> Rotation  for positive relative function.
-    double m_position_relative_rotation;
-
-    ///> Selected that will be moved by Position relative function.
-    SELECTION m_position_relative_selection;
+    wxPoint   m_translation;
 };
 
 #endif

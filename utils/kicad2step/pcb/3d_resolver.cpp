@@ -21,12 +21,13 @@
  * 51 Franklin Street, Fifth Floor, Boston, MA  02110-1301, USA
  */
 
-#include <iostream>
-#include <sstream>
 #include <cstdlib>
 #include <cstring>
 #include <fstream>
+#include <iostream>
+#include <mutex>
 #include <sstream>
+
 #include <wx/fileconf.h>
 #include <wx/filename.h>
 #include <wx/log.h>
@@ -48,7 +49,7 @@
 
 #define MASK_3D_RESOLVER "3D_RESOLVER"
 
-static wxCriticalSection lock3D_resolver;
+static std::mutex mutex3D_resolver;
 
 static bool getHollerith( const std::string& aString, size_t& aIndex, wxString& aResult );
 
@@ -136,7 +137,7 @@ bool S3D_RESOLVER::SetProjectDir( const wxString& aProjDir, bool* flgChanged )
 
     if( m_Paths.empty() )
     {
-        S3D_ALIAS al;
+        SEARCH_PATH al;
         al.m_alias = "${KIPRJMOD}";
         al.m_pathvar = "${KIPRJMOD}";
         al.m_pathexp = m_curProjDir;
@@ -195,7 +196,7 @@ bool S3D_RESOLVER::createPathList( void )
     // we cannot set a sensible default so we use an empty string.
     // the user may change this later with a call to SetProjectDir()
 
-    S3D_ALIAS lpath;
+    SEARCH_PATH lpath;
     lpath.m_alias = "${KIPRJMOD}";
     lpath.m_pathvar = "${KIPRJMOD}";
     lpath.m_pathexp = m_curProjDir;
@@ -294,8 +295,8 @@ bool S3D_RESOLVER::createPathList( void )
 
 #ifdef DEBUG
     wxLogTrace( MASK_3D_RESOLVER, " * [3D model] search paths:\n" );
-    std::list< S3D_ALIAS >::const_iterator sPL = m_Paths.begin();
-    std::list< S3D_ALIAS >::const_iterator ePL = m_Paths.end();
+    std::list< SEARCH_PATH >::const_iterator sPL = m_Paths.begin();
+    std::list< SEARCH_PATH >::const_iterator ePL = m_Paths.end();
 
     while( sPL != ePL )
     {
@@ -308,7 +309,7 @@ bool S3D_RESOLVER::createPathList( void )
 }
 
 
-bool S3D_RESOLVER::UpdatePathList( std::vector< S3D_ALIAS >& aPathList )
+bool S3D_RESOLVER::UpdatePathList( std::vector< SEARCH_PATH >& aPathList )
 {
     wxUniChar envMarker( '$' );
 
@@ -326,7 +327,7 @@ bool S3D_RESOLVER::UpdatePathList( std::vector< S3D_ALIAS >& aPathList )
 
 wxString S3D_RESOLVER::ResolvePath( const wxString& aFileName )
 {
-    wxCriticalSectionLocker lock( lock3D_resolver );
+    std::lock_guard<std::mutex> lock( mutex3D_resolver );
 
     if( aFileName.empty() )
         return wxEmptyString;
@@ -344,10 +345,10 @@ wxString S3D_RESOLVER::ResolvePath( const wxString& aFileName )
     // first attempt to use the name as specified:
     wxString tname = aFileName;
 
-    #ifdef _WIN32
+#ifdef _WIN32
     // translate from KiCad's internal UNIX-like path to MSWin paths
     tname.Replace( "/", "\\" );
-    #endif
+#endif
 
     // Note: variable expansion must preferably be performed via a
     // threadsafe wrapper for the getenv() system call. If we allow the
@@ -408,8 +409,8 @@ wxString S3D_RESOLVER::ResolvePath( const wxString& aFileName )
     // a. an aliased shortened name or
     // b. cannot be determined
 
-    std::list< S3D_ALIAS >::const_iterator sPL = m_Paths.begin();
-    std::list< S3D_ALIAS >::const_iterator ePL = m_Paths.end();
+    std::list< SEARCH_PATH >::const_iterator sPL = m_Paths.begin();
+    std::list< SEARCH_PATH >::const_iterator ePL = m_Paths.end();
 
     // check the path relative to the current project directory;
     // note: this is not necessarily the same as the current working
@@ -458,8 +459,7 @@ wxString S3D_RESOLVER::ResolvePath( const wxString& aFileName )
     }
 
     // ${ENV_VAR} paths have already been checked; skip them
-    while( sPL != ePL && ( sPL->m_alias.StartsWith( "${" )
-                           || sPL->m_alias.StartsWith( "$(" ) ) )
+    while( sPL != ePL && ( sPL->m_alias.StartsWith( "${" ) || sPL->m_alias.StartsWith( "$(" ) ) )
         ++sPL;
 
     // at this point the filename must contain an alias or else it is invalid
@@ -520,31 +520,30 @@ wxString S3D_RESOLVER::ResolvePath( const wxString& aFileName )
 }
 
 
-bool S3D_RESOLVER::addPath( const S3D_ALIAS& aPath )
+bool S3D_RESOLVER::addPath( const SEARCH_PATH& aPath )
 {
     if( aPath.m_alias.empty() || aPath.m_pathvar.empty() )
         return false;
 
-    wxCriticalSectionLocker lock( lock3D_resolver );
+    std::lock_guard<std::mutex> lock( mutex3D_resolver );
 
-    S3D_ALIAS tpath = aPath;
+    SEARCH_PATH tpath = aPath;
 
-    #ifdef _WIN32
+#ifdef _WIN32
     while( tpath.m_pathvar.EndsWith( "\\" ) )
         tpath.m_pathvar.erase( tpath.m_pathvar.length() - 1 );
-    #else
+#else
     while( tpath.m_pathvar.EndsWith( "/" ) &&  tpath.m_pathvar.length() > 1 )
         tpath.m_pathvar.erase( tpath.m_pathvar.length() - 1 );
-    #endif
+#endif
 
     wxFileName path( tpath.m_pathvar, "" );
     path.Normalize();
 
     if( !path.DirExists() )
     {
-        // suppress the message if the missing pathvar is the
-        // legacy KISYS3DMOD variable
-        if( aPath.m_pathvar.compare( "${KISYS3DMOD}" ) )
+        // suppress the message if the missing pathvar is the legacy KISYS3DMOD variable
+        if( aPath.m_pathvar != "${KISYS3DMOD}" && aPath.m_pathvar != "$(KISYS3DMOD)" )
         {
             wxString msg = _( "The given path does not exist" );
             msg.append( "\n" );
@@ -558,18 +557,18 @@ bool S3D_RESOLVER::addPath( const S3D_ALIAS& aPath )
     {
         tpath.m_pathexp = path.GetFullPath();
 
-        #ifdef _WIN32
+#ifdef _WIN32
         while( tpath.m_pathexp.EndsWith( "\\" ) )
         tpath.m_pathexp.erase( tpath.m_pathexp.length() - 1 );
-        #else
+#else
         while( tpath.m_pathexp.EndsWith( "/" ) &&  tpath.m_pathexp.length() > 1 )
             tpath.m_pathexp.erase( tpath.m_pathexp.length() - 1 );
-        #endif
+#endif
     }
 
     wxString pname = path.GetPath();
-    std::list< S3D_ALIAS >::iterator sPL = m_Paths.begin();
-    std::list< S3D_ALIAS >::iterator ePL = m_Paths.end();
+    std::list< SEARCH_PATH >::iterator sPL = m_Paths.begin();
+    std::list< SEARCH_PATH >::iterator ePL = m_Paths.end();
 
     while( sPL != ePL )
     {
@@ -641,7 +640,7 @@ bool S3D_RESOLVER::readPathList( void )
     }
 
     int lineno = 0;
-    S3D_ALIAS al;
+    SEARCH_PATH al;
     size_t idx;
     int vnum = 0;           // version number
 
@@ -717,11 +716,11 @@ bool S3D_RESOLVER::writePathList( void )
     }
 
     // skip all ${ENV_VAR} alias names
-    std::list< S3D_ALIAS >::const_iterator sPL = m_Paths.begin();
-    std::list< S3D_ALIAS >::const_iterator ePL = m_Paths.end();
+    std::list< SEARCH_PATH >::const_iterator sPL = m_Paths.begin();
+    std::list< SEARCH_PATH >::const_iterator ePL = m_Paths.end();
 
     while( sPL != ePL && ( sPL->m_alias.StartsWith( "${" )
-        || sPL->m_alias.StartsWith( "$(" ) ) )
+                           || sPL->m_alias.StartsWith( "$(" ) ) )
         ++sPL;
 
     wxFileName cfgpath( m_ConfigDir, S3D_RESOLVER_CONFIG );
@@ -731,8 +730,8 @@ bool S3D_RESOLVER::writePathList( void )
     if( sPL == ePL )
     {
         wxMessageDialog md( NULL,
-            _( "3D search path list is empty;\ncontinue to write empty file?" ),
-            _( "Write 3D search path list" ), wxYES_NO );
+                            _( "3D search path list is empty;\ncontinue to write empty file?" ),
+                            _( "Write 3D search path list" ), wxYES_NO );
 
         if( md.ShowModal() == wxID_YES )
         {
@@ -741,7 +740,7 @@ bool S3D_RESOLVER::writePathList( void )
             if( !cfgFile.is_open() )
             {
                 wxMessageBox( _( "Could not open configuration file" ),
-                    _( "Write 3D search path list" ) );
+                              _( "Write 3D search path list" ) );
 
                 return false;
             }
@@ -820,8 +819,8 @@ void S3D_RESOLVER::checkEnvVarPath( const wxString& aPath )
 
     // check if the alias exists; if not then add it to the end of the
     // env var section of the path list
-    std::list< S3D_ALIAS >::iterator sPL = m_Paths.begin();
-    std::list< S3D_ALIAS >::iterator ePL = m_Paths.end();
+    std::list< SEARCH_PATH >::iterator sPL = m_Paths.begin();
+    std::list< SEARCH_PATH >::iterator ePL = m_Paths.end();
 
     while( sPL != ePL )
     {
@@ -834,7 +833,7 @@ void S3D_RESOLVER::checkEnvVarPath( const wxString& aPath )
         ++sPL;
     }
 
-    S3D_ALIAS lpath;
+    SEARCH_PATH lpath;
     lpath.m_alias = envar;
     lpath.m_pathvar = lpath.m_alias;
     wxFileName tmpFN( lpath.m_alias, "" );
@@ -864,7 +863,7 @@ wxString S3D_RESOLVER::expandVars( const wxString& aPath )
 
     wxString result;
 
-    for( auto i: m_EnvVars )
+    for( const auto& i : m_EnvVars )
     {
         if( !aPath.compare( 2, i.first.length(), i.first ) )
         {
@@ -897,9 +896,10 @@ wxString S3D_RESOLVER::ShortenPath( const wxString& aFullPathName )
     if( m_Paths.empty() )
         createPathList();
 
-    wxCriticalSectionLocker lock( lock3D_resolver );
-    std::list< S3D_ALIAS >::const_iterator sL = m_Paths.begin();
-    std::list< S3D_ALIAS >::const_iterator eL = m_Paths.end();
+    std::lock_guard<std::mutex> lock( mutex3D_resolver );
+
+    std::list< SEARCH_PATH >::const_iterator sL = m_Paths.begin();
+    std::list< SEARCH_PATH >::const_iterator eL = m_Paths.end();
     size_t idx;
 
     while( sL != eL )
@@ -922,10 +922,10 @@ wxString S3D_RESOLVER::ShortenPath( const wxString& aFullPathName )
         {
             fname = fname.substr( fps.size() );
 
-            #ifdef _WIN32
+#ifdef _WIN32
             // ensure only the '/' separator is used in the internal name
             fname.Replace( "\\", "/" );
-            #endif
+#endif
 
             if( sL->m_alias.StartsWith( "${" ) || sL->m_alias.StartsWith( "$(" ) )
             {
@@ -962,14 +962,14 @@ wxString S3D_RESOLVER::ShortenPath( const wxString& aFullPathName )
 
 
 
-const std::list< S3D_ALIAS >* S3D_RESOLVER::GetPaths( void )
+const std::list< SEARCH_PATH >* S3D_RESOLVER::GetPaths( void )
 {
     return &m_Paths;
 }
 
 
 bool S3D_RESOLVER::SplitAlias( const wxString& aFileName,
-    wxString& anAlias, wxString& aRelPath )
+                               wxString& anAlias, wxString& aRelPath )
 {
     anAlias.clear();
     aRelPath.clear();
@@ -1067,7 +1067,7 @@ static bool getHollerith( const std::string& aString, size_t& aIndex, wxString& 
 
     if( nchars > 0 )
     {
-        aResult = aString.substr( i2, nchars );
+        aResult = wxString::FromUTF8( aString.substr( i2, nchars ).c_str() );
         i2 += nchars;
     }
 
@@ -1104,7 +1104,7 @@ bool S3D_RESOLVER::ValidateFileName( const wxString& aFileName, bool& hasAlias )
     size_t pos0 = aFileName.find( ':' );
 
     // ensure that the file separators suit the current platform
-    #ifdef __WINDOWS__
+#ifdef __WINDOWS__
     filename.Replace( "/", "\\" );
 
     // if we see the :\ pattern then it must be a drive designator
@@ -1119,9 +1119,9 @@ bool S3D_RESOLVER::ValidateFileName( const wxString& aFileName, bool& hasAlias )
         if( pos1 != wxString::npos )
             pos0 = wxString::npos;
     }
-    #else
+#else
     filename.Replace( "\\", "/" );
-    #endif
+#endif
 
     // names may not end with ':'
     if( pos0 == aFileName.length() -1 )

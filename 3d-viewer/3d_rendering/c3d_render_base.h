@@ -31,9 +31,11 @@
 #define C3D_RENDER_BASE_H
 
 
-#include <wxBasePcbFrame.h>
+#include <pcb_base_frame.h>
 #include "../3d_canvas/cinfo3d_visu.h"
 #include <reporter.h>
+
+#include <widgets/busy_indicator.h>
 
 /**
  *  This is a base class to hold data and functions for render targets.
@@ -64,7 +66,8 @@ public:
      * @param aStatusTextReporter: a pointer to the status progress reporter
      * @return it will return true if the render would like to redraw again
      */
-    virtual bool Redraw( bool aIsMoving, REPORTER *aStatusTextReporter = NULL ) = 0;
+    virtual bool Redraw( bool aIsMoving, REPORTER* aStatusTextReporter = NULL,
+            REPORTER* aWarningTextReporter = NULL ) = 0;
 
     /**
      * @brief ReloadRequest - !TODO: this must be reviewed to add flags to
@@ -86,9 +89,22 @@ public:
      */
     virtual int GetWaitForEditingTimeOut() = 0;
 
+    /**
+     * Set a new busy indicator factory.
+     *
+     * When set, this factory will be used to generate busy indicators when
+     * suitable. If not set, no busy indicator will be used.
+     */
+    void SetBusyIndicatorFactory( BUSY_INDICATOR::FACTORY aNewFactory );
+
     // Attributes
 
 protected:
+    /**
+     * Return a created busy indicator, if a factory has been set, else
+     * a null pointer.
+     */
+    std::unique_ptr<BUSY_INDICATOR> CreateBusyIndicator() const;
 
     /// settings refrence in use for this render
     CINFO3D_VISU &m_settings;
@@ -109,6 +125,10 @@ protected:
      *  more information.
      */
     static const wxChar *m_logTrace;
+
+private:
+    /// Factory that returns a suitable busy indicator for the context.
+    BUSY_INDICATOR::FACTORY m_busyIndicatorFactory;
 };
 
 #endif // C3D_RENDER_BASE_H

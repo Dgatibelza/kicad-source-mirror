@@ -34,10 +34,12 @@
 
 using KIGFX::COLOR4D;
 
+class CONNECTION_GRAPH;
 class TRANSFORM;
 class SCH_SHEET;
+class SCH_SHEET_PATH;
 
-#define EESCHEMA_VERSION 3
+#define EESCHEMA_VERSION 5
 #define SCHEMATIC_HEAD_STRING "Schematic File Version"
 
 #define DANGLING_SYMBOL_SIZE 12
@@ -67,7 +69,11 @@ class SCH_SHEET;
 ///< The default pin name size when creating pins(can be changed in preference menu)
 #define DEFAULTPINNAMESIZE 50
 
-#define GR_DEFAULT_DRAWMODE GR_COPY
+///< The default library pane width
+#define DEFAULTLIBWIDTH 250
+
+///< The default selection highlight thickness
+#define DEFAULTSELECTIONTHICKNESS 3
 
 /* Rotation, mirror of graphic items in components bodies are handled by a
  * transform matrix.  The default matrix is useful to draw lib entries with
@@ -79,6 +85,18 @@ extern TRANSFORM DefaultTransform;
 
 /* First and main (root) screen */
 extern SCH_SHEET*   g_RootSheet;
+
+/**
+ * With the new connectivity algorithm, many more places than before want to
+ * know what the current sheet is.  This was moved here from SCH_EDIT_FRAME
+ * but we could refactor things to get rid of this global.
+ */
+extern SCH_SHEET_PATH* g_CurrentSheet;    ///< which sheet we are presently working on.
+
+/**
+ * This also wants to live in the eventual SCHEMATIC object
+ */
+extern CONNECTION_GRAPH* g_ConnectionGraph;
 
 /**
  * Default line thickness used to draw/plot items having a
@@ -99,13 +117,40 @@ void SetDefaultTextSize( int aSize );
 int GetDefaultBusThickness();
 void SetDefaultBusThickness( int aThickness );
 
-COLOR4D  GetLayerColor( SCH_LAYER_ID aLayer );
-void     SetLayerColor( COLOR4D aColor, SCH_LAYER_ID aLayer );
+/**
+ * Default line thickness used to draw/plot wires.
+ */
+int GetDefaultWireThickness();
+void SetDefaultWireThickness( int aThickness );
 
-// Color to draw selected items
-COLOR4D GetItemSelectedColor();
+/**
+ * Draw selected text items as box
+ */
+bool GetSelectionTextAsBox();
+void SetSelectionTextAsBox( bool aBool );
+
+/**
+ * Draw selected child items or not
+ */
+bool GetSelectionDrawChildItems();
+void SetSelectionDrawChildItems( bool aBool );
+
+/**
+ * Draw selected shapes as filled or not
+ */
+bool GetSelectionFillShapes();
+void SetSelectionFillShapes( bool aBool );
+
+/**
+ * Selection highlight thickness
+ */
+int  GetSelectionThickness();
+void SetSelectionThickness( int aThickness );
 
 // Color to draw items flagged invisible, in libedit (they are invisible in Eeschema
 COLOR4D GetInvisibleItemColor();
+
+// TODO(JE) Remove this once wxDC printing is gone
+COLOR4D GetLayerColor( SCH_LAYER_ID aLayer );
 
 #endif    // _GENERAL_H_

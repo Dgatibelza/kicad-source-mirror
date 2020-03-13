@@ -29,19 +29,27 @@
 
 class BOARD_ITEM;
 class PICKED_ITEMS_LIST;
-class PCB_TOOL;
-class PCB_BASE_FRAME;
+class PCB_TOOL_BASE;
 class TOOL_MANAGER;
+class EDA_DRAW_FRAME;
+class TOOL_BASE;
 
 class BOARD_COMMIT : public COMMIT
 {
 public:
-    BOARD_COMMIT( PCB_TOOL* aTool );
-    BOARD_COMMIT( PCB_BASE_FRAME* aFrame );
+    BOARD_COMMIT( EDA_DRAW_FRAME* aFrame );
+    BOARD_COMMIT( PCB_TOOL_BASE *aTool );
+
     virtual ~BOARD_COMMIT();
 
-    virtual void Push( const wxString& aMessage = wxT( "A commit" ), bool aCreateUndoEntry = true ) override;
+    virtual void Push( const wxString& aMessage = wxT( "A commit" ),
+                       bool aCreateUndoEntry = true, bool aSetDirtyBit = true ) override;
+
     virtual void Revert() override;
+    COMMIT&      Stage( EDA_ITEM* aItem, CHANGE_TYPE aChangeType ) override;
+    COMMIT&      Stage( std::vector<EDA_ITEM*>& container, CHANGE_TYPE aChangeType ) override;
+    COMMIT&      Stage(
+                 const PICKED_ITEMS_LIST& aItems, UNDO_REDO_T aModFlag = UR_UNSPECIFIED ) override;
 
 private:
     TOOL_MANAGER* m_toolMgr;

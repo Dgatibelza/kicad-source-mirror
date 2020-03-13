@@ -27,7 +27,7 @@
  * @brief Pcbnew PLUGIN for P-Cad 200x ASCII *.pcb format.
  */
 
-#include <errno.h>
+#include <cerrno>
 
 #include <wx/string.h>
 #include <wx/filename.h>
@@ -84,7 +84,7 @@ BOARD* PCAD_PLUGIN::Load( const wxString& aFileName, BOARD* aAppendToMe, const P
     LOCALE_IO toggle;    // toggles on, then off, the C locale.
 
     LoadInputFile( aFileName, &xmlDoc );
-    pcb.Parse( NULL, &xmlDoc, wxT( "PCB" ) );
+    pcb.ParseBoard( NULL, &xmlDoc, wxT( "PCB" ) );
     pcb.AddToBoard();
 
     return m_board;

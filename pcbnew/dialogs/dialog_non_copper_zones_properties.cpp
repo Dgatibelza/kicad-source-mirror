@@ -4,9 +4,9 @@
 /*
  * This program source code file is part of KiCad, a free EDA CAD application.
  *
- * Copyright (C) 2014 Jean-Pierre Charras, jp.charras at wanadoo.fr
+ * Copyright (C) 2019 Jean-Pierre Charras, jp.charras at wanadoo.fr
  * Copyright (C) 2014 SoftPLC Corporation, Dick Hollenbeck <dick@softplc.com>
- * Copyright (C) 1992-2014 KiCad Developers, see AUTHORS.txt for contributors.
+ * Copyright (C) 1992-2019 KiCad Developers, see AUTHORS.txt for contributors.
  *
  * This program is free software; you can redistribute it and/or
  * modify it under the terms of the GNU General Public License
@@ -29,241 +29,261 @@
 #include <fctsys.h>
 #include <kiface_i.h>
 #include <confirm.h>
-#include <wxPcbStruct.h>
-#include <base_units.h>
-
-#include <class_board.h>
+#include <pcb_edit_frame.h>
+#include <pcbnew_settings.h>
+#include <widgets/unit_binder.h>
 #include <class_zone.h>
-
-#include <pcbnew.h>
 #include <zones.h>
-
-#include <wx/imaglist.h>    // needed for wx/listctrl.h, in wxGTK 2.8.12
 
 #include <dialog_non_copper_zones_properties_base.h>
 
-#define LAYER_BITMAP_SIZE_X     20
-#define LAYER_BITMAP_SIZE_Y     10
 
-/**
- * Class DIALOG_NON_COPPER_ZONES_EDITOR
- * is a dialog editor for non copper zones properties,
- * derived from DIALOG_NONCOPPER_ZONES_PROPERTIES_BASE, which is maintained and
- * created by wxFormBuilder
- */
 class DIALOG_NON_COPPER_ZONES_EDITOR : public DIALOG_NONCOPPER_ZONES_PROPERTIES_BASE
 {
 private:
     PCB_BASE_FRAME* m_parent;
-    ZONE_CONTAINER* m_zone;
     ZONE_SETTINGS*  m_ptr;
     ZONE_SETTINGS   m_settings;     // working copy of zone settings
+    UNIT_BINDER     m_minWidth;
+    UNIT_BINDER     m_gridStyleRotation;
+    UNIT_BINDER     m_gridStyleThickness;
+    UNIT_BINDER     m_gridStyleGap;
+    int             m_cornerSmoothingType;
+    UNIT_BINDER     m_cornerRadius;
 
-    void OnOkClick( wxCommandEvent& event ) override;
-    void OnCancelClick( wxCommandEvent& event ) override;
-    void Init();
+    bool TransferDataToWindow() override;
+    bool TransferDataFromWindow() override;
+
+    void OnStyleSelection( wxCommandEvent& event ) override;
+    void OnLayerSelection( wxDataViewEvent& event ) override;
+    void OnUpdateUI( wxUpdateUIEvent& ) override;
 
 public:
-    DIALOG_NON_COPPER_ZONES_EDITOR( PCB_BASE_FRAME* aParent,
-                                    ZONE_CONTAINER* aZone, ZONE_SETTINGS* aSettings );
-
-private:
-    /**
-     * Function makeLayerBitmap
-     * creates the colored rectangle bitmaps used in the layer selection widget.
-     * @param aColor is the color to fill the rectangle with.
-     */
-    wxBitmap makeLayerBitmap( COLOR4D aColor );
+    DIALOG_NON_COPPER_ZONES_EDITOR( PCB_BASE_FRAME* aParent, ZONE_SETTINGS* aSettings );
 };
 
 
-ZONE_EDIT_T InvokeNonCopperZonesEditor( PCB_BASE_FRAME* aParent,
-                                        ZONE_CONTAINER* aZone, ZONE_SETTINGS* aSettings )
+int InvokeNonCopperZonesEditor( PCB_BASE_FRAME* aParent, ZONE_SETTINGS* aSettings )
 {
-    DIALOG_NON_COPPER_ZONES_EDITOR  dlg( aParent, aZone, aSettings );
+    DIALOG_NON_COPPER_ZONES_EDITOR  dlg( aParent, aSettings );
 
-    ZONE_EDIT_T result = ZONE_EDIT_T( dlg.ShowModal() );
-
-    return result;
+    return dlg.ShowModal();
 }
 
+#define MIN_THICKNESS 10*IU_PER_MILS
 
 DIALOG_NON_COPPER_ZONES_EDITOR::DIALOG_NON_COPPER_ZONES_EDITOR( PCB_BASE_FRAME* aParent,
-                                                                ZONE_CONTAINER* aZone,
                                                                 ZONE_SETTINGS* aSettings ) :
-    DIALOG_NONCOPPER_ZONES_PROPERTIES_BASE( aParent )
+    DIALOG_NONCOPPER_ZONES_PROPERTIES_BASE( aParent ),
+    m_minWidth( aParent, m_MinWidthLabel, m_MinWidthCtrl, m_MinWidthUnits, true ),
+    m_gridStyleRotation( aParent, m_staticTextGrindOrient, m_tcGridStyleOrientation, m_staticTextRotUnits,
+                         false ),
+    m_gridStyleThickness( aParent, m_staticTextStyleThickness,
+                          m_tcGridStyleThickness, m_GridStyleThicknessUnits, false),
+    m_gridStyleGap( aParent, m_staticTextGridGap, m_tcGridStyleGap, m_GridStyleGapUnits, false ),
+    m_cornerSmoothingType( ZONE_SETTINGS::SMOOTHING_UNDEFINED ),
+    m_cornerRadius( aParent, m_cornerRadiusLabel, m_cornerRadiusCtrl, m_cornerRadiusUnits, true )
 {
     m_parent = aParent;
 
-    m_zone = aZone;
     m_ptr  = aSettings;
     m_settings = *aSettings;
+    m_settings.SetupLayersList( m_layers, m_parent, false );
 
-    Init();
+    m_sdbSizerButtonsOK->SetDefault();
 
-    // the size of some items has changed, so we must call SetSizeHints()
-    GetSizer()->SetSizeHints( this );
+    FinishDialogSettings();
 }
 
 
-void DIALOG_NON_COPPER_ZONES_EDITOR::Init()
+void DIALOG_NON_COPPER_ZONES_EDITOR::OnUpdateUI( wxUpdateUIEvent& )
 {
-    BOARD* board = m_parent->GetBoard();
+    if( m_cornerSmoothingType != m_cornerSmoothingChoice->GetSelection() )
+    {
+        m_cornerSmoothingType = m_cornerSmoothingChoice->GetSelection();
 
-    SetReturnCode( ZONE_ABORT );  // Will be changed on button click
+        if( m_cornerSmoothingChoice->GetSelection() == ZONE_SETTINGS::SMOOTHING_CHAMFER )
+            m_cornerRadiusLabel->SetLabel( _( "Chamfer distance:" ) );
+        else
+            m_cornerRadiusLabel->SetLabel( _( "Fillet radius:" ) );
+    }
 
-    AddUnitSymbol( *m_MinThicknessValueTitle, g_UserUnit );
-    wxString msg = StringFromValue( g_UserUnit, m_settings.m_ZoneMinThickness );
-    m_ZoneMinThicknessCtrl->SetValue( msg );
+    m_cornerRadiusCtrl->Enable(m_cornerSmoothingType > ZONE_SETTINGS::SMOOTHING_NONE );
+}
 
-    if( m_settings.m_Zone_45_Only )
-        m_OrientEdgesOpt->SetSelection( 1 );
+
+bool DIALOG_NON_COPPER_ZONES_EDITOR::TransferDataToWindow()
+{
+    m_cornerSmoothingChoice->SetSelection( m_settings.GetCornerSmoothingType() );
+    m_cornerRadius.SetValue( m_settings.GetCornerRadius() );
+
+    m_minWidth.SetValue( m_settings.m_ZoneMinThickness );
+    m_ConstrainOpt->SetValue( m_settings.m_Zone_45_Only );
 
     switch( m_settings.m_Zone_HatchingStyle )
     {
-    case ZONE_CONTAINER::NO_HATCH:
+    case ZONE_HATCH_STYLE::NO_HATCH:
         m_OutlineAppearanceCtrl->SetSelection( 0 );
         break;
-
-    case ZONE_CONTAINER::DIAGONAL_EDGE:
+    case ZONE_HATCH_STYLE::DIAGONAL_EDGE:
         m_OutlineAppearanceCtrl->SetSelection( 1 );
         break;
-
-    case ZONE_CONTAINER::DIAGONAL_FULL:
+    case ZONE_HATCH_STYLE::DIAGONAL_FULL:
         m_OutlineAppearanceCtrl->SetSelection( 2 );
         break;
     }
 
-    // Create one column in m_LayerSelectionCtrl
-    wxListItem column0;
-    column0.SetId( 0 );
-    m_LayerSelectionCtrl->InsertColumn( 0, column0 );
+    SetInitialFocus( m_OutlineAppearanceCtrl );
 
-    // Create an icon list:
-    wxImageList* imageList = new wxImageList( LAYER_BITMAP_SIZE_X, LAYER_BITMAP_SIZE_Y );
-    m_LayerSelectionCtrl->AssignImageList( imageList, wxIMAGE_LIST_SMALL );
-
-    PCB_LAYER_ID lyrSelect = m_parent->GetActiveLayer();
-
-    if( m_zone )
-        lyrSelect = m_zone->GetLayer();
-
-    int ctrlWidth = 0;  // Min width for m_LayerSelectionCtrl to show the layers names
-    int imgIdx = 0;
-
-    for( LSEQ seq = LSET::AllNonCuMask().Seq(); seq; ++seq, ++imgIdx )
+    switch( m_settings.m_FillMode )
     {
-        PCB_LAYER_ID layer = *seq;
-
-        COLOR4D layerColor = m_parent->Settings().Colors().GetLayerColor( layer );
-
-        imageList->Add( makeLayerBitmap( layerColor ) );
-
-        msg = board->GetLayerName( layer );
-        msg.Trim();
-
-        int itemIndex = m_LayerSelectionCtrl->InsertItem(
-                m_LayerSelectionCtrl->GetItemCount(), msg, imgIdx );
-
-        if(lyrSelect == layer )
-            m_LayerSelectionCtrl->Select( itemIndex );
-
-        wxSize tsize( GetTextSize( msg, m_LayerSelectionCtrl ) );
-        ctrlWidth = std::max( ctrlWidth, tsize.x );
+    case ZONE_FILL_MODE::HATCH_PATTERN:
+        m_GridStyleCtrl->SetSelection( 1 ); break;
+    default:
+        m_GridStyleCtrl->SetSelection( 0 ); break;
     }
 
-    // The most easy way to ensure the right size is to use wxLIST_AUTOSIZE
-    // unfortunately this option does not work well both on
-    // wxWidgets 2.8 ( column witdth too small), and
-    // wxWidgets 2.9 ( column witdth too large)
-    ctrlWidth += LAYER_BITMAP_SIZE_X + 25;      // Add bitmap width + margin between bitmap and text
-    m_LayerSelectionCtrl->SetColumnWidth( 0, ctrlWidth );
+    m_gridStyleRotation.SetUnits( EDA_UNITS::DEGREES );
+    m_gridStyleRotation.SetValue( m_settings.m_HatchFillTypeOrientation*10 ); // IU is decidegree
 
-    ctrlWidth += 25;        // add small margin between text and window borders
-                            // and room for vertical scroll bar
-    m_LayerSelectionCtrl->SetMinSize( wxSize( ctrlWidth, -1 ) );
+    // Gives a reasonable value to grid style parameters, if currently there are no defined
+    // parameters for grid pattern thickness and gap (if the value is 0)
+    // the grid pattern thickness default value is (arbitrary) m_ZoneMinThickness * 4
+    // or 1mm
+    // the grid pattern gap default value is (arbitrary) m_ZoneMinThickness * 6
+    // or 1.5 mm
+    int bestvalue = m_settings.m_HatchFillTypeThickness;
+
+    if( bestvalue <= 0 )     // No defined value for m_HatchFillTypeThickness
+        bestvalue = std::max( m_settings.m_ZoneMinThickness * 4, Millimeter2iu( 1.0 ) );
+
+    m_gridStyleThickness.SetValue( std::max( bestvalue, m_settings.m_ZoneMinThickness ) );
+
+    bestvalue = m_settings.m_HatchFillTypeGap;
+
+    if( bestvalue <= 0 )     // No defined value for m_HatchFillTypeGap
+        bestvalue = std::max( m_settings.m_ZoneMinThickness * 6, Millimeter2iu( 1.5 ) );
+
+    m_gridStyleGap.SetValue( std::max( bestvalue, m_settings.m_ZoneMinThickness ) );
+
+    m_spinCtrlSmoothLevel->SetValue( m_settings.m_HatchFillTypeSmoothingLevel );
+    m_spinCtrlSmoothValue->SetValue( m_settings.m_HatchFillTypeSmoothingValue );
+
+    // Enable/Disable some widgets
+    wxCommandEvent event;
+    OnStyleSelection( event );
+
+    return true;
 }
 
 
-void DIALOG_NON_COPPER_ZONES_EDITOR::OnOkClick( wxCommandEvent& event )
+void DIALOG_NON_COPPER_ZONES_EDITOR::OnStyleSelection( wxCommandEvent& event )
 {
-    wxString txtvalue = m_ZoneMinThicknessCtrl->GetValue();
+    bool enable = m_GridStyleCtrl->GetSelection() >= 1;
+    m_tcGridStyleThickness->Enable( enable );
+    m_tcGridStyleGap->Enable( enable );
+    m_tcGridStyleOrientation->Enable( enable );
+    m_spinCtrlSmoothLevel->Enable( enable );
+    m_spinCtrlSmoothValue->Enable( enable );
+}
 
-    m_settings.m_ZoneMinThickness = ValueFromString( g_UserUnit, txtvalue );
 
-    if( m_settings.m_ZoneMinThickness < 10 )
-    {
-        DisplayError( this,
-                      _( "Error :\nyou must choose a min thickness value bigger than 0.001 inch (or 0.0254 mm)" ) );
+void DIALOG_NON_COPPER_ZONES_EDITOR::OnLayerSelection( wxDataViewEvent& event )
+{
+    if( event.GetColumn() != 0 )
         return;
-    }
 
-    m_settings.m_FillMode = 0;  // Use always polygon fill mode
+    int row = m_layers->ItemToRow( event.GetItem() );
+
+    if( m_layers->GetToggleValue( row, 0 ) )
+    {
+        wxVariant layerID;
+        m_layers->GetValue( layerID, row, 2 );
+        m_settings.m_CurrentZone_Layer = ToLAYER_ID( layerID.GetInteger() );
+
+        // Turn all other checkboxes off.
+        for( int ii = 0; ii < m_layers->GetItemCount(); ++ii )
+        {
+            if( ii != row )
+                m_layers->SetToggleValue( false, ii, 0 );
+        }
+    }
+}
+
+
+bool DIALOG_NON_COPPER_ZONES_EDITOR::TransferDataFromWindow()
+{
+    m_settings.SetCornerSmoothingType( m_cornerSmoothingChoice->GetSelection() );
+
+    m_settings.SetCornerRadius( m_settings.GetCornerSmoothingType() == ZONE_SETTINGS::SMOOTHING_NONE
+                                ? 0 : m_cornerRadius.GetValue() );
+
+    if( !m_gridStyleRotation.Validate( -1800, 1800 ) )
+        return false;
+
+    m_settings.m_ZoneMinThickness = m_minWidth.GetValue();
 
     switch( m_OutlineAppearanceCtrl->GetSelection() )
     {
     case 0:
-        m_settings.m_Zone_HatchingStyle = ZONE_CONTAINER::NO_HATCH;
+        m_settings.m_Zone_HatchingStyle = ZONE_HATCH_STYLE::NO_HATCH;
         break;
-
     case 1:
-        m_settings.m_Zone_HatchingStyle = ZONE_CONTAINER::DIAGONAL_EDGE;
+        m_settings.m_Zone_HatchingStyle = ZONE_HATCH_STYLE::DIAGONAL_EDGE;
         break;
-
     case 2:
-        m_settings.m_Zone_HatchingStyle = ZONE_CONTAINER::DIAGONAL_FULL;
+        m_settings.m_Zone_HatchingStyle = ZONE_HATCH_STYLE::DIAGONAL_FULL;
         break;
     }
 
-    wxConfigBase* cfg = Kiface().KifaceSettings();
-    wxASSERT( cfg );
-
-    cfg->Write( ZONE_NET_OUTLINES_HATCH_OPTION_KEY, (long) m_settings.m_Zone_HatchingStyle );
-
-    if( m_OrientEdgesOpt->GetSelection() == 0 )
-        m_settings.m_Zone_45_Only = false;
+    if( m_GridStyleCtrl->GetSelection() > 0 )
+        m_settings.m_FillMode = ZONE_FILL_MODE::HATCH_PATTERN;
     else
-        m_settings.m_Zone_45_Only = true;
+        m_settings.m_FillMode = ZONE_FILL_MODE::POLYGONS;
+
+
+    if( m_settings.m_FillMode == ZONE_FILL_MODE::HATCH_PATTERN )
+    {
+        int minThickness = m_minWidth.GetValue();
+
+        if( !m_gridStyleThickness.Validate( minThickness, INT_MAX ) )
+            return false;
+
+        if( !m_gridStyleGap.Validate( minThickness, INT_MAX ) )
+            return false;
+    }
+
+
+    m_settings.m_HatchFillTypeOrientation = m_gridStyleRotation.GetValue()/10.0; // value is returned in deci-degree
+    m_settings.m_HatchFillTypeThickness = m_gridStyleThickness.GetValue();
+    m_settings.m_HatchFillTypeGap = m_gridStyleGap.GetValue();
+    m_settings.m_HatchFillTypeSmoothingLevel = m_spinCtrlSmoothLevel->GetValue();
+    m_settings.m_HatchFillTypeSmoothingValue = m_spinCtrlSmoothValue->GetValue();
+
+    auto cfg = m_parent->GetSettings();
+    cfg->m_Zones.hatching_style = static_cast<int>( m_settings.m_Zone_HatchingStyle );
+
+    m_settings.m_Zone_45_Only = m_ConstrainOpt->GetValue();
 
     // Get the layer selection for this zone
-    int ii = m_LayerSelectionCtrl->GetFirstSelected();
-
-    if( ii < 0 )
+    int layer = -1;
+    for( int ii = 0; ii < m_layers->GetItemCount(); ++ii )
     {
-        DisplayError( this, _( "Error : you must choose a layer" ) );
-        return;
+        if( m_layers->GetToggleValue( (unsigned) ii, 0 ) )
+        {
+            layer = ii;
+            break;
+        }
     }
 
-    LSEQ seq = LSET::AllNonCuMask().Seq();
-
-    m_settings.m_CurrentZone_Layer = seq[ii];
+    if( layer < 0 )
+    {
+        DisplayError( this, _( "No layer selected." ) );
+        return false;
+    }
 
     *m_ptr = m_settings;
-
-    EndModal( ZONE_OK );
+    return true;
 }
 
 
-void DIALOG_NON_COPPER_ZONES_EDITOR::OnCancelClick( wxCommandEvent& event )
-{
-    // do not save the edits.
-
-    EndModal( ZONE_ABORT );
-}
-
-
-wxBitmap DIALOG_NON_COPPER_ZONES_EDITOR::makeLayerBitmap( COLOR4D aColor )
-{
-    wxBitmap    bitmap( LAYER_BITMAP_SIZE_X, LAYER_BITMAP_SIZE_Y );
-    wxBrush     brush;
-    wxMemoryDC  iconDC;
-
-    iconDC.SelectObject( bitmap );
-    brush.SetColour( aColor.ToColour() );
-    brush.SetStyle( wxBRUSHSTYLE_SOLID );
-
-    iconDC.SetBrush( brush );
-    iconDC.DrawRectangle( 0, 0, LAYER_BITMAP_SIZE_X, LAYER_BITMAP_SIZE_Y );
-
-    return bitmap;
-}

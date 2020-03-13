@@ -25,10 +25,10 @@
 #ifndef __DRAWING_TOOL_H
 #define __DRAWING_TOOL_H
 
-#include <tools/pcb_tool.h>
-#include <boost/optional.hpp>
-
+#include <core/optional.h>
 #include <tool/tool_menu.h>
+#include <tools/pcb_tool_base.h>
+#include <tools/pcb_actions.h>
 
 namespace KIGFX
 {
@@ -41,12 +41,12 @@ class DRAWSEGMENT;
 class POLYGON_GEOM_MANAGER;
 
 /**
- * Class DRAWING_TOOL
+ * DRAWING_TOOL
  *
  * Tool responsible for drawing graphical elements like lines, arcs, circles, etc.
  */
 
-class DRAWING_TOOL : public PCB_TOOL
+class DRAWING_TOOL : public PCB_TOOL_BASE
 {
 public:
     DRAWING_TOOL();
@@ -57,12 +57,6 @@ public:
 
     /// @copydoc TOOL_INTERACTIVE::Reset()
     void Reset( RESET_REASON aReason ) override;
-
-    ///> Get the DRAWING_TOOL top-level context menu
-    inline TOOL_MENU& GetToolMenu()
-    {
-        return m_menu;
-    }
 
     ///> The possible drawing modes of DRAWING_TOOL
     enum class MODE
@@ -77,7 +71,8 @@ public:
         DIMENSION,
         KEEPOUT,
         ZONE,
-        GRAPHIC_POLYGON
+        GRAPHIC_POLYGON,
+        VIA
     };
 
     /**
@@ -114,8 +109,8 @@ public:
 
     /**
      * Function PlaceText()
-     * Displays a dialog that allows to input text and its settings and then lets the user decide
-     * where to place the text in editor.
+     * Displays a dialog that allows one to input text and its settings and then
+     * lets the user decide where to place the text in editor.
      */
     int PlaceText( const TOOL_EVENT& aEvent );
 
@@ -133,44 +128,21 @@ public:
      * is displayed. After confirmation it allows the user to set points that are going to be used
      * as a boundary polygon of the zone. Double click or clicking on the origin of the boundary
      * polyline finishes the drawing.
+     *
+     * The event parameter indicates which type of zone to draw:
+     *  ADD      add a new zone/keepout with fresh settings
+     *  CUTOUT   add a cutout to an existing zone
+     *  SIMILAR  add a new zone with the same settings as an existing one
      */
-    int DrawZone( const TOOL_EVENT& aEvent );
-    int DrawGraphicPolygon( const TOOL_EVENT& aEvent );
+    int DrawZone(  const TOOL_EVENT& aEvent );
 
     int DrawVia( const TOOL_EVENT& aEvent );
 
     /**
-     * Function DrawZoneKeepout()
-     * Starts interactively drawing a keepout area. After invoking the function an area settings
-     * dialog is displayed. After confirmation it allows the user to set points that are going to
-     * be used as a boundary polygon of the area. Double click or clicking on the origin of the
-     * boundary polyline finishes the drawing.
+     * Function PlaceImportedGraphics()
+     * Places a drawing imported from a DXF or SVG file in module editor.
      */
-    int DrawZoneKeepout( const TOOL_EVENT& aEvent );
-
-    /**
-     * Function DrawZoneCutout()
-     * Starts interactively drawing a zone cutout area of an existing zone.
-     * The normal zone interactive tool is used, but the zone settings
-     * dialog is not shown (since the cutout affects only shape of an
-     * existing zone).
-     */
-    int DrawZoneCutout( const TOOL_EVENT& aEvent );
-
-    /**
-     * Function DrawSimilarZone()
-     * Starts interactively drawing a zone with same settings as
-     * an existing zone.
-     * The normal zone interactive tool is used, but the zone settings
-     * dialog is not shown at the start.
-     */
-    int DrawSimilarZone( const TOOL_EVENT& aEvent );
-
-    /**
-     * Function PlaceDXF()
-     * Places a drawing imported from a DXF file in module editor.
-     */
-    int PlaceDXF( const TOOL_EVENT& aEvent );
+    int PlaceImportedGraphics( const TOOL_EVENT& aEvent );
 
     /**
      * Function SetAnchor()
@@ -183,19 +155,6 @@ public:
 
 private:
 
-    enum class ZONE_MODE
-    {
-        ADD,            ///< Add a new zone/keepout with fresh settings
-        CUTOUT,         ///< Make a cutout to an existing zone
-        SIMILAR,         ///< Add a new zone with the same settings as an existing one
-        GRAPHIC_POLYGON
-    };
-
-    ///> Shows the context menu for the drawing tool
-    ///> This menu consists of normal UI functions (zoom, grid, etc)
-    ///> And any suitable global functions for the active drawing type.
-    void showContextMenu();
-
     ///> Starts drawing a selected shape (i.e. DRAWSEGMENT).
     ///> @param aShape is the type of created shape (@see STROKE_T).
     ///> @param aGraphic is an object that is going to be used by the tool for drawing. It has to
@@ -205,15 +164,15 @@ private:
     ///> and its settings (width, layer) set to the current default values.
     ///> @return False if the tool was cancelled before the origin was set or origin and end are
     ///> the same point.
-    bool drawSegment( int aShape, DRAWSEGMENT*& aGraphic,
-                      boost::optional<VECTOR2D> aStartingPoint = boost::none );
+    bool drawSegment( const std::string& aTool, int aShape, DRAWSEGMENT*& aGraphic,
+                      OPT<VECTOR2D> aStartingPoint );
 
     ///> Starts drawing an arc.
     ///> @param aGraphic is an object that is going to be used by the tool for drawing. It has to
     ///> be already created. The tool deletes the object if it is not added to a BOARD.
     ///> @return False if the tool was cancelled before the origin was set or origin and end are
     ///> the same point.
-    bool drawArc( DRAWSEGMENT*& aGraphic );
+    bool drawArc( const std::string& aTool, DRAWSEGMENT*& aGraphic, bool aImmediateMode );
 
     /**
      * Draws a polygon, that is added as a zone or a keepout area.
@@ -225,7 +184,6 @@ private:
      *  CUTOUT   add a cutout to an existing zone
      *  SIMILAR  add a new zone with the same settings as an existing one
      */
-    int drawZone( bool aKeepout, ZONE_MODE aMode );
 
     /**
      * Function getSourceZoneForAction()
@@ -250,16 +208,14 @@ private:
     void runPolygonEventLoop( POLYGON_GEOM_MANAGER& aPolyGeomMgr );
 
     /**
-     * Function make45DegLine()
-     * Forces a DRAWSEGMENT to be drawn at multiple of 45 degrees. The origin stays the same,
-     * the end of the aSegment is modified according to the current cursor position.
-     * @param aSegment is the segment that is currently drawn.
-     * @param aHelper is a helper line that shows the next possible segment.
+     * Function constrainDimension()
+     * Forces the dimension lime to be drawn on multiple of 45 degrees
+     * @param aDimension is the dimension element currently being drawn
      */
-    void make45DegLine( DRAWSEGMENT* aSegment, DRAWSEGMENT* aHelper ) const;
+    void constrainDimension( DIMENSION* aDim );
 
     ///> Returns the appropriate width for a segment depending on the settings.
-    int getSegmentWidth( unsigned int aLayer ) const;
+    int getSegmentWidth( PCB_LAYER_ID aLayer ) const;
 
     ///> Selects a non-copper layer for drawing
     PCB_LAYER_ID getDrawingLayer() const;
@@ -272,9 +228,6 @@ private:
 
     /// Stores the current line width for multisegment drawing.
     unsigned int m_lineWidth;
-
-    /// Menu model displayed by the tool.
-    TOOL_MENU m_menu;
 
     // How does line width change after one -/+ key press.
     static const unsigned int WIDTH_STEP;

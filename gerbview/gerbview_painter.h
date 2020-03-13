@@ -23,15 +23,15 @@
 
 #include <layers_id_colors_and_visibility.h>
 #include <painter.h>
-#include <class_gbr_display_options.h>
+
+#include <dcode.h>
+#include <gbr_display_options.h>
 #include <geometry/shape_poly_set.h>
 
 #include <memory>
 
 
 class EDA_ITEM;
-class COLORS_DESIGN_SETTINGS;
-
 class GERBER_DRAW_ITEM;
 class GERBER_FILE_IMAGE;
 
@@ -41,7 +41,7 @@ namespace KIGFX
 class GAL;
 
 /**
- * Class GERBVIEW_RENDER_SETTINGS
+ * GERBVIEW_RENDER_SETTINGS
  * Stores GerbView specific render settings.
  */
 class GERBVIEW_RENDER_SETTINGS : public RENDER_SETTINGS
@@ -51,15 +51,14 @@ public:
 
     GERBVIEW_RENDER_SETTINGS();
 
-    /// @copydoc RENDER_SETTINGS::ImportLegacyColors()
-    void ImportLegacyColors( const COLORS_DESIGN_SETTINGS* aSettings ) override;
+    void LoadColors( const COLOR_SETTINGS* aSettings ) override;
 
     /**
      * Function LoadDisplayOptions
      * Loads settings related to display options
      * @param aOptions are settings that you want to use for displaying items.
      */
-    void LoadDisplayOptions( const GBR_DISPLAY_OPTIONS* aOptions );
+    void LoadDisplayOptions( const GBR_DISPLAY_OPTIONS& aOptions );
 
     /// @copydoc RENDER_SETTINGS::GetColor()
     virtual const COLOR4D& GetColor( const VIEW_ITEM* aItem, int aLayer ) const override;
@@ -86,6 +85,17 @@ public:
 
         update();       // recompute other shades of the color
     }
+
+    const COLOR4D& GetBackgroundColor() override { return m_layerColors[ LAYER_GERBVIEW_BACKGROUND ]; }
+
+    void SetBackgroundColor( const COLOR4D& aColor ) override
+    {
+        m_layerColors[ LAYER_GERBVIEW_BACKGROUND ] = aColor;
+    }
+
+    const COLOR4D& GetGridColor() override { return m_layerColors[ LAYER_GERBVIEW_GRID ]; }
+
+    const COLOR4D& GetCursorColor() override { return m_layerColors[ LAYER_CURSOR ]; }
 
     inline bool IsSpotFill() const
     {
@@ -151,7 +161,7 @@ protected:
 
 
 /**
- * Class GERBVIEW_PAINTER
+ * GERBVIEW_PAINTER
  * Contains methods for drawing GerbView-specific items.
  */
 class GERBVIEW_PAINTER : public PAINTER
@@ -180,8 +190,15 @@ protected:
     // Drawing functions
     void draw( /*const*/ GERBER_DRAW_ITEM* aVia, int aLayer );
 
-    /// Helper routine to draw a polygon
-    void drawPolygon( GERBER_DRAW_ITEM* aParent, SHAPE_POLY_SET aPolygon, bool aFilled );
+    /**
+     *  Helper routine to draw a polygon
+     * @param aParent Pointer to the draw item for AB Position calculation
+     * @param aPolygon the polygon to draw
+     * @param aFilled If true, draw the polygon as filled, otherwise only outline
+     * @param aShift If true, draw the polygon relative to the parent item position
+     */
+    void drawPolygon( GERBER_DRAW_ITEM* aParent, const SHAPE_POLY_SET& aPolygon,
+                      bool aFilled, bool aShift = false );
 
     /// Helper to draw a flashed shape (aka spot)
     void drawFlashedShape( GERBER_DRAW_ITEM* aItem, bool aFilled );

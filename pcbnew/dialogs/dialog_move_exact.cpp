@@ -2,8 +2,7 @@
  * This program source code file is part of KiCad, a free EDA CAD application.
  *
  * Copyright (C) 2014 John Beard, john.j.beard@gmail.com
- * Copyright (C) 1992-2014 KiCad Developers, see AUTHORS.txt for contributors.
- * Copyright (C) 2017 KiCad Developers, see CHANGELOG.TXT for contributors.
+ * Copyright (C) 2018 KiCad Developers, see AUTHORS.txt for contributors.
  *
  * This program is free software; you can redistribute it and/or
  * modify it under the terms of the GNU General Public License
@@ -23,133 +22,109 @@
  * 51 Franklin Street, Fifth Floor, Boston, MA  02110-1301, USA
  */
 
-#include <wxPcbStruct.h>
-#include <base_units.h>
-#include <macros.h>
-
-#include <module_editor_frame.h>
-
-#include "dialog_move_exact.h"
+#include <dialogs/dialog_move_exact.h>
+#include <math/util.h>      // for KiROUND
+#include <widgets/tab_traversal.h>
+#include <pcb_edit_frame.h>
 
 // initialise statics
 DIALOG_MOVE_EXACT::MOVE_EXACT_OPTIONS DIALOG_MOVE_EXACT::m_options;
 
 
-DIALOG_MOVE_EXACT::DIALOG_MOVE_EXACT(PCB_BASE_FRAME *aParent, MOVE_PARAMETERS &aParams ) :
+DIALOG_MOVE_EXACT::DIALOG_MOVE_EXACT( PCB_BASE_FRAME *aParent, wxPoint& aTranslate,
+                                      double& aRotate, ROTATION_ANCHOR& aAnchor,
+                                      const EDA_RECT& aBbox ) :
     DIALOG_MOVE_EXACT_BASE( aParent ),
-    m_parent( aParent ),
-    m_translation( aParams.translation ),
-    m_rotation( aParams.rotation ),
-    m_origin( aParams.origin ),
-    m_anchor( aParams.anchor ),
-    m_allowOverride( aParams.allowOverride ),
-    m_editingFootprint( aParams.editingFootprint )
+    m_translation( aTranslate ),
+    m_rotation( aRotate ),
+    m_rotationAnchor( aAnchor ),
+    m_bbox( aBbox ),
+    m_moveX( aParent, m_xLabel, m_xEntry, m_xUnit ),
+    m_moveY( aParent, m_yLabel, m_yEntry, m_yUnit ),
+    m_rotate( aParent, m_rotLabel, m_rotEntry, m_rotUnit ),
+    m_stateX( 0.0 ),
+    m_stateY( 0.0 ),
+    m_stateRadius( 0.0 ),
+    m_stateTheta( 0.0 )
 {
-    // set the unit labels
-    m_xUnit->SetLabelText( GetAbbreviatedUnitsLabel( g_UserUnit ) );
-    m_yUnit->SetLabelText( GetAbbreviatedUnitsLabel( g_UserUnit ) );
+    // We can't set the tab order through wxWidgets due to shortcomings in their mnemonics
+    // implementation on MSW
+    m_tabOrder = {
+        m_xEntry,
+        m_yEntry,
+        m_rotEntry,
+        m_anchorOptions,
+        m_stdButtonsOK,
+        m_stdButtonsCancel
+    };
 
-    // tabbing goes through the entries in sequence
-    m_yEntry->MoveAfterInTabOrder( m_xEntry );
-    m_rotEntry->MoveAfterInTabOrder( m_yEntry );
+    updateDialogControls( m_options.polarCoords );
+
+    m_menuIDs.push_back( aAnchor );
+    m_menuIDs.push_back( ROTATE_AROUND_USER_ORIGIN );
+
+    if( aParent->IsType( FRAME_PCB_EDITOR ) )
+        m_menuIDs.push_back( ROTATE_AROUND_AUX_ORIGIN );
+
+    buildRotationAnchorMenu();
 
     // and set up the entries according to the saved options
     m_polarCoords->SetValue( m_options.polarCoords );
-    m_xEntry->SetValue( wxString::FromDouble( m_options.entry1 ) );
-    m_yEntry->SetValue( wxString::FromDouble( m_options.entry2 ) );
-    m_rotEntry->SetValue( wxString::FromDouble( m_options.entryRotation ) );
-    m_originChooser->SetSelection( m_options.origin );
+    m_moveX.SetDoubleValue( m_options.entry1 );
+    m_moveY.SetDoubleValue( m_options.entry2 );
 
-    if( m_allowOverride )
-    {
-        m_cbOverride->SetValue( m_options.overrideAnchor );
-        m_anchorChoice->Enable( m_options.overrideAnchor );
-
-        // ME_ANCHOR_FROM_LIBRARY is not in the wxChoice options so show the first choice instead
-        if( m_options.anchor == ANCHOR_FROM_LIBRARY )
-        {
-            m_anchorChoice->SetSelection( ANCHOR_TOP_LEFT_PAD );
-        }
-        else
-        {
-            m_anchorChoice->SetSelection( m_options.anchor );
-        }
-
-        if( m_options.origin == RELATIVE_TO_CURRENT_POSITION )
-        {
-            // no footprint override necessary in this mode
-            m_cbOverride->Disable();
-            m_anchorChoice->Disable();
-        }
-
-        if( m_editingFootprint )
-        {
-            // there is no point in showing the center footprint option when editing footprints
-            m_anchorChoice->Delete( ANCHOR_CENTER_FOOTPRINT );
-        }
-    }
-    else
-    {
-        // hide the checkbox and choice control if overides are not allowed
-        bMainSizer->Hide( bAnchorSizer, true );
-    }
-
-    if( wxPoint( 0, 0 ) == aParent->GetScreen()->m_O_Curseur )
-    {
-        // disble the user origin option when the user oigin is not set
-        m_originChooser->Enable( RELATIVE_TO_USER_ORIGIN, false );
-        m_originChooser->SetItemToolTip( RELATIVE_TO_USER_ORIGIN,
-                                         wxString( "The user origin is currently not set\n"
-                                                   "Set it by using the <space> hotkey" ) );
-    }
-
-    if( wxPoint( 0, 0 ) == aParent->GetGridOrigin() )
-    {
-        // disble the grid origin option when the user oigin is not set
-        m_originChooser->Enable( RELATIVE_TO_GRID_ORIGIN, false );
-        m_originChooser->SetItemToolTip( RELATIVE_TO_GRID_ORIGIN,
-                                         wxString( "The grid origin is currently not set\n"
-                                                   "Set it by using the tool in the <place> menu" ) );
-    }
-
-    if( wxPoint( 0, 0 ) == aParent->GetAuxOrigin() )
-    {
-        // disble the grid origin option when the drill/place oigin is not set
-        m_originChooser->Enable( RELATIVE_TO_DRILL_PLACE_ORIGIN, false );
-        m_originChooser->SetItemToolTip( RELATIVE_TO_DRILL_PLACE_ORIGIN,
-                                         wxString( "The drill/place origin is currently not set\n"
-                                                   "Set it by using the tool in the <place> menu" ) );
-    }
-
-    updateDlgTexts( m_polarCoords->IsChecked() );
+    m_rotate.SetUnits( EDA_UNITS::DEGREES );
+    m_rotate.SetValue( m_options.entryRotation );
+    m_anchorOptions->SetSelection( std::min( m_options.entryAnchorSelection, m_menuIDs.size() ) );
 
     m_stdButtonsOK->SetDefault();
 
-    GetSizer()->SetSizeHints( this );
-    Layout();
+    FinishDialogSettings();
 }
 
 
-DIALOG_MOVE_EXACT::~DIALOG_MOVE_EXACT()
+void DIALOG_MOVE_EXACT::buildRotationAnchorMenu()
 {
+    wxArrayString menuItems;
+
+    for( auto anchorID : m_menuIDs )
+    {
+        switch( anchorID )
+        {
+        case ROTATE_AROUND_ITEM_ANCHOR:
+            menuItems.push_back( _( "Rotate around item anchor" ) );
+            break;
+        case ROTATE_AROUND_SEL_CENTER:
+            menuItems.push_back( _( "Rotate around selection center" ) );
+            break;
+        case ROTATE_AROUND_USER_ORIGIN:
+            menuItems.push_back( _( "Rotate around local coordinates origin" ) );
+            break;
+        case ROTATE_AROUND_AUX_ORIGIN:
+            menuItems.push_back( _( "Rotate around drill/place origin" ) );
+            break;
+        }
+    }
+
+    m_anchorOptions->Set( menuItems );
 }
 
 
 void DIALOG_MOVE_EXACT::ToPolarDeg( double x, double y, double& r, double& q )
 {
     // convert to polar coordinates
-    r = hypot ( x, y );
+    r = hypot( x, y );
 
     q = ( r != 0) ? RAD2DEG( atan2( y, x ) ) : 0;
 }
 
 
-bool DIALOG_MOVE_EXACT::GetTranslationInIU ( wxPoint& val, bool polar )
+bool DIALOG_MOVE_EXACT::GetTranslationInIU( wxRealPoint& val, bool polar )
 {
     if( polar )
     {
-        const int r = ValueFromTextCtrl( *m_xEntry );
-        const double q = DoubleValueFromString( DEGREES, m_yEntry->GetValue() );
+        const double r = m_moveX.GetDoubleValue();
+        const double q = m_moveY.GetDoubleValue();
 
         val.x = r * cos( DEG2RAD( q / 10.0 ) );
         val.y = r * sin( DEG2RAD( q / 10.0 ) );
@@ -157,8 +132,8 @@ bool DIALOG_MOVE_EXACT::GetTranslationInIU ( wxPoint& val, bool polar )
     else
     {
         // direct read
-        val.x = ValueFromTextCtrl( *m_xEntry );
-        val.y = ValueFromTextCtrl( *m_yEntry );
+        val.x = m_moveX.GetDoubleValue();
+        val.y = m_moveY.GetDoubleValue();
     }
 
     // no validation to do here, but in future, you could return false here
@@ -169,164 +144,116 @@ bool DIALOG_MOVE_EXACT::GetTranslationInIU ( wxPoint& val, bool polar )
 void DIALOG_MOVE_EXACT::OnPolarChanged( wxCommandEvent& event )
 {
     bool newPolar = m_polarCoords->IsChecked();
-    updateDlgTexts( newPolar );
-    wxPoint val;
-
-    // get the value as previously stored
-    GetTranslationInIU( val, !newPolar );
+    double moveX = m_moveX.GetDoubleValue();
+    double moveY = m_moveY.GetDoubleValue();
+    updateDialogControls( newPolar );
 
     if( newPolar )
     {
-        // convert to polar coordinates
-        double r, q;
-        ToPolarDeg( val.x, val.y, r, q );
+        if( moveX != m_stateX || moveY != m_stateY )
+        {
+            m_stateX = moveX;
+            m_stateY = moveY;
+            ToPolarDeg( m_stateX, m_stateY, m_stateRadius, m_stateTheta );
+            m_stateTheta *= 10.0;
 
-        PutValueInLocalUnits( *m_xEntry, KiROUND( r / 10.0) * 10 );
-        m_yEntry->SetValue( wxString::FromDouble( q ) );
+            m_moveX.SetDoubleValue( m_stateRadius );
+            m_stateRadius = m_moveX.GetDoubleValue();
+            m_moveY.SetDoubleValue( m_stateTheta );
+            m_stateTheta = m_moveY.GetDoubleValue();
+        }
+        else
+        {
+            m_moveX.SetDoubleValue( m_stateRadius );
+            m_moveY.SetDoubleValue( m_stateTheta );
+        }
     }
     else
     {
-        // vector is already in Cartesian, so just render out
-        // note - round off the last decimal place (10nm) to prevent
-        // (some) rounding causing errors when round-tripping
-        // you can never eliminate entirely, however
-        PutValueInLocalUnits( *m_xEntry, KiROUND( val.x / 10.0 ) * 10 );
-        PutValueInLocalUnits( *m_yEntry, KiROUND( val.y / 10.0 ) * 10 );
-    }
-    Layout();
-}
+        if( moveX != m_stateRadius || moveY != m_stateTheta )
+        {
+            m_stateRadius = moveX;
+            m_stateTheta = moveY;
+            m_stateX = m_stateRadius * cos( DEG2RAD( m_stateTheta / 10.0 ) );
+            m_stateY = m_stateRadius * sin( DEG2RAD( m_stateTheta / 10.0 ) );
 
-
-void DIALOG_MOVE_EXACT::OnOriginChanged( wxCommandEvent& event )
-{
-    if( m_originChooser->GetSelection() == RELATIVE_TO_CURRENT_POSITION )
-    {
-        //no need to override the achor in this mode since the reference in the current position
-        m_cbOverride->Disable();
-        m_anchorChoice->Disable();
-    }
-    else if( m_allowOverride )
-    {
-        m_cbOverride->Enable();
-
-        if( m_cbOverride->IsChecked() )
-            m_anchorChoice->Enable();
+            m_moveX.SetDoubleValue( m_stateX );
+            m_stateX = m_moveX.GetDoubleValue();
+            m_moveY.SetDoubleValue( m_stateY );
+            m_stateY = m_moveY.GetDoubleValue();
+        }
+        else
+        {
+            m_moveX.SetDoubleValue( m_stateX );
+            m_moveY.SetDoubleValue( m_stateY );
+        }
     }
 }
 
 
-void DIALOG_MOVE_EXACT::OnOverrideChanged( wxCommandEvent& event )
-{
-    if( m_cbOverride->IsChecked() )
-    {
-        m_anchorChoice->Enable();
-    }
-    else
-    {
-        m_anchorChoice->Disable();
-    }
-}
-
-
-void DIALOG_MOVE_EXACT::updateDlgTexts( bool aPolar )
+void DIALOG_MOVE_EXACT::updateDialogControls( bool aPolar )
 {
     if( aPolar )
     {
-        m_xLabel->SetLabelText( _( "Distance:" ) );     // Polar radius
-        m_yLabel->SetLabelText( _( "Angle:" ) );        // Polar theta or angle
-
-        m_yUnit->SetLabelText( GetAbbreviatedUnitsLabel( DEGREES ) );
+        m_moveX.SetLabel( _( "Distance:" ) );     // Polar radius
+        m_moveY.SetLabel( _( "Angle:" ) );        // Polar theta or angle
+        m_moveY.SetUnits( EDA_UNITS::DEGREES );
     }
     else
     {
-        m_xLabel->SetLabelText( _( "Move vector X:" ) );
-        m_yLabel->SetLabelText( _( "Move vector Y:" ) );
-
-        m_yUnit->SetLabelText( GetAbbreviatedUnitsLabel( g_UserUnit ) );
+        m_moveX.SetLabel( _( "Move X:" ) );
+        m_moveY.SetLabel( _( "Move Y:" ) );
+        m_moveY.SetUnits( GetUserUnits() );
     }
+
+    Layout();
 }
 
 
 void DIALOG_MOVE_EXACT::OnClear( wxCommandEvent& event )
 {
     wxObject* obj = event.GetEventObject();
-    wxTextCtrl* entry = NULL;
 
     if( obj == m_clearX )
     {
-        entry = m_xEntry;
+        m_moveX.SetValue( 0 );
     }
     else if( obj == m_clearY )
     {
-        entry = m_yEntry;
+        m_moveY.SetValue( 0 );
     }
     else if( obj == m_clearRot )
     {
-        entry = m_rotEntry;
+        m_rotate.SetValue( 0 );
     }
 
-    if( entry )
-        entry->SetValue( "0" );
+    // Keep m_stdButtonsOK focused to allow enter key actiavte the OK button
+    m_stdButtonsOK->SetFocus();
 }
 
 
-void DIALOG_MOVE_EXACT::OnOkClick( wxCommandEvent& event )
+bool DIALOG_MOVE_EXACT::TransferDataFromWindow()
 {
-    m_rotation = DoubleValueFromString( DEGREES, m_rotEntry->GetValue() );
-    m_origin = static_cast<MOVE_EXACT_ORIGIN>( m_originChooser->GetSelection() );
-
-    if( m_cbOverride->IsChecked() && m_allowOverride )
-    {
-        m_anchor = static_cast<MOVE_EXACT_ANCHOR>( m_anchorChoice->GetSelection() );
-    }
-    else
-    {
-        m_anchor = ANCHOR_FROM_LIBRARY;
-    }
-
-    wxPoint move_vector, origin;
     // for the output, we only deliver a Cartesian vector
-    bool ok = GetTranslationInIU( move_vector, m_polarCoords->IsChecked() );
-
-    switch( m_origin )
-    {
-    case RELATIVE_TO_USER_ORIGIN:
-        origin = m_parent->GetScreen()->m_O_Curseur;
-        break;
-
-    case RELATIVE_TO_GRID_ORIGIN:
-        origin = m_parent->GetGridOrigin();
-        break;
-
-    case RELATIVE_TO_DRILL_PLACE_ORIGIN:
-        origin = m_parent->GetAuxOrigin();
-        break;
-
-    case RELATIVE_TO_SHEET_ORIGIN:
-        origin = wxPoint( 0, 0 );
-        break;
-
-    case RELATIVE_TO_CURRENT_POSITION:
-        // relative movement means that only the translation values should be used:
-        // -> set origin and anchor to zero
-        origin = wxPoint( 0, 0 );
-        break;
-    }
-
-    m_translation = move_vector + origin;
+    wxRealPoint translation;
+    bool ok = GetTranslationInIU( translation, m_polarCoords->IsChecked() );
+    m_translation.x = KiROUND(translation.x);
+    m_translation.y = KiROUND(translation.y);
+    m_rotation = m_rotate.GetValue();
+    m_rotationAnchor = m_menuIDs[ m_anchorOptions->GetSelection() ];
 
     if( ok )
     {
         // save the settings
         m_options.polarCoords = m_polarCoords->GetValue();
-        m_options.entry1 = DoubleValueFromString( UNSCALED_UNITS, m_xEntry->GetValue() );
-        m_options.entry2 = DoubleValueFromString( UNSCALED_UNITS, m_yEntry->GetValue() );
-        m_options.entryRotation = DoubleValueFromString( UNSCALED_UNITS, m_rotEntry->GetValue() );
-        m_options.origin = m_origin;
-        m_options.anchor = static_cast<MOVE_EXACT_ANCHOR>( m_anchorChoice->GetSelection() );
-        m_options.overrideAnchor = m_cbOverride->IsChecked();
-        event.Skip();
+        m_options.entry1 = m_moveX.GetDoubleValue();
+        m_options.entry2 = m_moveY.GetDoubleValue();
+        m_options.entryRotation = m_rotate.GetValue();
+        m_options.entryAnchorSelection = (size_t) std::max( m_anchorOptions->GetSelection(), 0 );
+        return true;
     }
+
+    return false;
 }
 
 
@@ -338,4 +265,38 @@ void DIALOG_MOVE_EXACT::OnTextFocusLost( wxFocusEvent& event )
         obj->SetValue( "0" );
 
     event.Skip();
+}
+
+
+void DIALOG_MOVE_EXACT::OnTextChanged( wxCommandEvent& event )
+{
+
+    double delta_x = m_moveX.GetDoubleValue();
+    double delta_y = m_moveY.GetDoubleValue();
+    double max_border = std::numeric_limits<int>::max() * 0.7071;
+
+    if( m_bbox.GetLeft() + delta_x < -max_border ||
+            m_bbox.GetRight() + delta_x > max_border ||
+            m_bbox.GetTop() + delta_y < -max_border ||
+            m_bbox.GetBottom() + delta_y > max_border )
+    {
+        const wxString invalid_length = _( "Invalid movement values.  Movement would place selection "
+                                           "outside of the maximum board area." );
+
+        m_xEntry->SetToolTip( invalid_length );
+        m_xEntry->SetForegroundColour( *wxRED );
+        m_yEntry->SetToolTip( invalid_length );
+        m_yEntry->SetForegroundColour( *wxRED );
+        m_stdButtons->GetAffirmativeButton()->Disable();
+    }
+    else
+    {
+        m_xEntry->SetToolTip( "" );
+        m_xEntry->SetForegroundColour( wxSystemSettings::GetColour( wxSYS_COLOUR_WINDOWTEXT ) );
+        m_yEntry->SetToolTip( "" );
+        m_yEntry->SetForegroundColour( wxSystemSettings::GetColour( wxSYS_COLOUR_WINDOWTEXT ) );
+        m_stdButtons->GetAffirmativeButton()->Enable();
+        event.Skip();
+    }
+
 }

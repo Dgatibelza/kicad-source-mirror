@@ -2,8 +2,8 @@
  * This program source code file is part of KiCad, a free EDA CAD application.
  *
  * Copyright (C) 2015 Jean-Pierre Charras, jp.charras at wanadoo.fr
- * Copyright (C) 2008-2017 Wayne Stambaugh <stambaughw@verizon.net>
- * Copyright (C) 2004-2017 KiCad Developers, see change_log.txt for contributors.
+ * Copyright (C) 2008 Wayne Stambaugh <stambaughw@gmail.com>
+ * Copyright (C) 2004-2019 KiCad Developers, see change_log.txt for contributors.
  *
  * This program is free software; you can redistribute it and/or
  * modify it under the terms of the GNU General Public License
@@ -31,15 +31,14 @@
 #ifndef CLASS_LIBRARY_H
 #define CLASS_LIBRARY_H
 
+#include <map>
+#include <boost/ptr_container/ptr_vector.hpp>
 #include <wx/filename.h>
 
-#include <class_libentry.h>
 #include <sch_io_mgr.h>
-
 #include <project.h>
 
-#include <map>
-
+class LIB_PART;
 class LIB_ID;
 class LINE_READER;
 class OUTPUTFORMATTER;
@@ -132,20 +131,17 @@ public:
     // Accessors
 
     /**
-     * Function GetFilterPowerParts
      * @return true if the filtering of power parts is on
      */
     bool GetFilterPowerParts() const { return m_filterPowerParts; }
 
 
     /**
-     * Function GetAllowedLibList
      * @return am wxArrayString of the names of allowed libs
      */
     const wxArrayString& GetAllowedLibList() const { return m_allowedLibs; }
 
     /**
-     * Function GetLibSource
      * @return the name of the lib to use to load a part, or an a empty string
      * Useful to load (in lib editor or lib viewer) a part from a given library
      */
@@ -166,9 +162,9 @@ class PART_LIB;
 class wxRegEx;
 
 /**
- * LIB_ALIAS map sorting.
+ * LIB_PART map sorting.
  */
-struct AliasMapSort
+struct LibPartMapSort
 {
     bool operator() ( const wxString& aItem1, const wxString& aItem2 ) const
     {
@@ -176,24 +172,25 @@ struct AliasMapSort
     }
 };
 
-/// Alias map used by part library object.
+/// Part map used by part library object.
 
-typedef std::map< wxString, LIB_ALIAS*, AliasMapSort >  LIB_ALIAS_MAP;
-typedef std::vector< LIB_ALIAS* >                       LIB_ALIASES;
-typedef boost::ptr_vector< PART_LIB >                   PART_LIBS_BASE;
+typedef std::map< wxString, LIB_PART*, LibPartMapSort >  LIB_PART_MAP;
+typedef std::vector< LIB_PART* >                         LIB_PARTS;
+typedef boost::ptr_vector< PART_LIB >                    PART_LIBS_BASE;
 
 
 /**
- * Class PART_LIBS
- * is a collection of PART_LIBs.  It extends from PROJECT::_ELEM so it can be
- * hung in the PROJECT.  It does not use any UI calls, but rather simply throws
- * an IO_ERROR when there is a problem.
+ * A collection of #PART_LIB objects.
+ *
+ * It extends from PROJECT::_ELEM so it can be hung in the PROJECT.  It does not use any
+ * UI calls, but rather simply throws an IO_ERROR when there is a problem.
  */
 class PART_LIBS : public PART_LIBS_BASE, public PROJECT::_ELEM
 {
 public:
+    KICAD_T Type() override { return PART_LIBS_T; }
 
-    static int s_modify_generation;     ///< helper for GetModifyHash()
+    static int s_modify_generation;         ///< helper for GetModifyHash()
 
     PART_LIBS()
     {
@@ -205,8 +202,7 @@ public:
     int GetModifyHash();
 
     /**
-     * Function AddLibrary
-     * allocates and adds a part library to the library list.
+     * Allocate and adds a part library to the library list.
      *
      * @param aFileName - File name object of part library.
      * @throw IO_ERROR if there's any problem loading.
@@ -214,8 +210,7 @@ public:
     PART_LIB* AddLibrary( const wxString& aFileName );
 
     /**
-     * Function AddLibrary
-     * inserts a part library into the library list.
+     * Insert a part library into the library list.
      *
      * @param aFileName - File name object of part library.
      * @param aIterator - Iterator to insert library in front of.
@@ -225,31 +220,30 @@ public:
     PART_LIB* AddLibrary( const wxString& aFileName, PART_LIBS::iterator& aIterator );
 
     /**
-     * Function LoadAllLibraries
-     * loads all of the project's libraries into this container, which should
+     * Load all of the project's libraries into this container, which should
      * be cleared before calling it.
+     *
+     * @note This method is only to be used when loading legacy projects.  All further symbol
+     *       library access should be done via the symbol library table.
      */
     void LoadAllLibraries( PROJECT* aProject, bool aShowProgress=true );
 
     /**
-     * Function LibNamesAndPaths
-     * either saves or loads the names of the currently configured part libraries
-     * (without paths).
+     * Save or load the names of the currently configured part libraries (without paths).
      */
     static void LibNamesAndPaths( PROJECT* aProject, bool doSave,
                                   wxString* aPaths, wxArrayString* aNames=NULL );
 
     /**
-     * Function cacheName
-     * returns the name of the cache library after potentially fixing it from
+     * Return the name of the cache library after potentially fixing it from
      * an older naming scheme.  That is, the old file is renamed if needed.
+     *
      * @param aFullProjectFilename - the *.pro filename with absolute path.
      */
     static const wxString CacheName( const wxString& aFullProjectFilename );
 
     /**
-     * Function FindLibrary
-     * finds a part library by \a aName.
+     * Find a part library by \a aName.
      *
      * @param aName - Library file name without path or extension to find.
      * @return Part library if found, otherwise NULL.
@@ -258,19 +252,18 @@ public:
 
     PART_LIB* FindLibraryByFullFileName( const wxString& aFullFileName );
 
+    PART_LIB* GetCacheLibrary();
+
     /**
-     * Function GetLibraryNames
-     * returns the list of part library file names without path and extension.
+     * Return the list of part library file names without path and extension.
      *
-     * @param aSorted - Sort the list of name if true.  Otherwise use the
-     *                  library load order.
+     * @param aSorted - Sort the list of name if true.  Otherwise use the library load order.
      * @return The list of library names.
      */
     wxArrayString GetLibraryNames( bool aSorted = true );
 
     /**
-     * Function FindLibPart
-     * searches all libraries in the list for a part.
+     * Search all libraries in the list for a part.
      *
      * A part object will always be returned.  If the entry found
      * is an alias.  The root part will be found and returned.
@@ -282,21 +275,8 @@ public:
     LIB_PART* FindLibPart( const LIB_ID& aLibId, const wxString& aLibraryName = wxEmptyString );
 
     /**
-     * Function FindLibraryEntry
-     * searches all libraries in the list for an entry.
+     * Search all libraries in the list for a #LIB_PART using a case insensitive comparison.
      *
-     * The object can be either a part or an alias.
-     *
-     * @param aLibId - The library indentifaction of entry to search for (case sensitive).
-     * @param aLibraryName - Name of the library to search.
-     * @return The entry object if found, otherwise NULL.
-     */
-    LIB_ALIAS* FindLibraryAlias( const LIB_ID& aLibId,
-                                 const wxString& aLibraryName = wxEmptyString );
-
-    /**
-     * Function FindLibraryNearEntries
-     * Searches all libraries in the list for an entry, using a case insensitive comparison.
      * Helper function used in dialog to find all candidates.
      * During a long time, eeschema was using a case insensitive search.
      * Therefore, for old schematics (<= 2013), or libs, for some components,
@@ -307,7 +287,7 @@ public:
      * @param aLibraryName - Name of the library to search.
      * @param aCandidates - a std::vector to store candidates
      */
-    void FindLibraryNearEntries( std::vector<LIB_ALIAS*>& aCandidates, const wxString& aEntryName,
+    void FindLibraryNearEntries( std::vector<LIB_PART*>& aCandidates, const wxString& aEntryName,
                                  const wxString& aLibraryName = wxEmptyString );
 
     int GetLibraryCount() { return size(); }
@@ -315,9 +295,10 @@ public:
 
 
 /**
- * Class PART_LIB
- * is used to load, save, search, and otherwise manipulate
- * part library files.
+ * Object used to load, save, search, and otherwise manipulate symbol library files.
+ *
+ * @warning This code is obsolete with the exception of the cache library.  All other
+ *          symbol library I/O is managed by the #SCH_IO_MGR object.
  */
 class PART_LIB
 {
@@ -352,27 +333,6 @@ public:
 
     void SetFileName( const wxString& aFileName ) { fileName = aFileName; }
 
-    /**
-     * Get library entry status.
-     *
-     * @return True if there are no entries in the library.
-     */
-    bool IsEmpty() const
-    {
-        return m_plugin->GetSymbolLibCount( fileName.GetFullPath() ) == 0;
-    }
-
-    /**
-     * Function GetCount
-     * returns the number of entries in the library.
-     *
-     * @return The number of part and alias entries.
-     */
-    int GetCount() const
-    {
-        return (int) m_plugin->GetSymbolLibCount( fileName.GetFullPath() );
-    }
-
     bool IsModified() const
     {
         return isModified;
@@ -389,7 +349,6 @@ public:
     void Save( bool aSaveDocFile = true );
 
     /**
-     * Function IsReadOnly
      * @return true if current user does not have write access to the library file.
      */
     bool IsReadOnly() const { return !fileName.IsFileWritable(); }
@@ -399,40 +358,24 @@ public:
      *
      * @param aNames - String array to place entry names into.
      */
-    void GetAliasNames( wxArrayString& aNames );
+    void GetPartNames( wxArrayString& aNames ) const;
 
     /**
      * Load a vector with all the entries in this library.
      *
-     * @param aAliases - vector to receive the aliases.
+     * @param aParts - vector to receive the aliases.
      */
-    void GetAliases( std::vector<LIB_ALIAS*>& aAliases );
+    void GetParts( std::vector<LIB_PART*>& aPart) const;
 
     /**
-     * Load a string array with the names of  entries of type POWER in this library.
-     *
-     * @param aNames - String array to place entry names into.
-     */
-    void GetEntryTypePowerNames( wxArrayString& aNames );
-
-    /**
-     * Find #LIB_ALIAS by \a aName.
-     *
-     * @param aName - Name of entry, case sensitive.
-     * @return #LIB_ALIAS* if found.  NULL if not found.
-     */
-    LIB_ALIAS* FindAlias( const wxString& aName );
-
-    /**
-     * Find part by \a aName.
-     *
-     * This is a helper for FindEntry so casting a LIB_ALIAS pointer to
-     * a LIB_PART pointer is not required.
+     * Find #LIB_PART by \a aName.
      *
      * @param aName - Name of part, case sensitive.
-     * @return LIB_PART* - part if found, else NULL.
+     * @return LIB_PART pointer part if found, else NULL.
      */
-    LIB_PART* FindPart( const wxString& aName );
+    LIB_PART* FindPart( const wxString& aName ) const;
+
+    LIB_PART* FindPart( const LIB_ID& aLibId ) const;
 
     /**
      * Add \a aPart entry to library.
@@ -455,10 +398,11 @@ public:
      * @param aEntry - Entry to remove from library.
      * @return The next entry in the library or NULL if the library is empty.
      */
-    LIB_ALIAS* RemoveAlias( LIB_ALIAS* aEntry );
+    LIB_PART* RemovePart( LIB_PART* aEntry );
 
     /**
      * Replace an existing part entry in the library.
+     *
      * Note a part can have an alias list,
      * so these alias will be added in library (and previously existing alias removed)
      * @param aOldPart - The part to replace.
@@ -474,19 +418,18 @@ public:
     const wxString GetName() const            { return fileName.GetName(); }
 
     /**
-     * Function GetFullFileName
-     * returns the full file library name with path and extension.
+     * Return the full file library name with path and extension.
      *
      * @return wxString - Full library file name with path and extension.
      */
-    wxString GetFullFileName()          { return fileName.GetFullPath(); }
+    wxString GetFullFileName() const          { return fileName.GetFullPath(); }
 
     /**
-     * Function GetLogicalName
-     * returns the logical name of the library.
+     * Return the logical name of the library.
+     *
      * @return wxString - The logical name of this library.
      */
-    const wxString GetLogicalName()
+    const wxString GetLogicalName() const
     {
         /*  for now is the filename without path or extension.
 
@@ -501,22 +444,13 @@ public:
 
 
     /**
-     * Function LoadLibrary
-     * allocates and loads a part library file.
+     * Allocate and load a symbol library file.
      *
      * @param aFileName - File name of the part library to load.
-     * @return PART_LIB* - the allocated and loaded PART_LIB, which is owned by
-     *   the caller.
+     * @return PART_LIB* - the allocated and loaded PART_LIB, which is owned by the caller.
      * @throw IO_ERROR if there's any problem loading the library.
      */
     static PART_LIB* LoadLibrary( const wxString& aFileName );
-
-    /**
-     * Function HasPowerParts
-     * @return true if at least one power part is found in lib
-     * Useful to select or list only libs containing power parts
-     */
-    bool HasPowerParts();
 };
 
 

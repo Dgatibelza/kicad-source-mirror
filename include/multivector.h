@@ -204,7 +204,20 @@ public:
         return CONST_ITERATOR( this, operator[]( bucket ).end(), bucket, aType );
     }
 
-    size_t size( int aType = UNDEFINED_TYPE )
+    void clear( int aType = UNDEFINED_TYPE )
+    {
+        if( aType != UNDEFINED_TYPE )
+        {
+            operator[]( aType ).clear();
+        }
+        else
+        {
+            for( int i = 0; i < TYPES_COUNT; ++i)
+                m_data[ i ].clear();
+        }
+    }
+
+    size_t size( int aType = UNDEFINED_TYPE ) const
     {
         if( aType != UNDEFINED_TYPE )
         {
@@ -247,7 +260,12 @@ public:
     ITEM_PTR_VECTOR& operator[]( int aType )
     {
         if( ( aType < FIRST_TYPE ) || ( aType > LAST_TYPE ) )
-            throw std::out_of_range( "MULTIVECTOR out of range" );
+        {
+            wxFAIL_MSG( "Attempted access to type not within MULTIVECTOR" );
+
+            // return type is a reference so we have to return something...
+            aType = FIRST_TYPE;
+        }
 
         return m_data[ aType - FIRST_TYPE ];
     }
@@ -255,7 +273,12 @@ public:
     const ITEM_PTR_VECTOR& operator[]( int aType ) const
     {
         if( ( aType < FIRST_TYPE ) || ( aType > LAST_TYPE ) )
-            throw std::out_of_range( "MULTIVECTOR out of range" );
+        {
+            wxFAIL_MSG( "Attempted access to type not within MULTIVECTOR" );
+
+            // return type is a reference so we have to return something...
+            aType = FIRST_TYPE;
+        }
 
         return m_data[ aType - FIRST_TYPE ];
     }

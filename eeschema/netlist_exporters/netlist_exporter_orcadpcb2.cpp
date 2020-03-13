@@ -1,9 +1,9 @@
 /*
  * This program source code file is part of KiCad, a free EDA CAD application.
  *
- * Copyright (C) 1992-2013 jp.charras at wanadoo.fr
+ * Copyright (C) 1992-2018 jp.charras at wanadoo.fr
  * Copyright (C) 2013 SoftPLC Corporation, Dick Hollenbeck <dick@softplc.com>
- * Copyright (C) 1992-2017 KiCad Developers, see AUTHORS.TXT for contributors.
+ * Copyright (C) 1992-2019 KiCad Developers, see AUTHORS.txt for contributors.
  *
  * This program is free software; you can redistribute it and/or
  * modify it under the terms of the GNU General Public License
@@ -27,15 +27,17 @@
 #include <build_version.h>
 #include <confirm.h>
 
-#include <schframe.h>
+#include <sch_edit_frame.h>
 #include <sch_reference_list.h>
 #include <class_library.h>
-#include <class_netlist_object.h>
+#include <symbol_lib_table.h>
 
 #include <netlist.h>
 #include "netlist_exporter_orcadpcb2.h"
 
-bool NETLIST_EXPORTER_ORCADPCB2::WriteNetlist( const wxString& aOutFileName, unsigned aNetlistOptions )
+
+bool NETLIST_EXPORTER_ORCADPCB2::WriteNetlist( const wxString& aOutFileName,
+                                               unsigned aNetlistOptions )
 {
     (void)aNetlistOptions;      //unused
     FILE* f = NULL;
@@ -48,7 +50,7 @@ bool NETLIST_EXPORTER_ORCADPCB2::WriteNetlist( const wxString& aOutFileName, uns
     if( ( f = wxFopen( aOutFileName, wxT( "wt" ) ) ) == NULL )
     {
         wxString msg;
-        msg.Printf( _( "Failed to create file '%s'" ),
+        msg.Printf( _( "Failed to create file \"%s\"" ),
                     GetChars( aOutFileName ) );
         DisplayError( NULL, msg );
         return false;
@@ -70,24 +72,22 @@ bool NETLIST_EXPORTER_ORCADPCB2::WriteNetlist( const wxString& aOutFileName, uns
 
     for( unsigned i = 0;  i < sheetList.size();  i++ )
     {
-        for( EDA_ITEM* item = sheetList[i].LastDrawList();  item;  item = item->Next() )
+        // Process component attributes
+        for( auto item : sheetList[i].LastScreen()->Items().OfType( SCH_COMPONENT_T ) )
         {
-            SCH_COMPONENT* comp = findNextComponentAndCreatePinList( item, &sheetList[i] );
+            SCH_COMPONENT* comp = findNextComponent( item, &sheetList[i] );
 
             if( !comp )
-                break;
+                continue;
 
-            item = comp;
+            CreatePinList( comp, &sheetList[i] );
 
-            // Get the Component FootprintFilter and put the component in
-            // cmpList if filter is present
-            LIB_PART* part = m_libs->FindLibPart( comp->GetLibId() );
-
-            if( part )
+            if( comp->GetPartRef() )
             {
-                if( part->GetFootPrints().GetCount() != 0 )    // Put in list
+                if( comp->GetPartRef()->GetFootprints().GetCount() != 0 )    // Put in list
                 {
-                    cmpList.push_back( SCH_REFERENCE( comp, part, sheetList[i] ) );
+                    cmpList.push_back( SCH_REFERENCE( comp, comp->GetPartRef().get(),
+                                                      sheetList[i] ) );
                 }
             }
 
@@ -102,7 +102,7 @@ bool NETLIST_EXPORTER_ORCADPCB2::WriteNetlist( const wxString& aOutFileName, uns
             field = comp->GetRef( &sheetList[i] );
 
             ret |= fprintf( f, " ( %s %s",
-                            TO_UTF8( comp->GetPath( &sheetList[i] ) ),
+                            TO_UTF8( sheetList[i].PathAsString() + comp->m_Uuid.AsString() ),
                             TO_UTF8( footprint ) );
 
             ret |= fprintf( f, "  %s", TO_UTF8( field ) );
@@ -128,7 +128,7 @@ bool NETLIST_EXPORTER_ORCADPCB2::WriteNetlist( const wxString& aOutFileName, uns
 
                 netName.Replace( wxT( " " ), wxT( "_" ) );
 
-                ret |= fprintf( f, "  ( %4.4s %s )\n", (char*) &pin->m_PinNum,
+                ret |= fprintf( f, "  ( %4.4s %s )\n", TO_UTF8( pin->m_PinNum ),
                                 TO_UTF8( netName ) );
             }
 

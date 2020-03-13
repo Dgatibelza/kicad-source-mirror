@@ -4,7 +4,7 @@
  * Copyright (C) 2016 Mario Luzeiro <mrluzeiro@ua.pt>
  * Copyright (C) 2015 Cirilo Bernardo <cirilo.bernardo@gmail.com>
  * Copyright (C) 2017 Jean-Pierre Charras, jp.charras at wanadoo.fr
- * Copyright (C) 2015-2017 KiCad Developers, see AUTHORS.txt for contributors.
+ * Copyright (C) 2015-2018 KiCad Developers, see AUTHORS.txt for contributors.
  *
  * This program is free software; you can redistribute it and/or
  * modify it under the terms of the GNU General Public License
@@ -24,71 +24,47 @@
  * 51 Franklin Street, Fifth Floor, Boston, MA  02110-1301, USA
  */
 
-/**
- * @file  panel_prev_model.cpp
- */
-
-#include <3d_canvas/eda_3d_canvas.h>
-#include <common_ogl/cogl_att_list.h>
-#include <cstdlib>
-#include <limits.h>
-#include <bitmaps.h>
-
-#include <wx/valnum.h>
-#include <wx/tglbtn.h>
-
-#include "project.h"
 #include "panel_prev_model.h"
+#include <3d_canvas/eda_3d_canvas.h>
+#include <base_units.h>
+#include <bitmaps.h>
 #include <class_board.h>
+#include <common_ogl/cogl_att_list.h>
+#include <dpi_scaling.h>
+#include <pgm_base.h>
+#include <project.h>
+#include <settings/common_settings.h>
 
 
-PANEL_PREV_3D::PANEL_PREV_3D( wxWindow* aParent, S3D_CACHE* aCacheManager,
-                                  MODULE* aModuleCopy,
-                                  COLORS_DESIGN_SETTINGS *aColors,
-                                  std::vector<S3D_INFO> *aParentInfoList ):
-                PANEL_PREV_3D_BASE( aParent, wxID_ANY )
-    {
-        initPanel();
+PANEL_PREV_3D::PANEL_PREV_3D( wxWindow* aParent, PCB_BASE_FRAME* aFrame, MODULE* aModule,
+                              std::vector<MODULE_3D_SETTINGS> *aParentModelList ) :
+    PANEL_PREV_3D_BASE( aParent, wxID_ANY )
+{
+    m_userUnits = aFrame->GetUserUnits();
 
-        // Initialize the color settings to draw the board and the footprint
-        if( aColors )
-            m_dummyBoard->SetColorsSettings( aColors );
-        else
-        {
-            static COLORS_DESIGN_SETTINGS defaultColors( FRAME_PCB_DISPLAY3D );
-            m_dummyBoard->SetColorsSettings( &defaultColors );
-        }
+    initPanel();
 
-        if( NULL != aCacheManager )
-            m_resolver = aCacheManager->GetResolver();
+    m_parentModelList = aParentModelList;
 
-        m_parentInfoList = aParentInfoList;
+    m_dummyModule = new MODULE( *aModule );
+    m_dummyBoard->Add( m_dummyModule );
 
-        m_dummyBoard->Add( (MODULE*)aModuleCopy );
-        m_copyModule = aModuleCopy;
+    // Set 3d viewer configuration for preview
+    m_settings3Dviewer = new CINFO3D_VISU();
 
-        // Set 3d viewer configuration for preview
-        m_settings3Dviewer = new CINFO3D_VISU();
+    // Create the 3D canvas
+    m_previewPane = new EDA_3D_CANVAS( this, COGL_ATT_LIST::GetAttributesList( true ),
+                                       m_dummyBoard, *m_settings3Dviewer,
+                                       aFrame->Prj().Get3DCacheManager() );
 
-        // Create the 3D canvas
-        m_previewPane = new EDA_3D_CANVAS( this,
-                                           COGL_ATT_LIST::GetAttributesList( true ),
-                                           m_dummyBoard,
-                                           *m_settings3Dviewer,
-                                           aCacheManager );
+    loadCommonSettings();
 
-        m_SizerPanelView->Add( m_previewPane, 1, wxEXPAND );
-
-        m_previewPane->Connect( wxEVT_ENTER_WINDOW, wxMouseEventHandler(
-                            PANEL_PREV_3D::onEnterPreviewCanvas ), NULL, this );
-    }
+    m_SizerPanelView->Add( m_previewPane, 1, wxEXPAND, 5 );
+}
 
 
 PANEL_PREV_3D::~PANEL_PREV_3D()
 {
-    m_previewPane->Disconnect( wxEVT_ENTER_WINDOW,
-            wxMouseEventHandler( PANEL_PREV_3D::onEnterPreviewCanvas ), NULL, this );
-
     delete m_settings3Dviewer;
     delete m_dummyBoard;
     delete m_previewPane;
@@ -97,10 +73,8 @@ PANEL_PREV_3D::~PANEL_PREV_3D()
 
 void PANEL_PREV_3D::initPanel()
 {
-    m_resolver = NULL;
-    currentModelFile.clear();
     m_dummyBoard = new BOARD();
-    m_currentSelectedIdx = -1;
+    m_selected = -1;
 
     // Set the bitmap of 3D view buttons:
     m_bpvTop->SetBitmap( KiBitmap( axis3d_top_xpm ) );
@@ -124,293 +98,137 @@ void PANEL_PREV_3D::initPanel()
         m_spinXoffset,m_spinYoffset, m_spinZoffset
     };
 
-    for( int ii = 0; ii < 9; ii++ )
-        spinButtonList[ii]->SetRange( INT_MIN, INT_MAX );
+    for( wxSpinButton* button : spinButtonList )
+        button->SetRange(INT_MIN, INT_MAX );
 }
 
 
+void PANEL_PREV_3D::loadCommonSettings()
+{
+    wxCHECK_RET( m_previewPane, "Cannot load settings to null canvas" );
+
+    COMMON_SETTINGS* settings = Pgm().GetCommonSettings();
+
+    const DPI_SCALING dpi{ settings, this };
+    m_previewPane->SetScaleFactor( dpi.GetScaleFactor() );
+
+    m_settings3Dviewer->SetFlag( FL_MOUSEWHEEL_PANNING, settings->m_Input.mousewheel_pan );
+}
 
 
 /**
- * @brief checkRotation
+ * @brief rotationFromString
  * Ensure -MAX_ROTATION <= rotation <= MAX_ROTATION
  * aRotation will be normalized between -MAX_ROTATION and MAX_ROTATION
- * @param aRotation: in out parameter
  */
-static void checkRotation( double& aRotation )
+static double rotationFromString( const wxString& aValue )
 {
-    if( aRotation > MAX_ROTATION )
+    double rotation = DoubleValueFromString( EDA_UNITS::DEGREES, aValue ) / 10.0;
+
+    if( rotation > MAX_ROTATION )
     {
-        int n = aRotation / MAX_ROTATION;
-        aRotation -= MAX_ROTATION * n;
+        int n = rotation / MAX_ROTATION;
+        rotation -= MAX_ROTATION * n;
     }
-    else if( aRotation < -MAX_ROTATION )
+    else if( rotation < -MAX_ROTATION )
     {
-        int n = -aRotation / MAX_ROTATION;
-        aRotation += MAX_ROTATION * n;
-    }
-}
-
-static bool validateFloatTextCtrl( wxTextCtrl* aTextCtrl )
- {
-    if( aTextCtrl == NULL )
-        return false;
-
-    if( aTextCtrl->GetLineLength(0) == 0 )   // This will skip the got and event with empty field
-        return false;
-
-    if( aTextCtrl->GetLineLength(0) == 1 )
-    {
-        if( (aTextCtrl->GetLineText(0).compare( "." ) == 0) ||
-            (aTextCtrl->GetLineText(0).compare( "," ) == 0) )
-            return false;
+        int n = -rotation / MAX_ROTATION;
+        rotation += MAX_ROTATION * n;
     }
 
-    return true;
+    return rotation;
 }
 
 
-static void incrementTextCtrl( wxTextCtrl* aTextCtrl, double aInc, double aMinval, double aMaxval )
+wxString PANEL_PREV_3D::formatScaleValue( double aValue )
 {
-    if( !validateFloatTextCtrl( aTextCtrl ) )
-        return;
-
-    double curr_value = 0;
-
-    aTextCtrl->GetValue().ToDouble( &curr_value );
-    curr_value += aInc;
-
-    if( curr_value > aMaxval )
-        curr_value = aMaxval;
-
-    if( curr_value < aMinval )
-        curr_value = aMinval;
-
-    aTextCtrl->SetValue( wxString::Format( "%.4f", curr_value ) );
+    return wxString::Format( "%.4f", aValue );
 }
 
 
-void PANEL_PREV_3D::SetModelDataIdx( int idx, bool aReloadPreviewModule )
+wxString PANEL_PREV_3D::formatRotationValue( double aValue )
 {
-    wxASSERT( m_parentInfoList != NULL );
-
-    if( m_parentInfoList && (idx >= 0) )
-    {
-        wxASSERT( (unsigned int)idx < (*m_parentInfoList).size() );
-
-        if( (unsigned int)idx < (*m_parentInfoList).size() )
-        {
-            m_currentSelectedIdx = -1;  // In case that we receive events on the
-                                        // next updates, it will set first an
-                                        // invalid selection
-
-            const S3D_INFO *aModel = (const S3D_INFO *)&((*m_parentInfoList)[idx]);
-
-            xscale->SetValue( wxString::Format( "%.4f", aModel->m_Scale.x ) );
-            yscale->SetValue( wxString::Format( "%.4f", aModel->m_Scale.y ) );
-            zscale->SetValue( wxString::Format( "%.4f", aModel->m_Scale.z ) );
-
-            xrot->SetValue( wxString::Format( "%.2f", aModel->m_Rotation.x ) );
-            yrot->SetValue( wxString::Format( "%.2f", aModel->m_Rotation.y ) );
-            zrot->SetValue( wxString::Format( "%.2f", aModel->m_Rotation.z ) );
-
-            switch( g_UserUnit )
-            {
-            case MILLIMETRES:
-                xoff->SetValue( wxString::Format( "%.4f", aModel->m_Offset.x * 25.4 ) );
-                yoff->SetValue( wxString::Format( "%.4f", aModel->m_Offset.y * 25.4 ) );
-                zoff->SetValue( wxString::Format( "%.4f", aModel->m_Offset.z * 25.4 ) );
-                break;
-
-            case INCHES:
-                xoff->SetValue( wxString::Format( "%.4f", aModel->m_Offset.x ) );
-                yoff->SetValue( wxString::Format( "%.4f", aModel->m_Offset.y ) );
-                zoff->SetValue( wxString::Format( "%.4f", aModel->m_Offset.z ) );
-                break;
-
-            case DEGREES:
-            case UNSCALED_UNITS:
-            default:
-                wxASSERT(0);
-            }
-
-            UpdateModelName( aModel->m_Filename );
-
-            if( aReloadPreviewModule && m_previewPane )
-            {
-                updateListOnModelCopy();
-
-                m_previewPane->ReloadRequest();
-                m_previewPane->Request_refresh();
-            }
-
-            m_currentSelectedIdx = idx;
-        }
-    }
-
-    if( m_previewPane )
-        m_previewPane->SetFocus();
-
-    return;
+    return wxString::Format( "%.2f %s", aValue, GetAbbreviatedUnitsLabel( EDA_UNITS::DEGREES ) );
 }
 
 
-void PANEL_PREV_3D::ResetModelData( bool aReloadPreviewModule )
+wxString PANEL_PREV_3D::formatOffsetValue( double aValue )
 {
-    m_currentSelectedIdx = -1;
+    // Convert from internal units (mm) to user units
+    if( m_userUnits == EDA_UNITS::INCHES )
+        aValue /= 25.4f;
 
-    xscale->SetValue( wxString::FromDouble( 1.0 ) );
-    yscale->SetValue( wxString::FromDouble( 1.0 ) );
-    zscale->SetValue( wxString::FromDouble( 1.0 ) );
-
-    xrot->SetValue( wxString::FromDouble( 0.0 ) );
-    yrot->SetValue( wxString::FromDouble( 0.0 ) );
-    zrot->SetValue( wxString::FromDouble( 0.0 ) );
-
-    xoff->SetValue( wxString::FromDouble( 0.0 ) );
-    yoff->SetValue( wxString::FromDouble( 0.0 ) );
-    zoff->SetValue( wxString::FromDouble( 0.0 ) );
-
-    // This will update the model on the preview board with the current list of 3d shapes
-    if( aReloadPreviewModule )
-    {
-        updateListOnModelCopy();
-
-        if( m_previewPane )
-        {
-            m_previewPane->ReloadRequest();
-            m_previewPane->Request_refresh();
-        }
-    }
-
-    if( m_previewPane )
-        m_previewPane->SetFocus();
+    return wxString::Format( "%.4f %s", aValue, GetAbbreviatedUnitsLabel( m_userUnits ) );
 }
 
 
-void PANEL_PREV_3D::UpdateModelName( wxString const& aModelName )
+void PANEL_PREV_3D::SetSelectedModel( int idx )
 {
-    bool newModel = false;
-
-    m_modelInfo.m_Filename = aModelName;
-
-    // if the model name is a directory simply clear the current model
-    if( aModelName.empty() || wxFileName::DirExists( aModelName ) )
+    if( m_parentModelList && idx >= 0 && idx < (int) m_parentModelList->size() )
     {
-        currentModelFile.clear();
-        m_modelInfo.m_Filename.clear();
+        m_selected = idx;
+        const MODULE_3D_SETTINGS& modelInfo = m_parentModelList->at( (unsigned) m_selected );
+
+        // Use ChangeValue() instead of SetValue().  It's not the user making the change, so we
+        // don't want to generate wxEVT_GRID_CELL_CHANGED events.
+
+        xscale->ChangeValue( formatScaleValue( modelInfo.m_Scale.x ) );
+        yscale->ChangeValue( formatScaleValue( modelInfo.m_Scale.y ) );
+        zscale->ChangeValue( formatScaleValue( modelInfo.m_Scale.z ) );
+
+        xrot->ChangeValue( formatRotationValue( modelInfo.m_Rotation.x ) );
+        yrot->ChangeValue( formatRotationValue( modelInfo.m_Rotation.y ) );
+        zrot->ChangeValue( formatRotationValue( modelInfo.m_Rotation.z ) );
+
+        xoff->ChangeValue( formatOffsetValue( modelInfo.m_Offset.x ) );
+        yoff->ChangeValue( formatOffsetValue( modelInfo.m_Offset.y ) );
+        zoff->ChangeValue( formatOffsetValue( modelInfo.m_Offset.z ) );
     }
     else
     {
-        wxString newModelFile;
+        m_selected = -1;
 
-        if( m_resolver )
-            newModelFile = m_resolver->ResolvePath( aModelName );
+        xscale->ChangeValue( wxEmptyString );
+        yscale->ChangeValue( wxEmptyString );
+        zscale->ChangeValue( wxEmptyString );
 
-        if( !newModelFile.empty() && newModelFile.Cmp( currentModelFile ) )
-            newModel = true;
+        xrot->ChangeValue( wxEmptyString );
+        yrot->ChangeValue( wxEmptyString );
+        zrot->ChangeValue( wxEmptyString );
 
-        currentModelFile = newModelFile;
+        xoff->ChangeValue( wxEmptyString );
+        yoff->ChangeValue( wxEmptyString );
+        zoff->ChangeValue( wxEmptyString );
     }
-
-    if( currentModelFile.empty() || newModel )
-    {
-        updateListOnModelCopy();
-
-        if( m_previewPane )
-        {
-            m_previewPane->ReloadRequest();
-            m_previewPane->Refresh();
-        }
-
-        if( currentModelFile.empty() )
-            return;
-    }
-    else
-    {
-        if( m_previewPane )
-            m_previewPane->Refresh();
-    }
-
-    if( m_previewPane )
-        m_previewPane->SetFocus();
-
-    return;
 }
 
 
 void PANEL_PREV_3D::updateOrientation( wxCommandEvent &event )
 {
-    wxTextCtrl *textCtrl = (wxTextCtrl *)event.GetEventObject();
-
-    if( textCtrl == NULL )
-        return;
-
-    if( textCtrl->GetLineLength(0) == 0 )   // This will skip the got and event with empty field
-        return;
-
-    if( textCtrl->GetLineLength(0) == 1 )
-        if( (textCtrl->GetLineText(0).compare( "." ) == 0) ||
-            (textCtrl->GetLineText(0).compare( "," ) == 0) )
-            return;
-
-    SGPOINT scale;
-    SGPOINT rotation;
-    SGPOINT offset;
-
-    getOrientationVars( scale, rotation, offset );
-
-    m_modelInfo.m_Scale = scale;
-    m_modelInfo.m_Offset = offset;
-    m_modelInfo.m_Rotation = rotation;
-
-    if( m_currentSelectedIdx >= 0 )
+    if( m_parentModelList && m_selected >= 0 && m_selected < (int) m_parentModelList->size() )
     {
-        // This will update the parent list with the new data
-        (*m_parentInfoList)[m_currentSelectedIdx] = m_modelInfo;
+        // Write settings back to the parent
+        MODULE_3D_SETTINGS* modelInfo = &m_parentModelList->at( (unsigned) m_selected );
 
-        // It will update the copy model in the preview board
-        updateListOnModelCopy();
+        modelInfo->m_Scale.x = DoubleValueFromString( EDA_UNITS::UNSCALED, xscale->GetValue() );
+        modelInfo->m_Scale.y = DoubleValueFromString( EDA_UNITS::UNSCALED, yscale->GetValue() );
+        modelInfo->m_Scale.z = DoubleValueFromString( EDA_UNITS::UNSCALED, zscale->GetValue() );
 
-        // Since the OpenGL render does not need to be reloaded to update the
-        // shapes position, we just request to redraw again the canvas
-        if( m_previewPane )
-            m_previewPane->Refresh();
+        modelInfo->m_Rotation.x = rotationFromString( xrot->GetValue() );
+        modelInfo->m_Rotation.y = rotationFromString( yrot->GetValue() );
+        modelInfo->m_Rotation.z = rotationFromString( zrot->GetValue() );
+
+        modelInfo->m_Offset.x = DoubleValueFromString( m_userUnits, xoff->GetValue() ) / IU_PER_MM;
+        modelInfo->m_Offset.y = DoubleValueFromString( m_userUnits, yoff->GetValue() ) / IU_PER_MM;
+        modelInfo->m_Offset.z = DoubleValueFromString( m_userUnits, zoff->GetValue() ) / IU_PER_MM;
+
+        // Update the dummy module for the preview
+        UpdateDummyModule( false );
     }
 }
 
 
-void PANEL_PREV_3D::onIncrementRot( wxSpinEvent& event )
-{
-    wxSpinButton* spinCtrl = (wxSpinButton*) event.GetEventObject();
-
-    wxTextCtrl * textCtrl = xrot;
-
-    if( spinCtrl == m_spinYrot )
-        textCtrl = yrot;
-    else if( spinCtrl == m_spinZrot )
-        textCtrl = zrot;
-
-    incrementTextCtrl( textCtrl, ROTATION_INCREMENT, -MAX_ROTATION, MAX_ROTATION );
-}
-
-
-void PANEL_PREV_3D::onDecrementRot( wxSpinEvent& event )
-{
-    wxSpinButton* spinCtrl = (wxSpinButton*) event.GetEventObject();
-
-    wxTextCtrl * textCtrl = xrot;
-
-    if( spinCtrl == m_spinYrot )
-        textCtrl = yrot;
-    else if( spinCtrl == m_spinZrot )
-        textCtrl = zrot;
-
-    incrementTextCtrl( textCtrl, -ROTATION_INCREMENT, -MAX_ROTATION, MAX_ROTATION );
-}
-
-
-void PANEL_PREV_3D::onIncrementScale( wxSpinEvent& event )
+void PANEL_PREV_3D::doIncrementScale( wxSpinEvent& event, double aSign )
 {
     wxSpinButton* spinCtrl = (wxSpinButton*) event.GetEventObject();
 
@@ -421,26 +239,37 @@ void PANEL_PREV_3D::onIncrementScale( wxSpinEvent& event )
     else if( spinCtrl == m_spinZscale )
         textCtrl = zscale;
 
-    incrementTextCtrl( textCtrl, SCALE_INCREMENT, 1/MAX_SCALE, MAX_SCALE );
+    double curr_value = DoubleValueFromString( EDA_UNITS::UNSCALED, textCtrl->GetValue() );
+
+    curr_value += ( SCALE_INCREMENT * aSign );
+    curr_value = std::max( 1/MAX_SCALE, curr_value );
+    curr_value = std::min( curr_value, MAX_SCALE );
+
+    textCtrl->SetValue( formatScaleValue( curr_value ) );
 }
 
 
-void PANEL_PREV_3D::onDecrementScale( wxSpinEvent& event )
+void PANEL_PREV_3D::doIncrementRotation( wxSpinEvent& aEvent, double aSign )
 {
-    wxSpinButton* spinCtrl = (wxSpinButton*) event.GetEventObject();
+    wxSpinButton* spinCtrl = (wxSpinButton*) aEvent.GetEventObject();
+    wxTextCtrl* textCtrl = xrot;
 
-    wxTextCtrl * textCtrl = xscale;
+    if( spinCtrl == m_spinYrot )
+        textCtrl = yrot;
+    else if( spinCtrl == m_spinZrot )
+        textCtrl = zrot;
 
-    if( spinCtrl == m_spinYscale )
-        textCtrl = yscale;
-    else if( spinCtrl == m_spinZscale )
-        textCtrl = zscale;
+    double curr_value = DoubleValueFromString( EDA_UNITS::DEGREES, textCtrl->GetValue() ) / 10.0;
 
-    incrementTextCtrl( textCtrl, -SCALE_INCREMENT, 1/MAX_SCALE, MAX_SCALE );
+    curr_value += ( ROTATION_INCREMENT * aSign );
+    curr_value = std::max( -MAX_ROTATION, curr_value );
+    curr_value = std::min( curr_value, MAX_ROTATION );
+
+    textCtrl->SetValue( formatRotationValue( curr_value ) );
 }
 
 
-void PANEL_PREV_3D::onIncrementOffset( wxSpinEvent& event )
+void PANEL_PREV_3D::doIncrementOffset( wxSpinEvent& event, double aSign )
 {
     wxSpinButton* spinCtrl = (wxSpinButton*) event.GetEventObject();
 
@@ -453,30 +282,16 @@ void PANEL_PREV_3D::onIncrementOffset( wxSpinEvent& event )
 
     double step = OFFSET_INCREMENT_MM;
 
-    if( g_UserUnit == INCHES )
+    if( m_userUnits == EDA_UNITS::INCHES )
         step = OFFSET_INCREMENT_MIL/1000.0;
 
-    incrementTextCtrl( textCtrl, step, -MAX_OFFSET, MAX_OFFSET );
-}
+    double curr_value = DoubleValueFromString( m_userUnits, textCtrl->GetValue() ) / IU_PER_MM;
 
+    curr_value += ( step * aSign );
+    curr_value = std::max( -MAX_OFFSET, curr_value );
+    curr_value = std::min( curr_value, MAX_OFFSET );
 
-void PANEL_PREV_3D::onDecrementOffset( wxSpinEvent& event )
-{
-    wxSpinButton* spinCtrl = (wxSpinButton*) event.GetEventObject();
-
-    wxTextCtrl * textCtrl = xoff;
-
-    if( spinCtrl == m_spinYoffset )
-        textCtrl = yoff;
-    else if( spinCtrl == m_spinZoffset )
-        textCtrl = zoff;
-
-    double step = OFFSET_INCREMENT_MM;
-
-    if( g_UserUnit == INCHES )
-        step = OFFSET_INCREMENT_MIL/1000.0;
-
-    incrementTextCtrl( textCtrl, -step, -MAX_OFFSET, MAX_OFFSET );
+    textCtrl->SetValue( formatOffsetValue( curr_value ) );
 }
 
 
@@ -492,15 +307,19 @@ void PANEL_PREV_3D::onMouseWheelScale( wxMouseEvent& event )
     if( event.GetWheelRotation() >= 0 )
         step = -step;
 
-    incrementTextCtrl( textCtrl, step, 1/MAX_SCALE, MAX_SCALE );
+    double curr_value = DoubleValueFromString( EDA_UNITS::UNSCALED, textCtrl->GetValue() );
+
+    curr_value += step;
+    curr_value = std::max( 1/MAX_SCALE, curr_value );
+    curr_value = std::min( curr_value, MAX_SCALE );
+
+    textCtrl->SetValue( formatScaleValue( curr_value ) );
 }
 
 
 void PANEL_PREV_3D::onMouseWheelRot( wxMouseEvent& event )
 {
     wxTextCtrl* textCtrl = (wxTextCtrl*) event.GetEventObject();
-
-    wxKeyboardState kbdState;
 
     double step = ROTATION_INCREMENT_WHEEL;
 
@@ -510,18 +329,26 @@ void PANEL_PREV_3D::onMouseWheelRot( wxMouseEvent& event )
     if( event.GetWheelRotation() >= 0 )
         step = -step;
 
-    incrementTextCtrl( textCtrl, step, -MAX_ROTATION, MAX_ROTATION );
+    double curr_value = DoubleValueFromString( EDA_UNITS::DEGREES, textCtrl->GetValue() ) / 10.0;
+
+    curr_value += step;
+    curr_value = std::max( -MAX_ROTATION, curr_value );
+    curr_value = std::min( curr_value, MAX_ROTATION );
+
+    textCtrl->SetValue( formatRotationValue( curr_value ) );
 }
+
 
 void PANEL_PREV_3D::onMouseWheelOffset( wxMouseEvent& event )
 {
     wxTextCtrl* textCtrl = (wxTextCtrl*) event.GetEventObject();
 
     double step = OFFSET_INCREMENT_MM;
+
     if( event.ShiftDown( ) )
         step = OFFSET_INCREMENT_MM_FINE;
 
-    if( g_UserUnit == INCHES )
+    if( m_userUnits == EDA_UNITS::INCHES )
     {
         step = OFFSET_INCREMENT_MIL/1000.0;
         if( event.ShiftDown( ) )
@@ -531,122 +358,31 @@ void PANEL_PREV_3D::onMouseWheelOffset( wxMouseEvent& event )
     if( event.GetWheelRotation() >= 0 )
         step = -step;
 
-    incrementTextCtrl( textCtrl, step, -MAX_OFFSET, MAX_OFFSET );
-}
+    double curr_value = DoubleValueFromString( m_userUnits, textCtrl->GetValue() ) / IU_PER_MM;
 
-void PANEL_PREV_3D::getOrientationVars( SGPOINT& aScale, SGPOINT& aRotation, SGPOINT& aOffset )
-{
-    if( NULL == xscale || NULL == yscale || NULL == zscale
-        || NULL == xrot || NULL == yrot || NULL == zrot
-        || NULL == xoff || NULL == yoff || NULL == zoff )
-    {
-        return;
-    }
+    curr_value += step;
+    curr_value = std::max( -MAX_OFFSET, curr_value );
+    curr_value = std::min( curr_value, MAX_OFFSET );
 
-    xscale->GetValue().ToDouble( &aScale.x );
-    yscale->GetValue().ToDouble( &aScale.y );
-    zscale->GetValue().ToDouble( &aScale.z );
-
-    xrot->GetValue().ToDouble( &aRotation.x );
-    yrot->GetValue().ToDouble( &aRotation.y );
-    zrot->GetValue().ToDouble( &aRotation.z );
-
-    checkRotation( aRotation.x );
-    checkRotation( aRotation.y );
-    checkRotation( aRotation.z );
-
-    xoff->GetValue().ToDouble( &aOffset.x );
-    yoff->GetValue().ToDouble( &aOffset.y );
-    zoff->GetValue().ToDouble( &aOffset.z );
-
-    switch( g_UserUnit )
-    {
-    case MILLIMETRES:
-        // Convert to Inches. Offset is stored in inches.
-        aOffset.x = aOffset.x / 25.4;
-        aOffset.y = aOffset.y / 25.4;
-        aOffset.z = aOffset.z / 25.4;
-        break;
-
-    case INCHES:
-        // It is already in Inches
-        break;
-
-    case DEGREES:
-    case UNSCALED_UNITS:
-    default:
-        wxASSERT(0);
-    }
-
-    return;
+    textCtrl->SetValue( formatOffsetValue( curr_value ) );
 }
 
 
-bool PANEL_PREV_3D::ValidateWithMessage( wxString& aErrorMessage )
+void PANEL_PREV_3D::UpdateDummyModule( bool aReloadRequired )
 {
-    bool invalidScale = false;
+    m_dummyModule->Models().clear();
 
-    for( unsigned int idx = 0; idx < m_parentInfoList->size(); ++idx )
+    for( size_t i = 0; i < m_parentModelList->size(); ++i )
     {
-        wxString msg;
-        bool addError = false;
-        S3D_INFO& s3dshape = (*m_parentInfoList)[idx];
-
-        SGPOINT scale = s3dshape.m_Scale;
-
-        if( 1/MAX_SCALE > scale.x || MAX_SCALE < scale.x )
+        if( m_parentModelList->at( i ).m_Preview )
         {
-            invalidScale = true;
-            addError = true;
-            msg += _( "Invalid X scale" );
-        }
-
-        if( 1/MAX_SCALE > scale.y || MAX_SCALE < scale.y )
-        {
-            invalidScale = true;
-            addError = true;
-
-            if( !msg.IsEmpty() )
-                msg += "\n";
-
-            msg += _( "Invalid Y scale" );
-        }
-
-        if( 1/MAX_SCALE > scale.z || MAX_SCALE < scale.z )
-        {
-            invalidScale = true;
-            addError = true;
-
-            if( !msg.IsEmpty() )
-                msg += "\n";
-
-            msg += _( "Invalid Z scale" );
-        }
-
-        if( addError )
-        {
-            msg.Prepend( s3dshape.m_Filename + "\n" );
-
-            if( !aErrorMessage.IsEmpty() )
-                aErrorMessage += "\n\n";
-
-            aErrorMessage += msg;
+            m_dummyModule->Models().insert( m_dummyModule->Models().end(),
+                                            m_parentModelList->at( i ) );
         }
     }
 
-    if( !aErrorMessage.IsEmpty() )
-    {
-        aErrorMessage += "\n\n";
-        aErrorMessage += wxString::Format( "Min value = %.4f and max value = %.4f",
-                                           1/MAX_SCALE, MAX_SCALE );
-    }
+    if( aReloadRequired )
+        m_previewPane->ReloadRequest();
 
-    return invalidScale == false;
-}
-
-void PANEL_PREV_3D::updateListOnModelCopy()
-{
-    std::list<S3D_INFO>* draw3D  = &m_copyModule->Models();
-    draw3D->clear();
-    draw3D->insert( draw3D->end(), m_parentInfoList->begin(), m_parentInfoList->end() );
+    m_previewPane->Request_refresh();
 }

@@ -22,23 +22,25 @@
  * 51 Franklin Street, Fifth Floor, Boston, MA  02110-1301, USA
  */
 
-#ifndef __POINT_EDITOR_H
-#define __POINT_EDITOR_H
+#ifndef POINT_EDITOR_H
+#define POINT_EDITOR_H
 
 #include <tool/tool_interactive.h>
-#include "edit_points.h"
+#include "tool/edit_points.h"
+#include <status_popup.h>
 
 #include <memory>
 
 
 class SELECTION_TOOL;
+class SHAPE_POLY_SET;
 
 /**
- * Class POINT_EDITOR
+ * POINT_EDITOR
  *
  * Tool that displays edit points allowing to modify items by dragging the points.
  */
-class POINT_EDITOR : public TOOL_INTERACTIVE
+class POINT_EDITOR : public PCB_TOOL_BASE
 {
 public:
     POINT_EDITOR();
@@ -55,6 +57,12 @@ public:
      * Change selection event handler.
      */
     int OnSelectionChange( const TOOL_EVENT& aEvent );
+
+    /**
+     * Indicates the cursor is over an edit point.  Used to coordinate cursor shapes with
+     * other tools.
+     */
+    bool HasPoint() { return m_editedPoint != nullptr; }
 
     ///> Sets up handlers for various events.
     void setTransitions() override;
@@ -78,11 +86,23 @@ private:
     // EDIT_POINT for alternative constraint mode
     EDIT_POINT m_altConstrainer;
 
+    // Flag indicating whether the selected zone needs to be refilled
+    bool m_refill;
+
+    std::unique_ptr<STATUS_TEXT_POPUP> m_statusPopup;
+
     ///> Updates item's points with edit points.
     void updateItem() const;
 
     ///> Applies the last changes to the edited item.
-    void finishItem() const;
+    void finishItem();
+
+    /**
+     * Validates a polygon and displays a popup warning if invalid.
+     * @param aModified is the polygon to be checked.
+     * @return True if polygon is valid.
+     */
+    bool validatePolygon( SHAPE_POLY_SET& aModified ) const;
 
     ///> Updates edit points with item's points.
     void updatePoints();
@@ -105,14 +125,11 @@ private:
     ///> Returns a point that should be used as a constrainer for 45 degrees mode.
     EDIT_POINT get45DegConstrainer() const;
 
-    ///> Adds a new edit point on a zone outline/line.
-    void addCorner( const VECTOR2I& aPoint );
-
-    ///> Removes a corner.
-    void removeCorner( EDIT_POINT* aPoint );
-
     ///> Condition to display "Create corner" context menu entry.
     static bool addCornerCondition( const SELECTION& aSelection );
+
+    ///> Determine if the tool can currently add a corner to the given item
+    static bool canAddCorner( const EDA_ITEM& aItem );
 
     ///> Condition to display "Remove corner" context menu entry.
     bool removeCornerCondition( const SELECTION& aSelection );

@@ -25,7 +25,7 @@
  */
 
 /**
- * @brief Wizard for selecting and dowloading D shapes libraries of footprints
+ * @brief Wizard for selecting and dowloading 3D shapes libraries of footprints
  * consisting of 3 steps:
  * - select source and destination (Github URL and local folder)
  * - pick and select libraries
@@ -36,14 +36,14 @@
 #include <wx/uri.h>
 #include <wx/dir.h>
 #include <wx/progdlg.h>
-#include <wx/config.h>
 
 #include <pgm_base.h>
 #include <project.h>
 #include <wizard_3DShape_Libs_downloader.h>
 #include <confirm.h>
-#include <3d_viewer.h>
+#include <3d_viewer/eda_3d_viewer.h>
 #include <bitmaps.h>
+#include <settings/common_settings.h>
 
 #include <../github/github_getliblist.h>
 
@@ -52,9 +52,10 @@
 #define KICAD_3DLIBS_LAST_DOWNLOAD_DIR wxT( "kicad_3Dlib_last_download_dir" )
 
 #define DEFAULT_GITHUB_3DSHAPES_LIBS_URL \
-    wxT( "https://github.com/KiCad/kicad-library/tree/master/modules/packages3d" )
+    "https://github.com/KiCad/kicad-packages3d"
+//    wxT( "https://github.com/KiCad/kicad-library/tree/master/modules/packages3d" )
 
-void Invoke3DShapeLibsDownloaderWizard( wxTopLevelWindow* aCaller )
+void Invoke3DShapeLibsDownloaderWizard( wxWindow* aCaller )
 {
     WIZARD_3DSHAPE_LIBS_DOWNLOADER wizard( aCaller );
     wizard.RunWizard( wizard.GetFirstPage() );
@@ -72,14 +73,12 @@ WIZARD_3DSHAPE_LIBS_DOWNLOADER::WIZARD_3DSHAPE_LIBS_DOWNLOADER( wxWindow* aParen
     wxString default_path;
     wxGetEnv( KISYS3DMOD, &default_path );
 
-    wxConfigBase* cfg = Pgm().CommonSettings();
-    wxString tmp;
-    cfg->Read( KICAD_3DLIBS_LAST_DOWNLOAD_DIR, &tmp, default_path );
-    setDownloadDir( tmp );
+    auto cfg = Pgm().GetCommonSettings();
+
+    setDownloadDir( cfg->m_3DLibsDownloadPath.empty() ? default_path : cfg->m_3DLibsDownloadPath );
 
     // Restore the Github 3D shapes libs url
-    wxString githubUrl;
-    cfg->Read( KICAD_3DLIBS_URL_KEY, &githubUrl );
+    wxString githubUrl = cfg->m_3DLibsUrl;
 
     if( githubUrl.IsEmpty() )
         githubUrl = DEFAULT_GITHUB_3DSHAPES_LIBS_URL;
@@ -109,7 +108,7 @@ WIZARD_3DSHAPE_LIBS_DOWNLOADER::WIZARD_3DSHAPE_LIBS_DOWNLOADER( wxWindow* aParen
     // and not fully visible.
     // Forcing deselection does not work, at least on W7 with wxWidgets 3.0.2
     // So (and also because m_textCtrlGithubURL and m_downloadDir are rarely modified
-    // the focus is given to an other widget.
+    // the focus is given to another widget.
     m_hyperlinkGithubKicad->SetFocus();
 
     Connect( wxEVT_RADIOBUTTON, wxCommandEventHandler( WIZARD_3DSHAPE_LIBS_DOWNLOADER::OnSourceCheck ), NULL, this );
@@ -119,13 +118,10 @@ WIZARD_3DSHAPE_LIBS_DOWNLOADER::WIZARD_3DSHAPE_LIBS_DOWNLOADER( wxWindow* aParen
 
 WIZARD_3DSHAPE_LIBS_DOWNLOADER::~WIZARD_3DSHAPE_LIBS_DOWNLOADER()
 {
-    // Use this if you want to store kicad lib URL in pcbnew/cvpcb section config:
-    // wxConfigBase* cfg = Kiface().KifaceSettings();
+    auto cfg = Pgm().GetCommonSettings();
 
-    // Use this if you want to store kicad lib URL in common section config:
-    wxConfigBase* cfg = Pgm().CommonSettings();
-    cfg->Write( KICAD_3DLIBS_URL_KEY, GetGithubURL() );
-    cfg->Write( KICAD_3DLIBS_LAST_DOWNLOAD_DIR, getDownloadDir() );
+    cfg->m_3DLibsUrl          = GetGithubURL().ToStdString();
+    cfg->m_3DLibsDownloadPath = getDownloadDir().ToStdString();
 }
 
 
@@ -286,7 +282,7 @@ void WIZARD_3DSHAPE_LIBS_DOWNLOADER::OnWizardFinished( wxWizardEvent& aEvent )
 
     if( !downloadGithubLibsFromList( m_libraries, &error ) )
     {
-        DisplayError( GetParent(), error );
+        DisplayError( this, error );
     }
 }
 
@@ -347,7 +343,7 @@ void WIZARD_3DSHAPE_LIBS_DOWNLOADER::getLibsListGithub( wxArrayString& aList )
 }
 
 
-// Download the .pretty libraries folders found in aUrlList and store them on disk
+// Download the .3Dshapes libraries folders found in aUrlList and store them on disk
 // in a master folder
 bool WIZARD_3DSHAPE_LIBS_DOWNLOADER::downloadGithubLibsFromList( wxArrayString& aUrlList,
                                                      wxString* aErrorMessage )
@@ -355,16 +351,20 @@ bool WIZARD_3DSHAPE_LIBS_DOWNLOADER::downloadGithubLibsFromList( wxArrayString& 
     // Display a progress bar to show the download state
     // The title is updated for each downloaded library.
     // the state will be updated by downloadOneLib() for each file.
+    // for OSX do not enable wPD_APP_MODAL, keep wxPD_AUTO_HIDE
     wxProgressDialog pdlg( _( "Downloading 3D libraries" ), wxEmptyString,
-                           aUrlList.GetCount(), GetParent(),
-                           wxPD_CAN_ABORT | wxPD_APP_MODAL | wxPD_AUTO_HIDE );
+                           aUrlList.GetCount(), this,
+#ifndef __WXMAC__
+                           wxPD_APP_MODAL |
+#endif
+                           wxPD_CAN_ABORT | wxPD_AUTO_HIDE );
 
     // Built the full server name string:
     wxURI repo( GetGithubURL() );
     wxString server = repo.GetScheme() + "://" + repo.GetServer();
 
     // Download libs:
-    for( unsigned ii = 0; ii < aUrlList.GetCount(); ii++ )
+    for( size_t ii = 0; ii < aUrlList.GetCount(); ii++ )
     {
         wxString& libsrc_name = aUrlList[ii];
 
@@ -387,7 +387,7 @@ bool WIZARD_3DSHAPE_LIBS_DOWNLOADER::downloadGithubLibsFromList( wxArrayString& 
         wxString libdst_name = fn.GetFullPath();
 
         // Display the name of the library to download in the wxProgressDialog
-        pdlg.SetTitle( wxString::Format( wxT("%s [%d/%d]" ),
+        pdlg.SetTitle( wxString::Format( wxT("%s [%lu/%lu]" ),
                        libsrc_name.AfterLast( '/' ).GetData(),
                        ii + 1, aUrlList.GetCount() ) );
 
@@ -403,7 +403,7 @@ bool WIZARD_3DSHAPE_LIBS_DOWNLOADER::downloadGithubLibsFromList( wxArrayString& 
 
 
 bool WIZARD_3DSHAPE_LIBS_DOWNLOADER::downloadOneLib( const wxString& aLibURL,
-                const wxString& aLocalLibName, wxProgressDialog * aIndicator,
+                const wxString& aLocalLibName, wxProgressDialog* aIndicator,
                 wxString* aErrorMessage )
 {
     wxArrayString fileslist;
@@ -507,10 +507,27 @@ void WIZARD_3DSHAPE_LIBS_DOWNLOADER::setupGithubList()
     m_checkList3Dlibnames->GetCheckedItems( checkedIndices );
     enableNext( checkedIndices.GetCount() > 0 );
 
-    // Update only if necessary
-    if( m_githubLibs.GetCount() == 0 )
+    // Update only if the text has changed or the list is empty
+    if( m_githubLibs.GetCount() == 0 || m_textCtrlGithubURL->IsModified() )
+    {
+        m_githubLibs.Clear();
         getLibsListGithub( m_githubLibs );
 
+        // Populate the list
+        m_checkList3Dlibnames->Clear();
+        for( unsigned int i = 0; i < m_githubLibs.GetCount(); ++i )
+        {
+            const wxString& lib = m_githubLibs[i].AfterLast( '/' );
+            m_checkList3Dlibnames->Append( lib );
+        }
+
+        m_textCtrlGithubURL->SetModified( 0 );
+    }
+
+    if( !m_checkList3Dlibnames->IsEmpty() )
+        m_checkList3Dlibnames->EnsureVisible( 0 );
+
+    // Clear the search box
     m_searchCtrl3Dlibs->Clear();
 
     // Clear the review list so it will be reloaded

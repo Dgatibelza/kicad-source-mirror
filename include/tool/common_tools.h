@@ -30,7 +30,7 @@
 class EDA_DRAW_FRAME;
 
 /**
- * Class COMMON_TOOLS
+ * COMMON_TOOLS
  *
  * Handles actions that are shared between different applications
  */
@@ -38,36 +38,63 @@ class EDA_DRAW_FRAME;
 class COMMON_TOOLS : public TOOL_INTERACTIVE
 {
 public:
-    COMMON_TOOLS();
-    ~COMMON_TOOLS();
+    COMMON_TOOLS() :
+        TOOL_INTERACTIVE( "common.Control" ),
+        m_frame( nullptr )
+    { }
+
+    ~COMMON_TOOLS() override { }
 
     /// @copydoc TOOL_BASE::Reset()
     void Reset( RESET_REASON aReason ) override;
 
+    int SelectionTool( const TOOL_EVENT& aEvent );
+
     // View controls
+    int ZoomRedraw( const TOOL_EVENT& aEvent );
     int ZoomInOut( const TOOL_EVENT& aEvent );
     int ZoomInOutCenter( const TOOL_EVENT& aEvent );
     int ZoomCenter( const TOOL_EVENT& aEvent );
     int ZoomFitScreen( const TOOL_EVENT& aEvent );
     int ZoomPreset( const TOOL_EVENT& aEvent );
 
+    int CenterContents( const TOOL_EVENT& aEvent );
+
+    int PanControl( const TOOL_EVENT& aEvent );
+
     // Cursor control
+    int CursorControl( const TOOL_EVENT& aEvent );
     int ToggleCursor( const TOOL_EVENT& aEvent );
+    int ToggleCursorStyle( const TOOL_EVENT& aEvent );
+
+    // Units control
+    int ImperialUnits( const TOOL_EVENT& aEvent );
+    int MetricUnits( const TOOL_EVENT& aEvent );
+    int ToggleUnits( const TOOL_EVENT& aEvent );
+    int TogglePolarCoords( const TOOL_EVENT& aEvent );
+    int ResetLocalCoords( const TOOL_EVENT& aEvent );
 
     // Grid control
     int GridNext( const TOOL_EVENT& aEvent );
     int GridPrev( const TOOL_EVENT& aEvent );
     int GridPreset( const TOOL_EVENT& aEvent );
+    int ToggleGrid( const TOOL_EVENT& aEvent );
+    int GridProperties( const TOOL_EVENT& aEvent );
+    int GridPreset( int idx );
 
+    int SwitchCanvas( const TOOL_EVENT& aEvent );
+
+private:
     ///> Sets up handlers for various events.
     void setTransitions() override;
 
-private:
     ///> Pointer to the currently used edit frame.
     EDA_DRAW_FRAME* m_frame;
 
-    ///> Applies the legacy canvas grid settings for GAL.
-    void updateGrid();
+    int doZoomInOut( bool aDirection, bool aCenterOnCursor );
+
+    ///> Note: idx == 0 is Auto; idx == 1 is first entry in zoomList
+    int doZoomToPreset( int idx, bool aCenterOnCursor );
 };
 
 #endif

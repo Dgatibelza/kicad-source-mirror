@@ -29,35 +29,39 @@
 #ifndef CACHE_3D_H
 #define CACHE_3D_H
 
+#include "3d_info.h"
+#include <core/typeinfo.h>
+#include "kicad_string.h"
 #include <list>
 #include <map>
-#include <wx/string.h>
-#include "str_rsort.h"
-#include "3d_filename_resolver.h"
-#include "3d_info.h"
 #include "plugins/3dapi/c3dmodel.h"
-
+#include <project.h>
+#include <wx/string.h>
 
 class  PGM_BASE;
-class  S3D_CACHE;
 class  S3D_CACHE_ENTRY;
 class  SCENEGRAPH;
-class  S3D_FILENAME_RESOLVER;
+class  FILENAME_RESOLVER;
 class  S3D_PLUGIN_MANAGER;
-struct S3D_INFO;
 
 
-class S3D_CACHE
+/**
+ * S3D_CACHE
+ *
+ * Cache for storing the 3D shapes. This cache is able to be stored as a project
+ * element (since it inherits from PROJECT::_ELEM).
+ */
+class S3D_CACHE : public PROJECT::_ELEM
 {
 private:
     /// cache entries
     std::list< S3D_CACHE_ENTRY* > m_CacheList;
 
     /// mapping of file names to cache names and data
-    std::map< wxString, S3D_CACHE_ENTRY*, S3D::rsort_wxString > m_CacheMap;
+    std::map< wxString, S3D_CACHE_ENTRY*, rsort_wxString > m_CacheMap;
 
     /// object to resolve file names
-    S3D_FILENAME_RESOLVER* m_FNResolver;
+    FILENAME_RESOLVER* m_FNResolver;
 
     /// plugin manager
     S3D_PLUGIN_MANAGER* m_Plugins;
@@ -110,6 +114,11 @@ private:
 public:
     S3D_CACHE();
     virtual ~S3D_CACHE();
+
+    KICAD_T Type() override
+    {
+        return S3D_CACHE_T;
+    }
 
     /**
      * Function Set3DConfigDir
@@ -168,7 +177,7 @@ public:
      */
     SCENEGRAPH* Load( const wxString& aModelFile );
 
-    S3D_FILENAME_RESOLVER* GetResolver( void );
+    FILENAME_RESOLVER* GetResolver( void );
 
     /**
      * Function GetFileFilters

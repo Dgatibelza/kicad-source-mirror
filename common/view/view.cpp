@@ -31,6 +31,8 @@
 #include <view/view_group.h>
 #include <view/view_item.h>
 #include <view/view_rtree.h>
+#include <view/view_overlay.h>
+
 #include <gal/definitions.h>
 #include <gal/graphics_abstraction_layer.h>
 #include <painter.h>
@@ -78,13 +80,10 @@ private:
     {
         int* layersPtr = aLayers;
 
-        for( unsigned int i = 0; i < m_layers.size(); ++i )
-        {
-            if( m_layers[i] )
-                *layersPtr++ = i;
-        }
+        for( auto layer : m_layers )
+            *layersPtr++ = layer;
 
-        aCount = m_layers.count();
+        aCount = m_layers.size();
     }
 
     VIEW*   m_view;             ///< Current dynamic view the item is assigned to.
@@ -192,8 +191,33 @@ private:
         return m_groupsSize > 0;
     }
 
+
+    /**
+     * Reorders the stored groups (to facilitate reordering of layers)
+     * @see VIEW::ReorderLayerData
+     *
+     * @param aReorderMap is the mapping of old to new layer ids
+     */
+    void reorderGroups( std::unordered_map<int, int> aReorderMap )
+    {
+        for( int i = 0; i < m_groupsSize; ++i )
+        {
+            int orig_layer = m_groups[i].first;
+            int new_layer = orig_layer;
+
+            try
+            {
+                new_layer = aReorderMap.at( orig_layer );
+            }
+            catch( const std::out_of_range& ) {}
+
+            m_groups[i].first = new_layer;
+        }
+    }
+
+
     /// Stores layer numbers used by the item.
-    std::bitset<VIEW::VIEW_MAX_LAYERS> m_layers;
+    std::vector<int> m_layers;
 
     /**
      * Function saveLayers()
@@ -204,14 +228,14 @@ private:
      */
     void saveLayers( int* aLayers, int aCount )
     {
-        m_layers.reset();
+        m_layers.clear();
 
         for( int i = 0; i < aCount; ++i )
         {
             // this fires on some eagle board after EAGLE_PLUGIN::Load()
             wxASSERT( unsigned( aLayers[i] ) <= unsigned( VIEW::VIEW_MAX_LAYERS ) );
 
-            m_layers.set( aLayers[i] );
+            m_layers.push_back( aLayers[i] );
         }
     }
 
@@ -252,16 +276,17 @@ void VIEW::OnDestroy( VIEW_ITEM* aItem )
         return;
 
     if( data->m_view )
-        data->m_view->Remove( aItem );
+        data->m_view->VIEW::Remove( aItem );
 
     delete data;
+    aItem->ClearViewPrivData();
 }
 
 
 VIEW::VIEW( bool aIsDynamic ) :
     m_enableOrderModifier( true ),
     m_scale( 4.0 ),
-    m_minScale( 4.0 ), m_maxScale( 15000 ),
+    m_minScale( 0.2 ), m_maxScale( 25000.0 ),
     m_mirrorX( false ), m_mirrorY( false ),
     m_painter( NULL ),
     m_gal( NULL ),
@@ -270,8 +295,19 @@ VIEW::VIEW( bool aIsDynamic ) :
     m_nextDrawPriority( 0 ),
     m_reverseDrawOrder( false )
 {
-    m_boundary.SetMaximum();
-    m_allItems.reserve( 32768 );
+    // Set m_boundary to define the max area size. The default area size
+    // is defined here as the max value of a int.
+    // this is a default value acceptable for Pcbnew and Gerbview, but too large for Eeschema.
+    // So in eeschema a call to SetBoundary() with a smaller value will be needed.
+    typedef std::numeric_limits<int> coord_limits;
+    double pos = coord_limits::lowest() / 2 + coord_limits::epsilon();
+    double size = coord_limits::max() - coord_limits::epsilon();
+    m_boundary.SetOrigin( pos, pos );
+    m_boundary.SetSize( size, size );
+    SetPrintMode( 0 );
+
+    m_allItems.reset( new std::vector<VIEW_ITEM*> );
+    m_allItems->reserve( 32768 );
 
     // Redraw everything at the beginning
     MarkDirty();
@@ -282,13 +318,13 @@ VIEW::VIEW( bool aIsDynamic ) :
     // silkscreen, pads, vias, etc.
     for( int i = 0; i < VIEW_MAX_LAYERS; i++ )
         AddLayer( i );
+
+    sortLayers();
 }
 
 
 VIEW::~VIEW()
 {
-    for( LAYER_MAP::value_type& l : m_layers )
-        delete l.second.items;
 }
 
 
@@ -297,15 +333,13 @@ void VIEW::AddLayer( int aLayer, bool aDisplayOnly )
     if( m_layers.find( aLayer ) == m_layers.end() )
     {
         m_layers[aLayer]                = VIEW_LAYER();
+        m_layers[aLayer].items.reset( new VIEW_RTREE() );
         m_layers[aLayer].id             = aLayer;
-        m_layers[aLayer].items          = new VIEW_RTREE();
         m_layers[aLayer].renderingOrder = aLayer;
         m_layers[aLayer].visible        = true;
         m_layers[aLayer].displayOnly    = aDisplayOnly;
         m_layers[aLayer].target         = TARGET_CACHED;
     }
-
-    sortLayers();
 }
 
 
@@ -325,7 +359,7 @@ void VIEW::Add( VIEW_ITEM* aItem, int aDrawPriority )
     aItem->ViewGetLayers( layers, layers_count );
     aItem->viewPrivData()->saveLayers( layers, layers_count );
 
-    m_allItems.push_back( aItem );
+    m_allItems->push_back( aItem );
 
     for( int i = 0; i < layers_count; ++i )
     {
@@ -349,12 +383,12 @@ void VIEW::Remove( VIEW_ITEM* aItem )
     if( !viewData )
         return;
 
-    wxASSERT( viewData->m_view == this );
-    auto item = std::find( m_allItems.begin(), m_allItems.end(), aItem );
+    wxCHECK( viewData->m_view == this, /*void*/ );
+    auto item = std::find( m_allItems->begin(), m_allItems->end(), aItem );
 
-    if( item != m_allItems.end() )
+    if( item != m_allItems->end() )
     {
-        m_allItems.erase( item );
+        m_allItems->erase( item );
         viewData->clearUpdateFlags();
     }
 
@@ -381,8 +415,8 @@ void VIEW::Remove( VIEW_ITEM* aItem )
 
 void VIEW::SetRequired( int aLayerId, int aRequiredId, bool aRequired )
 {
-    wxASSERT( (unsigned) aLayerId < m_layers.size() );
-    wxASSERT( (unsigned) aRequiredId < m_layers.size() );
+    wxCHECK( (unsigned) aLayerId < m_layers.size(), /*void*/ );
+    wxCHECK( (unsigned) aRequiredId < m_layers.size(), /*void*/ );
 
     if( aRequired )
         m_layers[aLayerId].requiredLayers.insert( aRequiredId );
@@ -427,7 +461,7 @@ int VIEW::Query( const BOX2I& aRect, std::vector<LAYER_ITEM_PAIR>& aResult ) con
     for( i = m_orderedLayers.rbegin(); i != m_orderedLayers.rend(); ++i )
     {
         // ignore layers that do not contain actual items (i.e. the selection box, menus, floats)
-        if( ( *i )->displayOnly )
+        if( ( *i )->displayOnly || !( *i )->visible )
             continue;
 
         queryVisitor<std::vector<LAYER_ITEM_PAIR> > visitor( aResult, ( *i )->id );
@@ -453,7 +487,7 @@ double VIEW::ToWorld( double aSize ) const
 {
     const MATRIX3x3D& matrix = m_gal->GetScreenWorldMatrix();
 
-    return matrix.GetScale().x * aSize;
+    return fabs( matrix.GetScale().x * aSize );
 }
 
 
@@ -484,10 +518,12 @@ void VIEW::CopySettings( const VIEW* aOtherView )
 
 void VIEW::SetGAL( GAL* aGal )
 {
+    bool recacheGroups = ( m_gal != nullptr );    // recache groups only if GAL is reassigned
     m_gal = aGal;
 
     // clear group numbers, so everything is going to be recached
-    clearGroupCache();
+    if( recacheGroups )
+        clearGroupCache();
 
     // every target has to be refreshed
     MarkDirty();
@@ -515,7 +551,7 @@ void VIEW::SetViewport( const BOX2D& aViewport )
 {
     VECTOR2D ssize = ToWorld( m_gal->GetScreenPixelSize(), false );
 
-    wxASSERT( ssize.x > 0 && ssize.y > 0 );
+    wxCHECK( ssize.x > 0 && ssize.y > 0, /*void*/ );
 
     VECTOR2D centre = aViewport.Centre();
     VECTOR2D vsize  = aViewport.GetSize();
@@ -539,8 +575,11 @@ void VIEW::SetMirror( bool aMirrorX, bool aMirrorY )
 }
 
 
-void VIEW::SetScale( double aScale, const VECTOR2D& aAnchor )
+void VIEW::SetScale( double aScale, VECTOR2D aAnchor )
 {
+    if( aAnchor == VECTOR2D( 0, 0 ) )
+        aAnchor = m_center;
+
     VECTOR2D a = ToScreen( aAnchor );
 
     if( aScale < m_minScale )
@@ -587,6 +626,41 @@ void VIEW::SetCenter( const VECTOR2D& aCenter )
 }
 
 
+void VIEW::SetCenter( VECTOR2D aCenter, const BOX2D& occultingScreenRect )
+{
+    BOX2D screenRect( VECTOR2D( 0, 0 ), m_gal->GetScreenPixelSize() );
+
+    if( !screenRect.Intersects( occultingScreenRect ) )
+    {
+        SetCenter( aCenter );
+        return;
+    }
+
+    BOX2D  occultedRect  = screenRect.Intersect( occultingScreenRect );
+    double topExposed    = occultedRect.GetTop() - screenRect.GetTop();
+    double bottomExposed = screenRect.GetBottom() - occultedRect.GetBottom();
+    double leftExposed   = occultedRect.GetLeft() - screenRect.GetLeft();
+    double rightExposed  = screenRect.GetRight() - occultedRect.GetRight();
+
+    if( std::max( topExposed, bottomExposed ) > std::max( leftExposed, rightExposed ) )
+    {
+        if( topExposed > bottomExposed )
+            aCenter.y += ToWorld( screenRect.GetHeight() / 2 - topExposed / 2 );
+        else
+            aCenter.y -= ToWorld( screenRect.GetHeight() / 2 - bottomExposed / 2 );
+    }
+    else
+    {
+        if( leftExposed > rightExposed )
+            aCenter.x += ToWorld( screenRect.GetWidth() / 2 - leftExposed / 2 );
+        else
+            aCenter.x -= ToWorld( screenRect.GetWidth() / 2 - rightExposed / 2 );
+    }
+
+    SetCenter( aCenter );
+}
+
+
 void VIEW::SetLayerOrder( int aLayer, int aRenderingOrder )
 {
     m_layers[aLayer].renderingOrder = aRenderingOrder;
@@ -629,6 +703,52 @@ void VIEW::SortLayers( int aLayers[], int& aCount ) const
 }
 
 
+void VIEW::ReorderLayerData( std::unordered_map<int, int> aReorderMap )
+{
+    LAYER_MAP new_map;
+
+    for( const auto& it : m_layers )
+    {
+        int orig_idx = it.first;
+        VIEW_LAYER layer = it.second;
+        int new_idx;
+
+        try
+        {
+            new_idx = aReorderMap.at( orig_idx );
+        }
+        catch( const std::out_of_range& )
+        {
+            new_idx = orig_idx;
+        }
+
+        layer.id = new_idx;
+        new_map[new_idx] = layer;
+    }
+
+    m_layers = new_map;
+
+    for( VIEW_ITEM* item : *m_allItems )
+    {
+        auto viewData = item->viewPrivData();
+
+        if( !viewData )
+            continue;
+
+        int layers[VIEW::VIEW_MAX_LAYERS], layers_count;
+
+        item->ViewGetLayers( layers, layers_count );
+        viewData->saveLayers( layers, layers_count );
+
+        viewData->reorderGroups( aReorderMap );
+
+        viewData->m_requiredUpdate |= COLOR;
+    }
+
+    UpdateItems();
+}
+
+
 struct VIEW::updateItemsColor
 {
     updateItemsColor( int aLayer, PAINTER* aPainter, GAL* aGal ) :
@@ -664,34 +784,44 @@ void VIEW::UpdateLayerColor( int aLayer )
 
     r.SetMaximum();
 
-    m_gal->BeginUpdate();
-    updateItemsColor visitor( aLayer, m_painter, m_gal );
-    m_layers[aLayer].items->Query( r, visitor );
-    MarkTargetDirty( m_layers[aLayer].target );
-    m_gal->EndUpdate();
+    if( m_gal->IsVisible() )
+    {
+        GAL_UPDATE_CONTEXT ctx( m_gal );
+
+        updateItemsColor visitor( aLayer, m_painter, m_gal );
+        m_layers[aLayer].items->Query( r, visitor );
+        MarkTargetDirty( m_layers[aLayer].target );
+    }
 }
 
 
 void VIEW::UpdateAllLayersColor()
 {
-    BOX2I r;
-
-    r.SetMaximum();
-    m_gal->BeginUpdate();
-
-    for( LAYER_MAP_ITER i = m_layers.begin(); i != m_layers.end(); ++i )
+    if( m_gal->IsVisible() )
     {
-        VIEW_LAYER* l = &( ( *i ).second );
+        GAL_UPDATE_CONTEXT ctx( m_gal );
 
-        // There is no point in updating non-cached layers
-        if( !IsCached( l->id ) )
-            continue;
+        for( VIEW_ITEM* item : *m_allItems )
+        {
+            auto viewData = item->viewPrivData();
 
-        updateItemsColor visitor( l->id, m_painter, m_gal );
-        l->items->Query( r, visitor );
+            if( !viewData )
+                continue;
+
+            int layers[VIEW::VIEW_MAX_LAYERS], layers_count;
+            viewData->getLayers( layers, layers_count );
+
+            for( int i = 0; i < layers_count; ++i )
+            {
+                const COLOR4D color = m_painter->GetSettings()->GetColor( item, layers[i] );
+                int group = viewData->getGroup( layers[i] );
+
+                if( group >= 0 )
+                    m_gal->ChangeGroupColor( group, color );
+            }
+        }
     }
 
-    m_gal->EndUpdate();
     MarkDirty();
 }
 
@@ -796,20 +926,32 @@ void VIEW::ClearTopLayers()
 
 void VIEW::UpdateAllLayersOrder()
 {
-    BOX2I r;
-    r.SetMaximum();
-
     sortLayers();
-    m_gal->BeginUpdate();
 
-    for( LAYER_MAP::value_type& l : m_layers )
+    if( m_gal->IsVisible() )
     {
-        int layer = l.first;
-        changeItemsDepth visitor( layer, l.second.renderingOrder, m_gal );
-        m_layers[layer].items->Query( r, visitor );
+        GAL_UPDATE_CONTEXT ctx( m_gal );
+
+        for( VIEW_ITEM* item : *m_allItems )
+        {
+            auto viewData = item->viewPrivData();
+
+            if( !viewData )
+                continue;
+
+            int layers[VIEW::VIEW_MAX_LAYERS], layers_count;
+            viewData->getLayers( layers, layers_count );
+
+            for( int i = 0; i < layers_count; ++i )
+            {
+                int group = viewData->getGroup( layers[i] );
+
+                if( group >= 0 )
+                    m_gal->ChangeGroupDepth( group, m_layers[layers[i]].renderingOrder );
+            }
+        }
     }
 
-    m_gal->EndUpdate();
     MarkDirty();
 }
 
@@ -825,7 +967,7 @@ struct VIEW::drawItem
 
     bool operator()( VIEW_ITEM* aItem )
     {
-        wxASSERT( aItem->viewPrivData() );
+        wxCHECK( aItem->viewPrivData(), false );
 
         // Conditions that have to be fulfilled for an item to be drawn
         bool drawCondition = aItem->viewPrivData()->isRenderable() &&
@@ -970,7 +1112,7 @@ void VIEW::Clear()
 {
     BOX2I r;
     r.SetMaximum();
-    m_allItems.clear();
+    m_allItems->clear();
 
     for( LAYER_MAP_ITER i = m_layers.begin(); i != m_layers.end(); ++i )
         i->second.items->RemoveAll();
@@ -1007,12 +1149,19 @@ void VIEW::Redraw()
 #endif /* __WXDEBUG__ */
 
     VECTOR2D screenSize = m_gal->GetScreenPixelSize();
-    BOX2I    rect( ToWorld( VECTOR2D( 0, 0 ) ),
+    BOX2D    rect( ToWorld( VECTOR2D( 0, 0 ) ),
                    ToWorld( screenSize ) - ToWorld( VECTOR2D( 0, 0 ) ) );
+
     rect.Normalize();
+    BOX2I recti( rect.GetPosition(), rect.GetSize() );
 
-    redrawRect( rect );
+    // The view rtree uses integer positions.  Large screens can overflow
+    // this size so in this case, simply set the rectangle to the full rtree
+    if( rect.GetWidth() > std::numeric_limits<int>::max() ||
+            rect.GetHeight() > std::numeric_limits<int>::max() )
+        recti.SetMaximum();
 
+    redrawRect( recti );
     // All targets were redrawn, so nothing is dirty
     markTargetClean( TARGET_CACHED );
     markTargetClean( TARGET_NONCACHED );
@@ -1020,7 +1169,7 @@ void VIEW::Redraw()
 
 #ifdef __WXDEBUG__
     totalRealTime.Stop();
-    wxLogTrace( "GAL_PROFILE", wxT( "VIEW::Redraw(): %.1f ms" ), totalRealTime.msecs() );
+    wxLogTrace( "GAL_PROFILE", "VIEW::Redraw(): %.1f ms", totalRealTime.msecs() );
 #endif /* __WXDEBUG__ */
 }
 
@@ -1095,7 +1244,7 @@ void VIEW::invalidateItem( VIEW_ITEM* aItem, int aUpdateFlags )
 
         if( IsCached( layerId ) )
         {
-            if( aUpdateFlags & ( GEOMETRY | LAYERS ) )
+            if( aUpdateFlags & ( GEOMETRY | LAYERS | REPAINT ) )
                 updateItemGeometry( aItem, layerId );
             else if( aUpdateFlags & COLOR )
                 updateItemColor( aItem, layerId );
@@ -1127,8 +1276,8 @@ void VIEW::sortLayers()
 void VIEW::updateItemColor( VIEW_ITEM* aItem, int aLayer )
 {
     auto viewData = aItem->viewPrivData();
-    wxASSERT( (unsigned) aLayer < m_layers.size() );
-    wxASSERT( IsCached( aLayer ) );
+    wxCHECK( (unsigned) aLayer < m_layers.size(), /*void*/ );
+    wxCHECK( IsCached( aLayer ), /*void*/ );
 
     if( !viewData )
         return;
@@ -1146,8 +1295,8 @@ void VIEW::updateItemColor( VIEW_ITEM* aItem, int aLayer )
 void VIEW::updateItemGeometry( VIEW_ITEM* aItem, int aLayer )
 {
     auto viewData = aItem->viewPrivData();
-    wxASSERT( (unsigned) aLayer < m_layers.size() );
-    wxASSERT( IsCached( aLayer ) );
+    wxCHECK( (unsigned) aLayer < m_layers.size(), /*void*/ );
+    wxCHECK( IsCached( aLayer ), /*void*/ );
 
     if( !viewData )
         return;
@@ -1234,7 +1383,7 @@ void VIEW::updateLayers( VIEW_ITEM* aItem )
 
 bool VIEW::areRequiredLayersEnabled( int aLayerId ) const
 {
-    wxASSERT( (unsigned) aLayerId < m_layers.size() );
+    wxCHECK( (unsigned) aLayerId < m_layers.size(), false );
 
     std::set<int>::const_iterator it, it_end;
 
@@ -1271,60 +1420,66 @@ void VIEW::RecacheAllItems()
 
 void VIEW::UpdateItems()
 {
-    m_gal->BeginUpdate();
+    if( m_gal->IsVisible() )
+    {
+        GAL_UPDATE_CONTEXT ctx( m_gal );
 
-    for( VIEW_ITEM* item : m_allItems )
+        for( VIEW_ITEM* item : *m_allItems )
+        {
+            auto viewData = item->viewPrivData();
+
+            if( !viewData )
+                continue;
+
+            if( viewData->m_requiredUpdate != NONE )
+            {
+                invalidateItem( item, viewData->m_requiredUpdate );
+                viewData->m_requiredUpdate = NONE;
+            }
+        }
+    }
+}
+
+
+void VIEW::UpdateAllItems( int aUpdateFlags )
+{
+    for( VIEW_ITEM* item : *m_allItems )
     {
         auto viewData = item->viewPrivData();
 
         if( !viewData )
             continue;
 
-        if( viewData->m_requiredUpdate != NONE )
-        {
-            invalidateItem( item, viewData->m_requiredUpdate );
-            viewData->m_requiredUpdate = NONE;
-        }
+        viewData->m_requiredUpdate |= aUpdateFlags;
     }
-
-    m_gal->EndUpdate();
 }
 
 
-struct VIEW::extentsVisitor
+void VIEW::UpdateAllItemsConditionally( int aUpdateFlags,
+                                        std::function<bool( VIEW_ITEM* )> aCondition )
 {
-    BOX2I extents;
-    bool first;
-
-    extentsVisitor()
+    for( VIEW_ITEM* item : *m_allItems )
     {
-        first = true;
+        if( aCondition( item ) )
+        {
+            auto viewData = item->viewPrivData();
+
+            if( !viewData )
+                continue;
+
+            viewData->m_requiredUpdate |= aUpdateFlags;
+        }
     }
-
-    bool operator()( VIEW_ITEM* aItem )
-    {
-        if( first )
-            extents = aItem->ViewBBox();
-        else
-            extents.Merge( aItem->ViewBBox() );
-
-        return false;
-    }
-};
+}
 
 
-const BOX2I VIEW::CalculateExtents()
+std::unique_ptr<VIEW> VIEW::DataReference() const
 {
-    extentsVisitor v;
-    BOX2I fullScene;
-    fullScene.SetMaximum();
-
-    for( VIEW_LAYER* l : m_orderedLayers )
-    {
-        l->items->Query( fullScene, v );
-    }
-
-    return v.extents;
+    auto ret = std::make_unique<VIEW>();
+    ret->m_allItems = m_allItems;
+    ret->m_layers = m_layers;
+    ret->sortLayers();
+    return ret;
 }
 
 
@@ -1372,7 +1527,7 @@ bool VIEW::IsVisible( const VIEW_ITEM* aItem ) const
 {
     const auto viewData = aItem->viewPrivData();
 
-    return viewData->m_flags & VISIBLE;
+    return viewData && ( viewData->m_flags & VISIBLE );
 }
 
 
@@ -1395,6 +1550,16 @@ void VIEW::Update( VIEW_ITEM* aItem, int aUpdateFlags )
 
 }
 
+
+std::shared_ptr<VIEW_OVERLAY> VIEW::MakeOverlay()
+{
+    std::shared_ptr<VIEW_OVERLAY> overlay( new VIEW_OVERLAY );
+
+    Add( overlay.get() );
+    return overlay;
+}
+
+
 const int VIEW::TOP_LAYER_MODIFIER = -VIEW_MAX_LAYERS;
 
-};
+}

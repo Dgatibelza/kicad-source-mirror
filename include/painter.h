@@ -31,12 +31,12 @@
 #include <set>
 
 #include <gal/color4d.h>
-#include <worksheet_shape_builder.h>
+#include <ws_draw_item.h>
 #include <layers_id_colors_and_visibility.h>
 #include <memory>
 
 class EDA_ITEM;
-class COLORS_DESIGN_SETTINGS;
+class COLOR_SETTINGS;
 
 namespace KIGFX
 {
@@ -44,7 +44,7 @@ class GAL;
 class VIEW_ITEM;
 
 /**
- * Class RENDER_SETTINGS
+ * RENDER_SETTINGS
  * Contains all the knowledge about how graphical objects are drawn on
  * any output surface/device. This includes:
  * - color/transparency settings
@@ -59,12 +59,7 @@ public:
     RENDER_SETTINGS();
     virtual ~RENDER_SETTINGS();
 
-    /**
-     * Function ImportLegacyColors
-     * Loads a list of color settings for layers.
-     * @param aSettings is a list of color settings.
-     */
-    virtual void ImportLegacyColors( const COLORS_DESIGN_SETTINGS* aSettings ) = 0;
+    virtual void LoadColors( const COLOR_SETTINGS* aSettings ) { }
 
     /**
      * Function SetActiveLayer
@@ -132,15 +127,17 @@ public:
 
     /**
      * Function SetHighlight
-     * Turns on/off highlighting - it may be done for the active layer or the specified net.
+     * Turns on/off highlighting - it may be done for the active layer, the specified net, or
+     * items with their HIGHLIGHTED flags set.
      * @param aEnabled tells if highlighting should be enabled.
      * @param aNetcode is optional and if specified, turns on higlighting only for the net with
      * number given as the parameter.
      */
-    inline void SetHighlight( bool aEnabled, int aNetcode = -1 )
+    inline void SetHighlight( bool aEnabled, int aNetcode = -1, bool aHighlightItems = false )
     {
         m_highlightEnabled = aEnabled;
         m_highlightNetcode = aEnabled ? aNetcode : -1;
+        m_highlightItems = aEnabled ? aHighlightItems : false;
     }
 
     /**
@@ -178,25 +175,38 @@ public:
         return m_worksheetLineWidth;
     }
 
-    /**
-     * Function GetBackgroundColor
-     * Returns current background color settings.
-     * @return Background color.
-     */
-    inline const COLOR4D& GetBackgroundColor() const
+    inline bool GetShowPageLimits() const
     {
-        return m_backgroundColor;
+        return m_showPageLimits;
+    }
+
+    inline void SetShowPageLimits( bool aDraw )
+    {
+        m_showPageLimits = aDraw;
     }
 
     /**
-     * Function SetBackgroundColor
-     * Sets new color for background.
-     * @param aColor is the new background color.
+     * Function GetBackgroundColor
+     * Returns current background color settings.
      */
-    inline void SetBackgroundColor( const COLOR4D& aColor )
-    {
-        m_backgroundColor = aColor;
-    }
+    virtual const COLOR4D& GetBackgroundColor() = 0;
+
+    /**
+     * Sets the background color.
+     */
+    virtual void SetBackgroundColor( const COLOR4D& aColor ) = 0;
+
+    /**
+     * Function GetGridColor
+     * Returns current grid color settings.
+     */
+    virtual const COLOR4D& GetGridColor() = 0;
+
+    /**
+     * Function GetCursorColor
+     * Returns current cursor color settings.
+     */
+    virtual const COLOR4D& GetCursorColor() = 0;
 
     /**
      * Function GetLayerColor
@@ -221,6 +231,21 @@ public:
         update();       // recompute other shades of the color
     }
 
+    virtual bool IsBackgroundDark() const
+    {
+        return false;
+    }
+
+    /**
+     * Set line width used for drawing outlines.
+     *
+     * @param aWidth is the new width.
+     */
+    void SetOutlineWidth( float aWidth )
+    {
+        m_outlineWidth = aWidth;
+    }
+
 protected:
     /**
      * Function update
@@ -243,28 +268,33 @@ protected:
     ///> Colors for all layers (darkened)
     COLOR4D m_layerColorsDark[LAYER_ID_COUNT];
 
+    ///< Colora used for high contrast display mode
+    COLOR4D m_hiContrastColor[LAYER_ID_COUNT];
+
     /// Parameters for display modes
     bool    m_hiContrastEnabled;    ///< High contrast display mode on/off
-    COLOR4D m_hiContrastColor;      ///< Color used for high contrast display mode
     float   m_hiContrastFactor;     ///< Factor used for computing high contrast color
 
     bool    m_highlightEnabled;     ///< Highlight display mode on/off
     int     m_highlightNetcode;     ///< Net number that is displayed in highlight
                                     ///< -1 means that there is no specific net, and whole active
                                     ///< layer is highlighted
-    float   m_highlightFactor;      ///< Factor used for computing hightlight color
+    bool    m_highlightItems;       ///< Highlight items with their HIGHLIGHT flags set
+    float   m_highlightFactor;      ///< Factor used for computing highlight color
 
     float   m_selectFactor;         ///< Specifies how color of selected items is changed
     float   m_layerOpacity;         ///< Determines opacity of all layers
     float   m_outlineWidth;         ///< Line width used when drawing outlines
     float   m_worksheetLineWidth;   ///< Line width used when drawing worksheet
 
+    bool    m_showPageLimits;
+
     COLOR4D m_backgroundColor;      ///< The background color
 };
 
 
 /**
- * Class PAINTER
+ * PAINTER
  * contains all the knowledge about how to draw graphical object onto
  * any particular output device.
  * This knowledge is held outside the individual graphical objects so that
@@ -278,7 +308,7 @@ protected:
 class PAINTER
 {
 public:
-    /*
+    /**
      * Constructor PAINTER( GAL* )
      * initializes this object for painting on any of the polymorphic
      * GRAPHICS_ABSTRACTION_LAYER* derivatives.

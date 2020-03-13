@@ -27,7 +27,10 @@
 
 #include <richio.h>
 #include <map>
+#include <functional>
+#include <wx/time.h>
 
+#include <config.h>
 
 class BOARD;
 class PLUGIN;
@@ -36,7 +39,7 @@ class PROPERTIES;
 
 
 /**
- * Class IO_MGR
+ * IO_MGR
  * is a factory which returns an instance of a PLUGIN.
  */
 class IO_MGR
@@ -55,8 +58,11 @@ public:
         EAGLE,
         PCAD,
         GEDA_PCB,       ///< Geda PCB file formats.
-        GITHUB,         ///< Read only http://github.com repo holding pretty footprints
 
+        //N.B. This needs to be commented out to ensure compile-type errors
+#if defined(BUILD_GITHUB_PLUGIN)
+        GITHUB,         ///< Read only http://github.com repo holding pretty footprints
+#endif
         // add your type here.
 
         // ALTIUM,
@@ -64,6 +70,78 @@ public:
 
         FILE_TYPE_NONE
     };
+
+    /**
+     * PLUGIN_REGISTRY
+     * Holds a list of available plugins, created using a singleton REGISTER_PLUGIN object.
+     * This way, plugins can be added link-time.
+     */
+    class PLUGIN_REGISTRY
+    {
+        public:
+            struct ENTRY
+            {
+                PCB_FILE_T m_type;
+                std::function<PLUGIN*(void)> m_createFunc;
+                wxString m_name;
+            };
+
+            static PLUGIN_REGISTRY *Instance()
+            {
+                static PLUGIN_REGISTRY *self = nullptr;
+
+                if( !self )
+                {
+                    self = new PLUGIN_REGISTRY;
+                }
+                return self;
+            }
+
+            void Register( PCB_FILE_T aType, const wxString& aName, std::function<PLUGIN*(void)> aCreateFunc )
+            {
+                ENTRY ent;
+                ent.m_type = aType;
+                ent.m_createFunc = aCreateFunc;
+                ent.m_name = aName;
+                m_plugins.push_back( ent );
+            }
+
+            PLUGIN* Create( PCB_FILE_T aFileType ) const
+            {
+                for( auto& ent : m_plugins )
+                {
+                    if ( ent.m_type == aFileType )
+                    {
+                        return ent.m_createFunc();
+                    }
+                }
+                return nullptr;
+            }
+
+            const std::vector<ENTRY>& AllPlugins() const
+            {
+                return m_plugins;
+            }
+
+        private:
+            std::vector<ENTRY> m_plugins;
+    };
+
+    /**
+     * REGISTER_PLUGIN
+     * Registers a plugin. Declare as a static variable in an anonymous namespace.
+     * @param aType: type of the plugin
+     * @param aName: name of the file format
+     * @param aCreateFunc: function that creates a new object for the plugin.
+     */
+    struct REGISTER_PLUGIN
+    {
+         REGISTER_PLUGIN( PCB_FILE_T aType, const wxString& aName, std::function<PLUGIN*(void)> aCreateFunc )
+         {
+             PLUGIN_REGISTRY::Instance()->Register( aType, aName, aCreateFunc );
+         }
+    };
+
 
     /**
      * Function PluginFind
@@ -169,7 +247,7 @@ public:
 
 
 /**
- * Class PLUGIN
+ * PLUGIN
  * is a base class that BOARD loading and saving plugins should derive from.
  * Implementations can provide either Load() or Save() functions, or both.
  * PLUGINs throw exceptions, so it is best that you wrap your calls to these
@@ -275,10 +353,19 @@ public:
      *
      * @param aFootprintNames is the array of available footprint names inside a library.
      *
+     * @param aBestEfforts if true, don't throw on errors, just return an empty list.
+     *
      * @throw IO_ERROR if the library cannot be found, or footprint cannot be loaded.
      */
     virtual void FootprintEnumerate( wxArrayString& aFootprintNames, const wxString& aLibraryPath,
-                                     const PROPERTIES* aProperties = NULL );
+                                     bool aBestEfforts, const PROPERTIES* aProperties = NULL );
+
+    /**
+     * Generate a timestamp representing all the files in the library (including the library
+     * directory).
+     * Timestamps should not be considered ordered; they either match or they don't.
+     */
+    virtual long long GetLibraryTimestamp( const wxString& aLibraryPath ) const = 0;
 
     /**
      * Function PrefetchLib
@@ -325,6 +412,22 @@ public:
      */
     virtual MODULE* FootprintLoad( const wxString& aLibraryPath, const wxString& aFootprintName,
             const PROPERTIES* aProperties = NULL );
+
+    /**
+     * Function GetEnumeratedFootprint
+     * a version of FootprintLoad() for use after FootprintEnumerate() for more efficient
+     * cache management.
+     */
+    virtual const MODULE* GetEnumeratedFootprint( const wxString& aLibraryPath,
+                                                  const wxString& aFootprintName,
+                                                  const PROPERTIES* aProperties = NULL );
+
+    /**
+     * Function FootprintExists
+     * check for the existence of a footprint.
+     */
+    virtual bool FootprintExists( const wxString& aLibraryPath, const wxString& aFootprintName,
+                                  const PROPERTIES* aProperties = NULL );
 
     /**
      * Function FootprintSave
@@ -467,7 +570,7 @@ public:
 
 #ifndef SWIG
     /**
-     * Class RELEASER
+     * RELEASER
      * releases a PLUGIN in the context of a potential thrown exception, through
      * its destructor.
      */

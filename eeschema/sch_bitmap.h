@@ -2,7 +2,7 @@
  * This program source code file is part of KiCad, a free EDA CAD application.
  *
  * Copyright (C) 2011 jean-pierre.charras
- * Copyright (C) 2011 KiCad Developers, see change_log.txt for contributors.
+ * Copyright (C) 2011-2019 KiCad Developers, see change_log.txt for contributors.
  *
  * This program is free software; you can redistribute it and/or
  * modify it under the terms of the GNU General Public License
@@ -31,9 +31,13 @@
 #define _SCH_BITMAP_H_
 
 
-#include <sch_item_struct.h>
-#include <class_bitmap_base.h>
+#include <sch_item.h>
+#include <bitmap_base.h>
 
+
+/**
+ * Object to handle a bitmap image that can be inserted in a schematic.
+ */
 
 class SCH_BITMAP : public SCH_ITEM
 {
@@ -52,45 +56,40 @@ public:
 
     SCH_ITEM& operator=( const SCH_ITEM& aItem );
 
-    /*
-     * Accessors:
-     */
-    double GetPixelScaleFactor() const { return m_image->GetPixelScaleFactor(); }
-    void SetPixelScaleFactor( double aSF ) { m_image->SetPixelScaleFactor( aSF ); }
-
     BITMAP_BASE* GetImage()
     {
-        wxCHECK_MSG( m_image != NULL, NULL, "Invalid SCH_BITMAP initialization, m_image is NULL." );
-
+        wxCHECK_MSG( m_image != NULL, NULL, "Invalid SCH_BITMAP init, m_image is NULL." );
         return m_image;
     }
 
     /**
-     * Function GetScalingFactor
-     * @return the scaling factor from pixel size to actual draw size
-     * this scaling factor  depend on m_pixelScaleFactor and m_Scale
-     * m_pixelScaleFactor gives the scaling factor between a pixel size and
-     * the internal schematic units
-     * m_Scale is an user dependant value, and gives the "zoom" value
-     *  m_Scale = 1.0 = original size of bitmap.
-     *  m_Scale < 1.0 = the bitmap is drawn smaller than its original size.
-     *  m_Scale > 1.0 = the bitmap is drawn bigger than its original size.
+     * @return the image "zoom" value
+     *  scale = 1.0 = original size of bitmap.
+     *  scale < 1.0 = the bitmap is drawn smaller than its original size.
+     *  scale > 1.0 = the bitmap is drawn bigger than its original size.
      */
-    double GetScalingFactor() const
+    double GetImageScale() const
     {
-        return m_image->GetScalingFactor();
+        return m_image->GetScale();
     }
 
+    void SetImageScale( double aScale )
+    {
+        m_image->SetScale( aScale );
+    }
+
+    static inline bool ClassOf( const EDA_ITEM* aItem )
+    {
+        return aItem && SCH_BITMAP_T == aItem->Type();
+    }
 
     wxString GetClass() const override
     {
         return wxT( "SCH_BITMAP" );
     }
 
-
     /**
-     * Function GetSize
-     * @returns the actual size (in user units, not in pixels) of the image
+     * @return the actual size (in user units, not in pixels) of the image
      */
     wxSize GetSize() const;
 
@@ -98,47 +97,51 @@ public:
 
     void SwapData( SCH_ITEM* aItem ) override;
 
-    void Draw( EDA_DRAW_PANEL* aPanel, wxDC* aDC, const wxPoint& aOffset,
-               GR_DRAWMODE aDrawMode, COLOR4D aColor = COLOR4D::UNSPECIFIED ) override;
+    void Print( wxDC* aDC, const wxPoint& aOffset ) override;
 
-    /**
-     * Function ReadImageFile
+    /// @copydoc VIEW_ITEM::ViewGetLayers()
+    virtual void ViewGetLayers( int aLayers[], int& aCount ) const override;
+
+   /**
      * Reads and stores an image file. Init the bitmap used to draw this item
      * format.
+     *
      * @param aFullFilename The full filename of the image file to read.
      * @return bool - true if success reading else false.
      */
     bool ReadImageFile( const wxString& aFullFilename );
-
-    bool Save( FILE* aFile ) const override;
-
-    bool Load( LINE_READER& aLine, wxString& aErrorMsg ) override;
 
     void Move( const wxPoint& aMoveVector ) override
     {
         m_pos += aMoveVector;
     }
 
+    /**
+     * Virtual function IsMovableFromAnchorPoint
+     * Return true for items which are moved with the anchor point at mouse cursor
+     *  and false for items moved with no reference to anchor
+     * @return false for a bus entry
+     */
+    bool IsMovableFromAnchorPoint() override { return false; }
 
     void MirrorY( int aYaxis_position ) override;
-
     void MirrorX( int aXaxis_position ) override;
-
     void Rotate( wxPoint aPosition ) override;
 
-    bool IsSelectStateChanged( const wxRect& aRect ) override;
-
-    wxString GetSelectMenuText() const override { return wxString( _( "Image" ) ); }
+    wxString GetSelectMenuText( EDA_UNITS aUnits ) const override
+    {
+        return wxString( _( "Image" ) );
+    }
 
     BITMAP_DEF GetMenuImage() const override;
 
-    wxPoint GetPosition() const override { return m_pos; }
+    void GetMsgPanelInfo( EDA_UNITS aUnits, std::vector<MSG_PANEL_ITEM>& aList ) override;
 
+    wxPoint GetPosition() const override { return m_pos; }
     void SetPosition( const wxPoint& aPosition ) override { m_pos = aPosition; }
 
-    bool HitTest( const wxPoint& aPosition, int aAccuracy ) const override;
-
-    bool HitTest( const EDA_RECT& aRect, bool aContained = false, int aAccuracy = 0 ) const override;
+    bool HitTest( const wxPoint& aPosition, int aAccuracy = 0 ) const override;
+    bool HitTest( const EDA_RECT& aRect, bool aContained, int aAccuracy = 0 ) const override;
 
     void Plot( PLOTTER* aPlotter ) override;
 

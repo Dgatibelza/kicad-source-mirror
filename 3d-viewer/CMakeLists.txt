@@ -7,7 +7,6 @@ include_directories(BEFORE ${INC_BEFORE})
 include_directories(
     ${CMAKE_CURRENT_BINARY_DIR}
     ../pcbnew
-    ../polygon
     3d_canvas
     3d_cache
     3d_rendering
@@ -30,23 +29,15 @@ set( DIR_3D_PLUGINS ${CMAKE_SOURCE_DIR}/plugins/ldr )
 set(3D-VIEWER_SRCS
     ${DIR_3D_PLUGINS}/pluginldr.cpp
     ${DIR_3D_PLUGINS}/3d/pluginldr3D.cpp
-    3d_cache/3d_cache_wrapper.cpp
     3d_cache/3d_cache.cpp
     3d_cache/3d_plugin_manager.cpp
-    3d_cache/3d_filename_resolver.cpp
     ${DIR_DLG}/3d_cache_dialogs.cpp
-    ${DIR_DLG}/dlg_3d_pathconfig_base.cpp
-    ${DIR_DLG}/dlg_3d_pathconfig.cpp
     ${DIR_DLG}/dlg_select_3dmodel.cpp
     ${DIR_DLG}/panel_prev_3d_base.cpp
     ${DIR_DLG}/panel_prev_model.cpp
-    ../polygon/poly2tri/common/shapes.cc
-    ../polygon/poly2tri/sweep/advancing_front.cc
-    ../polygon/poly2tri/sweep/cdt.cc
-    ../polygon/poly2tri/sweep/sweep.cc
-    ../polygon/poly2tri/sweep/sweep_context.cc
     3d_canvas/cinfo3d_visu.cpp
     3d_canvas/create_layer_items.cpp
+    3d_canvas/create_3Dgraphic_brd_items.cpp
     3d_canvas/create_layer_poly.cpp
     3d_canvas/eda_3d_canvas.cpp
     3d_canvas/eda_3d_canvas_pivot.cpp
@@ -78,7 +69,6 @@ set(3D-VIEWER_SRCS
     ${DIR_RAY_2D}/cring2d.cpp
     ${DIR_RAY_2D}/croundsegment2d.cpp
     ${DIR_RAY_2D}/ctriangle2d.cpp
-    ${DIR_RAY_2D}/edgeshrink.cpp
     ${DIR_RAY_3D}/cbbox.cpp
     ${DIR_RAY_3D}/cbbox_ray.cpp
     ${DIR_RAY_3D}/ccylinder.cpp
@@ -96,12 +86,15 @@ set(3D-VIEWER_SRCS
     3d_rendering/cpostshader.cpp
     3d_rendering/cpostshader_ssao.cpp
     3d_rendering/ctrack_ball.cpp
+    3d_viewer/3d_actions.cpp
+    3d_viewer/3d_menubar.cpp
     3d_rendering/test_cases.cpp
     3d_rendering/trackball.cpp
     3d_viewer/3d_toolbar.cpp
     3d_viewer/dialogs/dialog_3D_view_option.cpp
     3d_viewer/dialogs/dialog_3D_view_option_base.cpp
     3d_viewer/eda_3d_viewer.cpp
+    3d_viewer/3d_viewer_settings.cpp
     common_ogl/cogl_att_list.cpp
     common_ogl/ogl_utils.cpp
     3d_fastmath.cpp
@@ -113,9 +106,14 @@ add_dependencies( 3d-viewer pcbcommon )
 
 target_link_libraries( 3d-viewer
                        gal
+                       kimath
                        ${Boost_}
                        ${wxWidgets_LIBRARIES}
                        ${OPENGL_LIBRARIES}
                        kicad_3dsg )
+
+target_include_directories( 3d-viewer PRIVATE
+    $<TARGET_PROPERTY:nlohmann_json,INTERFACE_INCLUDE_DIRECTORIES>
+    )
 
 add_subdirectory( 3d_cache )

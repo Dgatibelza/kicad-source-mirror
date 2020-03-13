@@ -4,8 +4,8 @@
 /*
  * This program source code file is part of KiCad, a free EDA CAD application.
  *
- * Copyright (C) 1992-2010 Jean-Pierre Charras <jean-pierre.charras@gipsa-lab.inpg.fr
- * Copyright (C) 1992-2016 KiCad Developers, see change_log.txt for contributors.
+ * Copyright (C) 1992-2010 Jean-Pierre Charras jp.charras at wanadoo.fr
+ * Copyright (C) 1992-2017 KiCad Developers, see AUTHORS.txt for contributors.
  *
  * This program is free software; you can redistribute it and/or
  * modify it under the terms of the GNU General Public License
@@ -26,12 +26,14 @@
  */
 
 #include <fctsys.h>
-#include <plot_common.h>
-#include <class_sch_screen.h>
-#include <schframe.h>
+#include <plotter.h>
+#include <sch_edit_frame.h>
 #include <base_units.h>
 #include <sch_sheet_path.h>
+#include <pgm_base.h>
 #include <project.h>
+#include <general.h>
+#include <settings/settings_manager.h>
 
 #include <reporter.h>
 
@@ -57,10 +59,14 @@ void DIALOG_PLOT_SCHEMATIC::createPDFFile( bool aPlotAll, bool aPlotFrameRef )
     else
         sheetList.push_back( m_parent->GetCurrentSheet() );
 
+    auto colors = static_cast<COLOR_SETTINGS*>(
+            m_colorTheme->GetClientData( m_colorTheme->GetSelection() ) );
+
     // Allocate the plotter and set the job level parameter
     PDF_PLOTTER* plotter = new PDF_PLOTTER();
     plotter->SetDefaultLineWidth( GetDefaultLineThickness() );
     plotter->SetColorMode( getModeColor() );
+    plotter->SetColorSettings( colors );
     plotter->SetCreator( wxT( "Eeschema-PDF" ) );
     plotter->SetTitle( m_parent->GetTitleBlock().GetTitle() );
 
@@ -83,14 +89,12 @@ void DIALOG_PLOT_SCHEMATIC::createPDFFile( bool aPlotAll, bool aPlotFrameRef )
             {
                 wxString fname = m_parent->GetUniqueFilenameForCurrentSheet();
                 wxString ext = PDF_PLOTTER::GetDefaultFileExtension();
-                plotFileName = createPlotFileName( m_outputDirectoryName,
-                                                   fname, ext, &reporter );
+                plotFileName = createPlotFileName( m_outputDirectoryName, fname, ext, &reporter );
 
                 if( !plotter->OpenFile( plotFileName.GetFullPath() ) )
                 {
-                    msg.Printf( _( "Unable to create file '%s'.\n" ),
-                                GetChars( plotFileName.GetFullPath() ) );
-                    reporter.Report( msg, REPORTER::RPT_ERROR );
+                    msg.Printf( _( "Unable to create file \"%s\".\n" ), plotFileName.GetFullPath() );
+                    reporter.Report( msg, RPT_SEVERITY_ERROR );
                     delete plotter;
                     return;
                 }
@@ -102,8 +106,8 @@ void DIALOG_PLOT_SCHEMATIC::createPDFFile( bool aPlotAll, bool aPlotFrameRef )
             catch( const IO_ERROR& e )
             {
                 // Cannot plot PDF file
-                msg.Printf( wxT( "PDF Plotter exception: %s" ), GetChars( e.What() ) );
-                reporter.Report( msg, REPORTER::RPT_ERROR );
+                msg.Printf( wxT( "PDF Plotter exception: %s" ), e.What() );
+                reporter.Report( msg, RPT_SEVERITY_ERROR );
 
                 restoreEnvironment( plotter, oldsheetpath );
                 return;
@@ -123,8 +127,8 @@ void DIALOG_PLOT_SCHEMATIC::createPDFFile( bool aPlotAll, bool aPlotFrameRef )
     }
 
     // Everything done, close the plot and restore the environment
-    msg.Printf( _( "Plot: '%s' OK.\n" ), GetChars( plotFileName.GetFullPath() ) );
-    reporter.Report( msg, REPORTER::RPT_ACTION );
+    msg.Printf( _( "Plot: \"%s\" OK.\n" ), plotFileName.GetFullPath() );
+    reporter.Report( msg, RPT_SEVERITY_ACTION );
 
     restoreEnvironment( plotter, oldsheetpath );
 }
@@ -147,14 +151,26 @@ void DIALOG_PLOT_SCHEMATIC::plotOneSheetPDF( PLOTTER* aPlotter,
                                              SCH_SCREEN* aScreen,
                                              bool aPlotFrameRef )
 {
+    if( m_plotBackgroundColor->GetValue() )
+    {
+        aPlotter->SetColor( aPlotter->ColorSettings()->GetColor( LAYER_SCHEMATIC_BACKGROUND ) );
+        wxPoint end( aPlotter->PageSettings().GetWidthIU(),
+                     aPlotter->PageSettings().GetHeightIU() );
+        aPlotter->Rect( wxPoint( 0, 0 ), end, FILLED_SHAPE, 1.0 );
+    }
+
     if( aPlotFrameRef )
     {
-        aPlotter->SetColor( BLACK );
+        COLOR4D color = aPlotter->GetColorMode() ?
+                                aPlotter->ColorSettings()->GetColor( LAYER_SCHEMATIC_WORKSHEET ) :
+                                COLOR4D::BLACK;
+
         PlotWorkSheet( aPlotter, m_parent->GetTitleBlock(),
                        m_parent->GetPageSettings(),
                        aScreen->m_ScreenNumber, aScreen->m_NumberOfScreens,
                        m_parent->GetScreenDesc(),
-                       aScreen->GetFileName() );
+                       aScreen->GetFileName(),
+                       color );
     }
 
     aScreen->Plot( aPlotter );
@@ -165,7 +181,7 @@ void DIALOG_PLOT_SCHEMATIC::setupPlotPagePDF( PLOTTER * aPlotter, SCH_SCREEN* aS
 {
     PAGE_INFO   plotPage;                               // page size selected to plot
     // Considerations on page size and scaling requests
-    PAGE_INFO   actualPage = aScreen->GetPageSettings(); // page size selected in schematic
+    const PAGE_INFO& actualPage = aScreen->GetPageSettings(); // page size selected in schematic
 
     switch( m_pageSizeSelect )
     {

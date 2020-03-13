@@ -25,7 +25,7 @@
 #include <algorithm>
 
 /**
- * Class LAYER_RANGE
+ * LAYER_RANGE
  *
  * Represents a contiguous set of PCB layers.
  */
@@ -58,7 +58,7 @@ public:
 
     ~LAYER_RANGE() {};
 
-    const LAYER_RANGE& operator=( const LAYER_RANGE& aB )
+    LAYER_RANGE& operator=( const LAYER_RANGE& aB )
     {
         m_start = aB.m_start;
         m_end = aB.m_end;

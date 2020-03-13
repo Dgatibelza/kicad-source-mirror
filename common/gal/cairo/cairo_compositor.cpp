@@ -2,6 +2,7 @@
  * This program source code file is part of KiCad, a free EDA CAD application.
  *
  * Copyright (C) 2013 CERN
+ * Copyright (C) 2019 KiCad Developers, see AUTHORS.txt for contributors.
  * @author Maciej Suminski <maciej.suminski@cern.ch>
  *
  * This program is free software; you can redistribute it and/or
@@ -34,7 +35,8 @@
 using namespace KIGFX;
 
 CAIRO_COMPOSITOR::CAIRO_COMPOSITOR( cairo_t** aMainContext ) :
-    m_current( 0 ), m_currentContext( aMainContext ), m_mainContext( *aMainContext )
+    m_current( 0 ), m_currentContext( aMainContext ), m_mainContext( *aMainContext ),
+    m_currentAntialiasingMode( CAIRO_ANTIALIAS_DEFAULT )
 {
     // Do not have uninitialized members:
     cairo_matrix_init_identity( &m_matrix );
@@ -55,12 +57,31 @@ void CAIRO_COMPOSITOR::Initialize()
 }
 
 
+void CAIRO_COMPOSITOR::SetAntialiasingMode( CAIRO_ANTIALIASING_MODE aMode )
+{
+
+    switch( aMode )
+    {
+    case CAIRO_ANTIALIASING_MODE::FAST:
+        m_currentAntialiasingMode = CAIRO_ANTIALIAS_FAST;
+        break;
+    case CAIRO_ANTIALIASING_MODE::GOOD:
+        m_currentAntialiasingMode = CAIRO_ANTIALIAS_GOOD;
+        break;
+    case CAIRO_ANTIALIASING_MODE::BEST:
+        m_currentAntialiasingMode = CAIRO_ANTIALIAS_BEST;
+        break;
+    default:
+        m_currentAntialiasingMode = CAIRO_ANTIALIAS_NONE;
+    }
+
+    clean();
+}
+
+
 void CAIRO_COMPOSITOR::Resize( unsigned int aWidth, unsigned int aHeight )
 {
     clean();
-
-    assert( aWidth > 0 );
-    assert( aHeight > 0 );
 
     m_width  = aWidth;
     m_height = aHeight;
@@ -73,25 +94,21 @@ void CAIRO_COMPOSITOR::Resize( unsigned int aWidth, unsigned int aHeight )
 unsigned int CAIRO_COMPOSITOR::CreateBuffer()
 {
     // Pixel storage
-    BitmapPtr bitmap( new unsigned int[m_bufferSize] );
-
-    memset( bitmap.get(), 0x00, m_bufferSize * sizeof(int) );
+    BitmapPtr bitmap = new uint32_t[m_bufferSize]();
 
     // Create the Cairo surface
     cairo_surface_t* surface = cairo_image_surface_create_for_data(
-                                                        (unsigned char*) bitmap.get(),
+                                                        (unsigned char*) bitmap,
                                                         CAIRO_FORMAT_ARGB32, m_width,
                                                         m_height, m_stride );
     cairo_t* context = cairo_create( surface );
-#ifdef __WXDEBUG__
+#ifdef DEBUG
     cairo_status_t status = cairo_status( context );
     wxASSERT_MSG( status == CAIRO_STATUS_SUCCESS, wxT( "Cairo context creation error" ) );
-#endif /* __WXDEBUG__ */
+#endif /* DEBUG */
 
     // Set default settings for the buffer
-    cairo_set_antialias( context, CAIRO_ANTIALIAS_NONE );
-    cairo_set_line_join( context, CAIRO_LINE_JOIN_ROUND );
-    cairo_set_line_cap( context, CAIRO_LINE_CAP_ROUND );
+    cairo_set_antialias( context, m_currentAntialiasingMode );
 
     // Use the same transformation matrix as the main context
     cairo_get_matrix( m_mainContext, &m_matrix );
@@ -126,7 +143,7 @@ void CAIRO_COMPOSITOR::Begin()
 void CAIRO_COMPOSITOR::ClearBuffer( const COLOR4D& aColor )
 {
     // Clear the pixel storage
-    memset( m_buffers[m_current].bitmap.get(), 0x00, m_bufferSize * sizeof(int) );
+    memset( m_buffers[m_current].bitmap, 0x00, m_bufferSize * sizeof(int) );
 }
 
 
@@ -159,6 +176,7 @@ void CAIRO_COMPOSITOR::clean()
     {
         cairo_destroy( it->context );
         cairo_surface_destroy( it->surface );
+        delete[] it->bitmap;
     }
 
     m_buffers.clear();

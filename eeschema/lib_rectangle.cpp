@@ -1,8 +1,8 @@
 /*
  * This program source code file is part of KiCad, a free EDA CAD application.
  *
- * Copyright (C) 2012 Jean-Pierre Charras, jp.charras at wanadoo.fr
- * Copyright (C) 2004-2012 KiCad Developers, see change_log.txt for contributors.
+ * Copyright (C) 2017 Jean-Pierre Charras, jp.charras at wanadoo.fr
+ * Copyright (C) 2004-2020 KiCad Developers, see AUTHORS.txt for contributors.
  *
  * This program is free software; you can redistribute it and/or
  * modify it under the terms of the GNU General Public License
@@ -22,24 +22,19 @@
  * 51 Franklin Street, Fifth Floor, Boston, MA  02110-1301, USA
  */
 
-/**
- * @file lib_rectangle.cpp
- */
-
 #include <fctsys.h>
 #include <gr_basic.h>
 #include <macros.h>
-#include <class_drawpanel.h>
-#include <plot_common.h>
+#include <sch_draw_panel.h>
+#include <plotter.h>
 #include <trigo.h>
-#include <wxstruct.h>
-#include <richio.h>
 #include <base_units.h>
 #include <msgpanel.h>
 #include <bitmaps.h>
 
 #include <general.h>
 #include <lib_rectangle.h>
+#include <settings/color_settings.h>
 #include <transform.h>
 
 
@@ -49,44 +44,6 @@ LIB_RECTANGLE::LIB_RECTANGLE( LIB_PART*      aParent ) :
     m_Width                = 0;
     m_Fill                 = NO_FILL;
     m_isFillable           = true;
-    m_typeName             = _( "Rectangle" );
-    m_isHeightLocked       = false;
-    m_isWidthLocked        = false;
-    m_isStartPointSelected = false;
-}
-
-
-bool LIB_RECTANGLE::Save( OUTPUTFORMATTER& aFormatter )
-{
-    aFormatter.Print( 0, "S %d %d %d %d %d %d %d %c\n", m_Pos.x, m_Pos.y,
-                      m_End.x, m_End.y, m_Unit, m_Convert, m_Width, fill_tab[m_Fill] );
-
-    return true;
-}
-
-
-bool LIB_RECTANGLE::Load( LINE_READER& aLineReader, wxString& aErrorMsg )
-{
-    int  cnt;
-    char tmp[256] = "";
-    char* line = (char*)aLineReader;
-
-    cnt = sscanf( line + 2, "%d %d %d %d %d %d %d %255s", &m_Pos.x, &m_Pos.y,
-                  &m_End.x, &m_End.y, &m_Unit, &m_Convert, &m_Width, tmp );
-
-    if( cnt < 7 )
-    {
-        aErrorMsg.Printf( _( "Rectangle only had %d parameters of the required 7" ), cnt );
-        return false;
-    }
-
-    if( tmp[0] == 'F' )
-        m_Fill = FILLED_SHAPE;
-
-    if( tmp[0] == 'f' )
-        m_Fill = FILLED_WITH_BG_BODYCOLOR;
-
-    return true;
 }
 
 
@@ -96,9 +53,14 @@ EDA_ITEM* LIB_RECTANGLE::Clone() const
 }
 
 
-int LIB_RECTANGLE::compare( const LIB_ITEM& aOther ) const
+int LIB_RECTANGLE::compare( const LIB_ITEM& aOther, LIB_ITEM::COMPARE_FLAGS aCompareFlags ) const
 {
     wxASSERT( aOther.Type() == LIB_RECTANGLE_T );
+
+    int retv = LIB_ITEM::compare( aOther );
+
+    if( retv )
+        return retv;
 
     const LIB_RECTANGLE* tmp = ( LIB_RECTANGLE* ) &aOther;
 
@@ -118,7 +80,7 @@ int LIB_RECTANGLE::compare( const LIB_ITEM& aOther ) const
 }
 
 
-void LIB_RECTANGLE::SetOffset( const wxPoint& aOffset )
+void LIB_RECTANGLE::Offset( const wxPoint& aOffset )
 {
     m_Pos += aOffset;
     m_End += aOffset;
@@ -131,7 +93,7 @@ bool LIB_RECTANGLE::Inside( EDA_RECT& aRect ) const
 }
 
 
-void LIB_RECTANGLE::Move( const wxPoint& aPosition )
+void LIB_RECTANGLE::MoveTo( const wxPoint& aPosition )
 {
     wxPoint size = m_End - m_Pos;
     m_Pos = aPosition;
@@ -179,80 +141,58 @@ void LIB_RECTANGLE::Plot( PLOTTER* aPlotter, const wxPoint& aOffset, bool aFill,
 
     if( aFill && m_Fill == FILLED_WITH_BG_BODYCOLOR )
     {
-        aPlotter->SetColor( GetLayerColor( LAYER_DEVICE_BACKGROUND ) );
+        aPlotter->SetColor( aPlotter->ColorSettings()->GetColor( LAYER_DEVICE_BACKGROUND ) );
         aPlotter->Rect( pos, end, FILLED_WITH_BG_BODYCOLOR, 0 );
     }
 
     bool already_filled = m_Fill == FILLED_WITH_BG_BODYCOLOR;
-    aPlotter->SetColor( GetLayerColor( LAYER_DEVICE ) );
-    aPlotter->Rect( pos, end, already_filled ? NO_FILL : m_Fill, GetPenSize() );
+    auto pen_size = GetPenSize();
+
+    if( !already_filled || pen_size > 0 )
+    {
+        pen_size = std::max( 0, pen_size );
+        aPlotter->SetColor( aPlotter->ColorSettings()->GetColor( LAYER_DEVICE ) );
+        aPlotter->Rect( pos, end, already_filled ? NO_FILL : m_Fill, pen_size );
+    }
 }
 
 
 int LIB_RECTANGLE::GetPenSize() const
 {
-    return ( m_Width == 0 ) ? GetDefaultLineThickness() : m_Width;
+    if( m_Width > 0 )
+        return m_Width;
+
+    if( m_Width == 0 )
+       return GetDefaultLineThickness();
+
+    return -1;   // a value to use a minimal pen size
 }
 
 
-void LIB_RECTANGLE::drawGraphic( EDA_DRAW_PANEL* aPanel, wxDC* aDC,
-                                 const wxPoint& aOffset, COLOR4D aColor, GR_DRAWMODE aDrawMode,
-                                 void* aData, const TRANSFORM& aTransform )
+void LIB_RECTANGLE::print( wxDC* aDC, const wxPoint& aOffset, void* aData,
+                           const TRANSFORM& aTransform )
 {
-    wxPoint pos1, pos2;
-
-    COLOR4D color = GetLayerColor( LAYER_DEVICE );
-
-    if( aColor == COLOR4D::UNSPECIFIED )       // Used normal color or selected color
-    {
-        if( IsSelected() )
-            color = GetItemSelectedColor();
-    }
-    else
-    {
-        color = aColor;
-    }
-
-    pos1 = aTransform.TransformCoordinate( m_Pos ) + aOffset;
-    pos2 = aTransform.TransformCoordinate( m_End ) + aOffset;
+    COLOR4D color   = GetLayerColor( LAYER_DEVICE );
+    COLOR4D bgColor = GetLayerColor( LAYER_DEVICE_BACKGROUND );
+    wxPoint pt1 = aTransform.TransformCoordinate( m_Pos ) + aOffset;
+    wxPoint pt2 = aTransform.TransformCoordinate( m_End ) + aOffset;
 
     FILL_T fill = aData ? NO_FILL : m_Fill;
 
-    if( aColor != COLOR4D::UNSPECIFIED )
-        fill = NO_FILL;
-
-    GRSetDrawMode( aDC, aDrawMode );
-
-    EDA_RECT* const clipbox  = aPanel? aPanel->GetClipBox() : NULL;
     if( fill == FILLED_WITH_BG_BODYCOLOR && !aData )
-        GRFilledRect( clipbox, aDC, pos1.x, pos1.y, pos2.x, pos2.y, GetPenSize( ),
-                      (m_Flags & IS_MOVED) ? color : GetLayerColor( LAYER_DEVICE_BACKGROUND ),
-                      GetLayerColor( LAYER_DEVICE_BACKGROUND ) );
+        GRFilledRect( nullptr, aDC, pt1.x, pt1.y, pt2.x, pt2.y, GetPenSize( ), bgColor, bgColor );
     else if( m_Fill == FILLED_SHAPE  && !aData )
-        GRFilledRect( clipbox, aDC, pos1.x, pos1.y, pos2.x, pos2.y,
-                      GetPenSize(), color, color );
+        GRFilledRect( nullptr, aDC, pt1.x, pt1.y, pt2.x, pt2.y, GetPenSize(), color, color );
     else
-        GRRect( clipbox, aDC, pos1.x, pos1.y, pos2.x, pos2.y, GetPenSize(), color );
-
-    /* Set to one (1) to draw bounding box around rectangle to validate
-     * bounding box calculation. */
-#if 0
-    EDA_RECT bBox = GetBoundingBox();
-    bBox.RevertYAxis();
-    bBox = aTransform.TransformCoordinate( bBox );
-    bBox.Move( aOffset );
-    GRRect( clipbox, aDC, bBox, 0, LIGHTMAGENTA );
-#endif
+        GRRect( nullptr, aDC, pt1.x, pt1.y, pt2.x, pt2.y, GetPenSize(), color );
 }
 
 
-void LIB_RECTANGLE::GetMsgPanelInfo( MSG_PANEL_ITEMS& aList )
+void LIB_RECTANGLE::GetMsgPanelInfo( EDA_UNITS aUnits, MSG_PANEL_ITEMS& aList )
 {
-    wxString msg;
+    LIB_ITEM::GetMsgPanelInfo( aUnits, aList );
 
-    LIB_ITEM::GetMsgPanelInfo( aList );
-
-    msg = StringFromValue( g_UserUnit, m_Width, true );
+    wxString msg = MessageTextFromValue( aUnits, m_Width, true );
 
     aList.push_back( MSG_PANEL_ITEM( _( "Line Width" ), msg, BLUE ) );
 }
@@ -272,25 +212,12 @@ const EDA_RECT LIB_RECTANGLE::GetBoundingBox() const
 }
 
 
-bool LIB_RECTANGLE::HitTest( const wxPoint& aPosition ) const
+bool LIB_RECTANGLE::HitTest( const wxPoint& aPosition, int aAccuracy ) const
 {
-    int mindist = ( GetPenSize() / 2 ) + 1;
-
-    // Have a minimal tolerance for hit test
-    if( mindist < MINIMUM_SELECTION_DISTANCE )
-        mindist = MINIMUM_SELECTION_DISTANCE;
-
-    return HitTest( aPosition, mindist, DefaultTransform );
-}
-
-
-bool LIB_RECTANGLE::HitTest( const wxPoint &aPosition, int aThreshold, const TRANSFORM& aTransform ) const
-{
-    if( aThreshold < 0 )
-        aThreshold = GetPenSize() / 2;
-
-    wxPoint actualStart = aTransform.TransformCoordinate( m_Pos );
-    wxPoint actualEnd   = aTransform.TransformCoordinate( m_End );
+    int     mindist = std::max( aAccuracy + GetPenSize() / 2,
+                                Mils2iu( MINIMUM_SELECTION_DISTANCE ) );
+    wxPoint actualStart = DefaultTransform.TransformCoordinate( m_Pos );
+    wxPoint actualEnd   = DefaultTransform.TransformCoordinate( m_End );
 
     // locate lower segment
     wxPoint start, end;
@@ -299,21 +226,21 @@ bool LIB_RECTANGLE::HitTest( const wxPoint &aPosition, int aThreshold, const TRA
     end.x = actualEnd.x;
     end.y = actualStart.y;
 
-    if( TestSegmentHit( aPosition, start, end, aThreshold ) )
+    if( TestSegmentHit( aPosition, start, end, mindist ) )
         return true;
 
     // locate right segment
     start.x = actualEnd.x;
     end.y   = actualEnd.y;
 
-    if( TestSegmentHit( aPosition, start, end, aThreshold ) )
+    if( TestSegmentHit( aPosition, start, end, mindist ) )
         return true;
 
     // locate upper segment
     start.y = actualEnd.y;
     end.x   = actualStart.x;
 
-    if( TestSegmentHit( aPosition, start, end, aThreshold ) )
+    if( TestSegmentHit( aPosition, start, end, mindist ) )
         return true;
 
     // locate left segment
@@ -321,20 +248,20 @@ bool LIB_RECTANGLE::HitTest( const wxPoint &aPosition, int aThreshold, const TRA
     end.x = actualStart.x;
     end.y = actualEnd.y;
 
-    if( TestSegmentHit( aPosition, start, end, aThreshold ) )
+    if( TestSegmentHit( aPosition, start, end, mindist ) )
         return true;
 
     return false;
 }
 
 
-wxString LIB_RECTANGLE::GetSelectMenuText() const
+wxString LIB_RECTANGLE::GetSelectMenuText( EDA_UNITS aUnits ) const
 {
     return wxString::Format( _( "Rectangle from (%s, %s) to (%s, %s)" ),
-                             GetChars( CoordinateToString( m_Pos.x ) ),
-                             GetChars( CoordinateToString( m_Pos.y ) ),
-                             GetChars( CoordinateToString( m_End.x ) ),
-                             GetChars( CoordinateToString( m_End.y ) ) );
+                             MessageTextFromValue( aUnits, m_Pos.x ),
+                             MessageTextFromValue( aUnits, m_Pos.y ),
+                             MessageTextFromValue( aUnits, m_End.x ),
+                             MessageTextFromValue( aUnits, m_End.y ) );
 }
 
 
@@ -344,98 +271,13 @@ BITMAP_DEF LIB_RECTANGLE::GetMenuImage() const
 }
 
 
-void LIB_RECTANGLE::BeginEdit( STATUS_FLAGS aEditMode, const wxPoint aPosition )
+void LIB_RECTANGLE::BeginEdit( const wxPoint aPosition )
 {
-    wxCHECK_RET( ( aEditMode & ( IS_NEW | IS_MOVED | IS_RESIZED ) ) != 0,
-                 wxT( "Invalid edit mode for LIB_RECTANGLE object." ) );
-
-    if( aEditMode == IS_NEW )
-    {
-        m_Pos = m_End = aPosition;
-    }
-    else if( aEditMode == IS_RESIZED )
-    {
-        m_isStartPointSelected = abs( m_Pos.x - aPosition.x ) < MINIMUM_SELECTION_DISTANCE
-            || abs( m_Pos.y - aPosition.y ) < MINIMUM_SELECTION_DISTANCE;
-
-        if( m_isStartPointSelected )
-        {
-            m_isWidthLocked = abs( m_Pos.x - aPosition.x ) >= MINIMUM_SELECTION_DISTANCE;
-            m_isHeightLocked = abs( m_Pos.y - aPosition.y ) >= MINIMUM_SELECTION_DISTANCE;
-        }
-        else
-        {
-            m_isWidthLocked = abs( m_End.x - aPosition.x ) >= MINIMUM_SELECTION_DISTANCE;
-            m_isHeightLocked = abs( m_End.y - aPosition.y ) >= MINIMUM_SELECTION_DISTANCE;
-        }
-
-        SetEraseLastDrawItem();
-    }
-    else if( aEditMode == IS_MOVED )
-    {
-        m_initialPos = m_Pos;
-        m_initialCursorPos = aPosition;
-        SetEraseLastDrawItem();
-    }
-
-    m_Flags = aEditMode;
+    m_Pos = m_End = aPosition;
 }
 
 
-bool LIB_RECTANGLE::ContinueEdit( const wxPoint aPosition )
+void LIB_RECTANGLE::CalcEdit( const wxPoint& aPosition )
 {
-    wxCHECK_MSG( ( m_Flags & ( IS_NEW | IS_MOVED | IS_RESIZED ) ) != 0, false,
-                   wxT( "Bad call to ContinueEdit().  LIB_RECTANGLE is not being edited." ) );
-
-    return false;
-}
-
-
-void LIB_RECTANGLE::EndEdit( const wxPoint& aPosition, bool aAbort )
-{
-    wxCHECK_RET( ( m_Flags & ( IS_NEW | IS_MOVED | IS_RESIZED ) ) != 0,
-                   wxT( "Bad call to EndEdit().  LIB_RECTANGLE is not being edited." ) );
-
-    m_Flags = 0;
-    m_isHeightLocked = false;
-    m_isWidthLocked  = false;
-    SetEraseLastDrawItem( false );
-}
-
-
-void LIB_RECTANGLE::calcEdit( const wxPoint& aPosition )
-{
-    if( m_Flags == IS_NEW )
-    {
-        m_End = aPosition;
-        SetEraseLastDrawItem();
-    }
-    else if( m_Flags == IS_RESIZED )
-    {
-        if( m_isHeightLocked )
-        {
-            if( m_isStartPointSelected )
-                m_Pos.x = aPosition.x;
-            else
-                m_End.x = aPosition.x;
-        }
-        else if( m_isWidthLocked )
-        {
-            if( m_isStartPointSelected )
-                m_Pos.y = aPosition.y;
-            else
-                m_End.y = aPosition.y;
-        }
-        else
-        {
-            if( m_isStartPointSelected )
-                m_Pos = aPosition;
-            else
-                m_End = aPosition;
-        }
-    }
-    else if( m_Flags == IS_MOVED )
-    {
-        Move( m_initialPos + aPosition - m_initialCursorPos );
-    }
+    m_End = aPosition;
 }

@@ -28,14 +28,12 @@
 
 #include <fctsys.h>
 #include <gr_basic.h>
-#include <class_drawpanel.h>
 #include <base_units.h>
-
 #include <pl_editor_frame.h>
 #include <pl_editor_id.h>
 #include <dialog_helpers.h>
-#include <worksheet_shape_builder.h>
-#include <class_worksheet_dataitem.h>
+#include <ws_draw_item.h>
+#include <ws_data_item.h>
 #include <dialog_page_settings.h>
 #include <invoke_pl_editor_dialog.h>
 
@@ -58,7 +56,7 @@ public:
     bool OnPrintPage( int aPageNum ) override;
     bool HasPage( int aPageNum ) override { return ( aPageNum <= 2 ); }
     void GetPageInfo( int* minPage, int* maxPage, int* selPageFrom, int* selPageTo ) override;
-    void DrawPage( int aPageNum );
+    void PrintPage( int aPageNum );
 };
 
 /**
@@ -132,7 +130,7 @@ END_EVENT_TABLE()
 
 bool PLEDITOR_PRINTOUT::OnPrintPage( int aPageNum )
 {
-    DrawPage( aPageNum );
+    PrintPage( aPageNum );
     return true;
 }
 
@@ -147,29 +145,20 @@ void PLEDITOR_PRINTOUT::GetPageInfo( int* minPage, int* maxPage,
 /*
  * This is the real print function: print the active screen
  */
-void PLEDITOR_PRINTOUT::DrawPage( int aPageNum )
+void PLEDITOR_PRINTOUT::PrintPage( int aPageNum )
 {
     int      oldZoom;
     wxPoint  tmp_startvisu;
     wxSize   pageSizeIU;             // Page size in internal units
     wxPoint  old_org;
-    EDA_RECT oldClipBox;
     wxRect   fitRect;
     wxDC*    dc = GetDC();
-    EDA_DRAW_PANEL* panel = m_parent->GetCanvas();
     PL_EDITOR_SCREEN* screen = m_parent->GetScreen();
 
     // Save current scale factor, offsets, and clip box.
     tmp_startvisu = screen->m_StartVisu;
     oldZoom = screen->GetZoom();
     old_org = screen->m_DrawOrg;
-
-    oldClipBox = *panel->GetClipBox();
-
-    // Change clip box to print the whole page.
-    #define MAX_VALUE (INT_MAX/2)   // MAX_VALUE is the max we can use in an integer
-                                    // and that allows calculations without overflow
-    panel->SetClipBox( EDA_RECT( wxPoint( 0, 0 ), wxSize( MAX_VALUE, MAX_VALUE ) ) );
 
     // Change scale factor and offset to print the whole page.
 
@@ -190,11 +179,10 @@ void PLEDITOR_PRINTOUT::DrawPage( int aPageNum )
     m_parent->SetDrawBgColor( MakeColour( WHITE ) );
 
     screen->m_ScreenNumber = aPageNum;
-    m_parent->DrawWorkSheet( dc, screen, 0, IU_PER_MILS, wxEmptyString );
+    m_parent->PrintWorkSheet( dc, screen, 0, IU_PER_MILS, wxEmptyString );
 
     m_parent->SetDrawBgColor( bg_color );
     screen->m_IsPrinting = false;
-    panel->SetClipBox( oldClipBox );
 
     GRForceBlackPen( false );
 

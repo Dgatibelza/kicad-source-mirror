@@ -25,34 +25,32 @@
 # Function make_lexer
 # is a standard way to invoke TokenList2DsnLexer.cmake.
 # Extra arguments are treated as source files which depend on the generated
-# outHeaderFile
+# files.  Some detail here on the indirection:
+#  - Parallel builds all depend on the same files, and CMake will generate the same file multiple times in the same location.
+# This can be problematic if the files are generated at the same time and overwrite each other.
+#  - To fix this, we create a custom target (outputTarget) that the parallel builds depend on.
+# AND build dependencies.  This creates the needed rebuild for appropriate source object changes.
+function( make_lexer outputTarget inputFile outHeaderFile outCppFile enum )
 
-function( make_lexer inputFile outHeaderFile outCppFile enum )
     add_custom_command(
-        OUTPUT  ${outHeaderFile}
-                ${outCppFile}
+        OUTPUT  ${CMAKE_CURRENT_BINARY_DIR}/${outHeaderFile}
+                ${CMAKE_CURRENT_BINARY_DIR}/${outCppFile}
         COMMAND ${CMAKE_COMMAND}
             -Denum=${enum}
-            -DinputFile=${inputFile}
-            -DoutHeaderFile=${outHeaderFile}
-            -DoutCppFile=${outCppFile}
+            -DinputFile=${CMAKE_CURRENT_SOURCE_DIR}/${inputFile}
+            -DoutHeaderFile=${CMAKE_CURRENT_BINARY_DIR}/${outHeaderFile}
+            -DoutCppFile=${CMAKE_CURRENT_BINARY_DIR}/${outCppFile}
             -P ${CMAKE_MODULE_PATH}/TokenList2DsnLexer.cmake
-        DEPENDS ${inputFile}
-                ${CMAKE_MODULE_PATH}/TokenList2DsnLexer.cmake
         COMMENT "TokenList2DsnLexer.cmake creating:
            ${outHeaderFile} and
            ${outCppFile} from
            ${inputFile}"
+        DEPENDS ${CMAKE_CURRENT_SOURCE_DIR}/${inputFile}
+                ${CMAKE_MODULE_PATH}/TokenList2DsnLexer.cmake
         )
 
-    # extra_args, if any, are treated as source files (typically headers) which
-    # are known to depend on the generated outHeader.
-    foreach( extra_arg ${ARGN} )
-        set_source_files_properties( ${extra_arg}
-            PROPERTIES OBJECT_DEPENDS ${outHeaderFile}
-            )
-    endforeach()
-
+    target_sources( ${outputTarget} PRIVATE ${CMAKE_CURRENT_BINARY_DIR}/${outCppFile} )
+    target_include_directories( ${outputTarget} PUBLIC ${CMAKE_CURRENT_BINARY_DIR} )
 endfunction()
 
 

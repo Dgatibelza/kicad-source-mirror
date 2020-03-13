@@ -2,7 +2,7 @@
  * This program source code file is part of KiCad, a free EDA CAD application.
  *
  * Copyright (C) 2010 Rafael Sokolowski <Rafael.Sokolowski@web.de>
- * Copyright (C) 2017 KiCad Developers, see CHANGELOG.TXT for contributors.
+ * Copyright (C) 2017-2020 KiCad Developers, see CHANGELOG.TXT for contributors.
  *
  * This program is free software; you can redistribute it and/or
  * modify it under the terms of the GNU General Public License
@@ -24,21 +24,26 @@
 
 
 #include <config.h>
+#include <kicad_curl/kicad_curl_easy.h>
+#include <launch_ext.h>
 #include <string>
 
 // kicad_curl.h must be included before wx headers, to avoid
 // conflicts for some defines, at least on Windows
-#ifdef BUILD_GITHUB_PLUGIN
 // kicad_curl.h can create conflicts for some defines, at least on Windows
 // so we are using here 2 proxy functions to know Curl version to avoid
 // including kicad_curl.h to know Curl version
 extern std::string GetKicadCurlVersion();
 extern std::string GetCurlLibVersion();
+
+#if defined( KICAD_USE_OCC ) | defined( KICAD_USE_OCE )
+#include <Standard_Version.hxx>
 #endif
 
 #include <boost/version.hpp>
 #include <wx/clipbrd.h>
 #include <wx/msgdlg.h>
+#include <wx/hyperlink.h>
 
 /* All KiCad icons are linked into shared library 'libbitmaps.a'.
  *  Icons:
@@ -57,14 +62,42 @@ extern std::string GetCurlLibVersion();
 #include "dialog_about.h"
 
 
-/*
- * Class DIALOG_ABOUT methods
- */
+/// URL to launch a new issue with pre-populated description
+wxString DIALOG_ABOUT::m_bugReportUrl =
+        "https://gitlab.com/kicad/code/kicad/issues/new?issue[description]=%s";
+
+/// Issue template to use for reporting bugs (this should not be translated)
+wxString DIALOG_ABOUT::m_bugReportTemplate =
+        "<!-- --------Before Creating a New Issue-----------\n"
+        "* Search the issue tracker to verify the issue has not already been reported.\n"
+        "* Keep report contents limited to the necessary information required to fix the issue.\n"
+        "\n"
+        "---------Add your issue details below----------- -->\n"
+        "\n"
+        "# Description\n"
+        "<!-- What is the current behavior and what is the expected behavior?  -->\n"
+        "<!-- If the issue is visual/graphical, please attach screenshots of the problem. -->\n"
+        "\n"
+        "# Steps to reproduce\n"
+        "<!-- If there are multiple steps to reproduce it or it is a visual issue, then providing a"
+        "screen recording as an attachment to this report is recommended. -->\n"
+        "<!-- If this issue is specific to a project, please attach it to this issue. -->\n"
+        "1.\n"
+        "1.\n"
+        "# KiCad Version\n"
+        "\n"
+        "```\n"
+        "%s\n"
+        "```";
+
 
 DIALOG_ABOUT::DIALOG_ABOUT( EDA_BASE_FRAME *aParent, ABOUT_APP_INFO& aAppInfo )
     : DIALOG_ABOUT_BASE( aParent ), m_info( aAppInfo )
 {
+    wxASSERT( aParent != nullptr );
+
     m_picInformation = KiBitmap( info_xpm );
+    m_picVersion     = KiBitmap( recent_xpm );
     m_picDevelopers  = KiBitmap( preference_xpm );
     m_picDocWriters  = KiBitmap( editor_xpm );
     m_picArtists     = KiBitmap( palette_xpm );
@@ -85,11 +118,13 @@ DIALOG_ABOUT::DIALOG_ABOUT( EDA_BASE_FRAME *aParent, ABOUT_APP_INFO& aAppInfo )
         m_bitmapApp->SetBitmap( icon );
     }
 
-    m_staticTextAppTitle->SetLabel( m_info.GetAppName() );
+    m_titleName = aParent->GetAboutTitle();
+    m_staticTextAppTitle->SetLabel( m_titleName );
     m_staticTextCopyright->SetLabel( m_info.GetCopyright() );
     m_staticTextBuildVersion->SetLabel( "Version: " + m_info.GetBuildVersion() );
     m_staticTextLibVersion->SetLabel( m_info.GetLibVersion() );
 
+    SetTitle( wxString::Format( _( "About %s" ), m_titleName ) );
     createNotebooks();
 
     GetSizer()->SetSizeHints( this );
@@ -117,13 +152,21 @@ wxFlexGridSizer* DIALOG_ABOUT::createFlexGridSizer()
 
 void DIALOG_ABOUT::createNotebooks()
 {
-    createNotebookHtmlPage( m_auiNotebook, _( "Information" ), m_picInformation,
-                            m_info.GetDescription() );
+    createNotebookHtmlPage( m_auiNotebook, _( "About" ), m_picInformation,
+            m_info.GetDescription() );
 
-    createNotebookPage( m_auiNotebook, _( "Developers" ) , m_picDevelopers, m_info.GetDevelopers() );
-    createNotebookPage( m_auiNotebook, _( "Doc Writers" ), m_picDocWriters, m_info.GetDocWriters() );
+    wxString version;
+    buildVersionInfoData( version, true );
 
-    createNotebookPageByCategory( m_auiNotebook, _( "Artists" ), m_picArtists, m_info.GetArtists() );
+    createNotebookHtmlPage( m_auiNotebook, _( "Version" ), m_picVersion, version, true );
+
+    createNotebookPage( m_auiNotebook, _( "Developers" ) , m_picDevelopers,
+                        m_info.GetDevelopers() );
+    createNotebookPage( m_auiNotebook, _( "Doc Writers" ), m_picDocWriters,
+                        m_info.GetDocWriters() );
+
+    createNotebookPageByCategory( m_auiNotebook, _( "Artists" ), m_picArtists,
+                                  m_info.GetArtists() );
     createNotebookPageByCategory( m_auiNotebook, _( "Translators" ), m_picTranslators,
                                   m_info.GetTranslators() );
     createNotebookPageByCategory( m_auiNotebook, _( "Packagers" ), m_picPackagers,
@@ -233,7 +276,8 @@ void DIALOG_ABOUT::createNotebookPageByCategory(wxAuiNotebook* aParent, const wx
             wxStaticText* m_staticText1 = new wxStaticText( m_scrolledWindow1, wxID_ANY,
                                                             contributor->GetCategory() + wxT( ":" ),
                                                             wxDefaultPosition, wxDefaultSize, 0 );
-            m_staticText1->SetFont( wxFont( -1, wxFONTFAMILY_DEFAULT, wxFONTSTYLE_NORMAL, wxFONTWEIGHT_BOLD, false,
+            m_staticText1->SetFont( wxFont( -1, wxFONTFAMILY_DEFAULT, wxFONTSTYLE_NORMAL,
+                                            wxFONTWEIGHT_BOLD, false,
                                             wxEmptyString ) ); // bold font
             m_staticText1->Wrap( -1 );
             fgSizer1->Add( m_staticText1, 0, wxALIGN_LEFT|wxBOTTOM, 2 );
@@ -251,13 +295,29 @@ void DIALOG_ABOUT::createNotebookPageByCategory(wxAuiNotebook* aParent, const wx
                     // First column is empty
                     fgSizer1->AddSpacer(5);
 
-                    // Name of contributor at second column
-                    wxStaticText* m_staticText2 = new wxStaticText( m_scrolledWindow1, wxID_ANY,
-                                                                    wxT(" • ") + sub_contributor->GetName(),
-                                                                    wxDefaultPosition,
-                                                                    wxDefaultSize, 0 );
+                    wxControl* ctrl;
+
+                    // No URL supplied, display normal text control
+                    if( sub_contributor->GetUrl().IsEmpty() )
+                    {
+                        ctrl = new wxStaticText( m_scrolledWindow1, wxID_ANY,
+                                                 wxT( "  • " ) + sub_contributor->GetName(),
+                                                 wxDefaultPosition,
+                                                 wxDefaultSize, 0 );
+                    }
+                    else
+                    {
+                        // Display a hyperlink control instead
+                        ctrl = new wxHyperlinkCtrl( m_scrolledWindow1, wxID_ANY,
+                                                    wxT( "• " ) + sub_contributor->GetName(),
+                                                    sub_contributor->GetUrl(),
+                                                    wxDefaultPosition,
+                                                    wxDefaultSize, wxHL_ALIGN_LEFT );
+                    }
+
                     m_staticText1->Wrap( -1 );
-                    fgSizer1->Add( m_staticText2, 0, wxALIGN_LEFT|wxBOTTOM, 2 );
+
+                    fgSizer1->Add( ctrl, 0, wxALIGN_LEFT|wxBOTTOM, 2 );
 
                     // Email address of contributor at third column
                     if( sub_contributor->GetEMail() != wxEmptyString )
@@ -335,7 +395,8 @@ void DIALOG_ABOUT::createNotebookPageByCategory(wxAuiNotebook* aParent, const wx
 
 
 void DIALOG_ABOUT::createNotebookHtmlPage( wxAuiNotebook* aParent, const wxString& aCaption,
-                                           const wxBitmap& aIcon, const wxString& html )
+                                           const wxBitmap& aIcon, const wxString& html,
+                                           bool aSelection )
 {
     wxPanel* panel = new wxPanel( aParent, wxID_ANY, wxDefaultPosition, wxDefaultSize,
                                   wxTAB_TRAVERSAL );
@@ -356,9 +417,10 @@ void DIALOG_ABOUT::createNotebookHtmlPage( wxAuiNotebook* aParent, const wxStrin
     // end of HTML structure indicated by closing tags
     htmlPage.Append( wxT( "</body></html>" ) );
 
+    int flags = aSelection ? wxHW_SCROLLBAR_AUTO : ( wxHW_SCROLLBAR_AUTO | wxHW_NO_SELECTION );
+
     // the HTML page is going to be created with previously created HTML content
-    wxHtmlWindow* htmlWindow = new wxHtmlWindow( panel, wxID_ANY, wxDefaultPosition, wxDefaultSize,
-                                                 wxHW_SCROLLBAR_AUTO|wxHW_NO_SELECTION );
+    auto htmlWindow = new wxHtmlWindow( panel, wxID_ANY, wxDefaultPosition, wxDefaultSize, flags );
 
     // HTML font set to font properties as they are used for widgets to have an unique look
     // under different platforms with HTML
@@ -424,20 +486,20 @@ void DIALOG_ABOUT::buildVersionInfoData( wxString& aMsg, bool aFormatHtml )
     #define OFF "OFF" << eol
 
     wxPlatformInfo platform;
-    aMsg << "Application: " << m_info.GetAppName() << eol;
+    aMsg << "Application: " << m_titleName << eol;
     aMsg << "Version: " << m_info.GetBuildVersion() << eol;
     aMsg << "Libraries:" << eol;
     aMsg << indent4 << wxGetLibraryVersionInfo().GetVersionString() << eol;
 
-#ifdef BUILD_GITHUB_PLUGIN
     aMsg << indent4 << GetKicadCurlVersion() << eol;
-#endif
+
     aMsg << "Platform: " << wxGetOsDescription() << ", "
          << platform.GetArchName() << ", "
          << platform.GetEndiannessName() << ", "
          << platform.GetPortIdName() << eol;
 
     aMsg << "Build Info:" << eol;
+    aMsg << indent4 << "Build date: " << m_info.GetBuildDate() << eol;
     aMsg << indent4 << "wxWidgets: " << wxVERSION_NUM_DOT_STRING << " (";
     aMsg << __WX_BO_UNICODE __WX_BO_STL __WX_BO_WXWIN_COMPAT_2_8 ")";
 
@@ -456,9 +518,15 @@ void DIALOG_ABOUT::buildVersionInfoData( wxString& aMsg, bool aFormatHtml )
                       << ( BOOST_VERSION / 100 % 1000 ) << wxT( "." )
                       << ( BOOST_VERSION % 100 ) << eol;
 
-#ifdef BUILD_GITHUB_PLUGIN
-    aMsg << indent4 << "Curl: " << GetCurlLibVersion() << eol;
+#ifdef KICAD_USE_OCC
+    aMsg << indent4 << "OpenCASCADE Technology: " << OCC_VERSION_COMPLETE << eol;
 #endif
+
+#ifdef KICAD_USE_OCE
+    aMsg << indent4 << "OpenCASCADE Community Edition: " << OCC_VERSION_COMPLETE << eol;
+#endif
+
+    aMsg << indent4 << "Curl: " << GetCurlLibVersion() << eol;
 
     aMsg << indent4 << "Compiler: ";
 #if defined(__clang__)
@@ -484,20 +552,6 @@ void DIALOG_ABOUT::buildVersionInfoData( wxString& aMsg, bool aFormatHtml )
     // Add build settings config (build options):
     aMsg << "Build settings:" << eol;
 
-    aMsg << indent4 << "USE_WX_GRAPHICS_CONTEXT=";
-#ifdef USE_WX_GRAPHICS_CONTEXT
-    aMsg << ON;
-#else
-    aMsg << OFF;
-#endif
-
-    aMsg << indent4 << "USE_WX_OVERLAY=";
-#ifdef USE_WX_OVERLAY
-    aMsg << ON;
-#else
-    aMsg << OFF;
-#endif
-
     aMsg << indent4 << "KICAD_SCRIPTING=";
 #ifdef KICAD_SCRIPTING
     aMsg << ON;
@@ -512,8 +566,22 @@ void DIALOG_ABOUT::buildVersionInfoData( wxString& aMsg, bool aFormatHtml )
     aMsg << OFF;
 #endif
 
+    aMsg << indent4 << "KICAD_SCRIPTING_PYTHON3=";
+#ifdef KICAD_SCRIPTING_PYTHON3
+    aMsg << ON;
+#else
+    aMsg << OFF;
+#endif
+
     aMsg << indent4 << "KICAD_SCRIPTING_WXPYTHON=";
 #ifdef KICAD_SCRIPTING_WXPYTHON
+    aMsg << ON;
+#else
+    aMsg << OFF;
+#endif
+
+    aMsg << indent4 << "KICAD_SCRIPTING_WXPYTHON_PHOENIX=";
+#ifdef KICAD_SCRIPTING_WXPYTHON_PHOENIX
     aMsg << ON;
 #else
     aMsg << OFF;
@@ -540,25 +608,41 @@ void DIALOG_ABOUT::buildVersionInfoData( wxString& aMsg, bool aFormatHtml )
     aMsg << OFF;
 #endif
 
+    aMsg << indent4 << "KICAD_USE_OCC=";
+#ifdef KICAD_USE_OCC
+    aMsg << ON;
+#else
+    aMsg << OFF;
+#endif
+
     aMsg << indent4 << "KICAD_SPICE=";
 #ifdef KICAD_SPICE
     aMsg << ON;
 #else
     aMsg << OFF;
 #endif
-}
 
+#ifndef NDEBUG
+        aMsg << indent4 << "KICAD_STDLIB_DEBUG=";
+    #ifdef KICAD_STDLIB_DEBUG
+        aMsg << ON;
+    #else
+        aMsg << OFF;
+        aMsg << indent4 << "KICAD_STDLIB_LIGHT_DEBUG=";
+        #ifdef KICAD_STDLIB_LIGHT_DEBUG
+            aMsg << ON;
+        #else
+            aMsg << OFF;
+        #endif
+    #endif
 
-void DIALOG_ABOUT::onShowVersionInfo( wxCommandEvent& event )
-{
-    wxString msg_version;
-    buildVersionInfoData( msg_version, true );
-
-    HTML_MESSAGE_BOX dlg( this, _( "Version Info" ), wxDefaultPosition,
-                          wxSize( 550, 500 ) );
-
-    dlg.AddHTML_Text( msg_version );
-    dlg.ShowModal();
+        aMsg << indent4 << "KICAD_SANITIZE=";
+    #ifdef KICAD_SANITIZE
+        aMsg << ON;
+    #else
+        aMsg << OFF;
+    #endif
+#endif
 }
 
 
@@ -577,4 +661,20 @@ void DIALOG_ABOUT::onCopyVersionInfo( wxCommandEvent& event )
     wxTheClipboard->SetData( new wxTextDataObject( msg_version ) );
     wxTheClipboard->Close();
     m_btCopyVersionInfo->SetLabel( _( "Copied..." ) );
+}
+
+
+void DIALOG_ABOUT::onReportBug( wxCommandEvent& event )
+{
+    wxString version;
+    buildVersionInfoData( version, false );
+
+    wxString message;
+    message.Printf( m_bugReportTemplate, version );
+
+    KICAD_CURL_EASY kcurl;
+    wxString url_string;
+    url_string.Printf( m_bugReportUrl, kcurl.Escape( message.ToStdString() ) );
+
+    LaunchURL( url_string );
 }

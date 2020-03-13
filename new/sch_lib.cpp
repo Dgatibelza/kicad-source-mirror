@@ -70,7 +70,7 @@ struct LTREV
 
 
 /**
- * Class PART_REVS
+ * PART_REVS
  * contains the collection of revisions for a particular part name, in the
  * form of cached PARTs.  The tuple consists of a rev string and a PART pointer.
  * The rev string is like "rev1", the PART pointer will be NULL until the PART
@@ -90,7 +90,7 @@ public:
 
 
 /**
- * Class PARTS
+ * PARTS
  * contains the collection of PART_REVS for all PARTs in the lib.
  * The tuple consists of a part name and a PART_REVS pointer.
  * The part name does not have the revision attached (of course this is understood
@@ -234,7 +234,7 @@ PART* LIB::LookupPart( const LPID& aLPID, LIB_TABLE* aLibTable )
 
     if( !part )     // part does not exist in this lib
     {
-        wxString msg = wxString::Format( _("part '%s' not found in lib %s" ),
+        wxString msg = wxString::Format( _("part \"%s\" not found in lib %s" ),
                             wxString::FromUTF8( aLPID.GetPartNameAndRev().c_str() ).GetData(),
                             wxString::FromUTF8( logicalName.c_str() ).GetData() );
         THROW_IO_ERROR( msg );

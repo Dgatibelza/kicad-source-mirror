@@ -2,7 +2,7 @@
  * This program source code file is part of KiCad, a free EDA CAD application.
  *
  * Copyright (C) 2007-2008 SoftPLC Corporation, Dick Hollenbeck <dick@softplc.com>
- * Copyright (C) 2004-2017 KiCad Developers, see change_log.txt for contributors.
+ * Copyright (C) 2004-2018 KiCad Developers, see AUTHORS.txt for contributors.
  *
  * This program is free software; you can redistribute it and/or
  * modify it under the terms of the GNU General Public License
@@ -26,9 +26,13 @@
 #include <class_board_item.h>             // class BOARD_ITEM
 
 #include <class_module.h>
+#include <class_edge_mod.h>
 #include <class_pad.h>
 #include <class_track.h>
 #include <class_marker_pcb.h>
+#include <class_zone.h>
+#include <class_drawsegment.h>
+#include <math/util.h>      // for KiROUND
 
 
 /* This module contains out of line member functions for classes given in
@@ -47,10 +51,10 @@ const KICAD_T GENERAL_COLLECTOR::AllBoardItems[] = {
     PCB_TARGET_T,                // in m_Drawings
     PCB_VIA_T,                   // in m_Tracks
     PCB_TRACE_T,                 // in m_Tracks
+    PCB_ARC_T,                   // in m_Tracks
     PCB_PAD_T,                   // in modules
     PCB_MODULE_TEXT_T,           // in modules
     PCB_MODULE_T,                // in m_Modules
-    PCB_ZONE_T,                  // in m_Zones
     PCB_ZONE_AREA_T,             // in m_ZoneDescriptorList
     EOT
 };
@@ -63,9 +67,9 @@ const KICAD_T GENERAL_COLLECTOR::BoardLevelItems[] = {
     PCB_DIMENSION_T,
     PCB_TARGET_T,
     PCB_VIA_T,
+    PCB_ARC_T,
     PCB_TRACE_T,
     PCB_MODULE_T,
-    PCB_ZONE_T,
     PCB_ZONE_AREA_T,
     EOT
 };
@@ -79,6 +83,7 @@ const KICAD_T GENERAL_COLLECTOR::AllButZones[] = {
     PCB_TARGET_T,
     PCB_VIA_T,
     PCB_TRACE_T,
+    PCB_ARC_T,
     PCB_PAD_T,
     PCB_MODULE_TEXT_T,
     PCB_MODULE_T,
@@ -100,35 +105,46 @@ const KICAD_T GENERAL_COLLECTOR::PadsOrModules[] = {
 };
 
 
-const KICAD_T GENERAL_COLLECTOR::PadsTracksOrZones[] = {
+const KICAD_T GENERAL_COLLECTOR::PadsOrTracks[] = {
     PCB_PAD_T,
     PCB_VIA_T,
     PCB_TRACE_T,
-    PCB_ZONE_T,
-    PCB_ZONE_AREA_T,
+    PCB_ARC_T,
     EOT
 };
 
 
 const KICAD_T GENERAL_COLLECTOR::ModulesAndTheirItems[] = {
+    PCB_MODULE_T,
     PCB_MODULE_TEXT_T,
     PCB_MODULE_EDGE_T,
     PCB_PAD_T,
-    PCB_MODULE_T,
+    PCB_MODULE_ZONE_AREA_T,
     EOT
-};
+    };
 
 
 const KICAD_T GENERAL_COLLECTOR::ModuleItems[] = {
     PCB_MODULE_TEXT_T,
     PCB_MODULE_EDGE_T,
     PCB_PAD_T,
+    PCB_MODULE_ZONE_AREA_T,
     EOT
-};
+    };
 
 
 const KICAD_T GENERAL_COLLECTOR::Tracks[] = {
     PCB_TRACE_T,
+    PCB_ARC_T,
+    PCB_VIA_T,
+    EOT
+};
+
+
+const KICAD_T GENERAL_COLLECTOR::LockableItems[] = {
+    PCB_MODULE_T,
+    PCB_TRACE_T,
+    PCB_ARC_T,
     PCB_VIA_T,
     EOT
 };
@@ -136,6 +152,7 @@ const KICAD_T GENERAL_COLLECTOR::Tracks[] = {
 
 const KICAD_T GENERAL_COLLECTOR::Zones[] = {
     PCB_ZONE_AREA_T,
+    PCB_MODULE_ZONE_AREA_T,
     EOT
 };
 
@@ -143,12 +160,14 @@ const KICAD_T GENERAL_COLLECTOR::Zones[] = {
 
 SEARCH_RESULT GENERAL_COLLECTOR::Inspect( EDA_ITEM* testItem, void* testData )
 {
-    BOARD_ITEM* item   = (BOARD_ITEM*) testItem;
-    MODULE*     module = NULL;
-    D_PAD*      pad    = NULL;
-    bool        pad_through = false;
-    VIA*        via    = NULL;
-    MARKER_PCB* marker = NULL;
+    BOARD_ITEM*     item        = (BOARD_ITEM*) testItem;
+    MODULE*         module      = nullptr;
+    D_PAD*          pad         = nullptr;
+    bool            pad_through = false;
+    VIA*            via         = nullptr;
+    MARKER_PCB*     marker      = nullptr;
+    ZONE_CONTAINER* zone        = nullptr;
+    DRAWSEGMENT*    drawSegment = nullptr;
 
 #if 0   // debugging
     static int  breakhere = 0;
@@ -171,10 +190,7 @@ SEARCH_RESULT GENERAL_COLLECTOR::Inspect( EDA_ITEM* testItem, void* testData )
         break;
 
     case PCB_TRACE_T:
-        breakhere++;
-        break;
-
-    case PCB_ZONE_T:
+    case PCB_ARC_T:
         breakhere++;
         break;
 
@@ -254,18 +270,23 @@ SEARCH_RESULT GENERAL_COLLECTOR::Inspect( EDA_ITEM* testItem, void* testData )
         break;
 
     case PCB_TRACE_T:
+    case PCB_ARC_T:
+        if( m_Guide->IgnoreTracks() )
+            goto exit;
         break;
 
-    case PCB_ZONE_T:
-        break;
-
+    case PCB_MODULE_ZONE_AREA_T:
+        module = static_cast<MODULE*>( item->GetParent() );
+        // Fall through
     case PCB_ZONE_AREA_T:
+        zone = static_cast<ZONE_CONTAINER*>( item );
         break;
 
     case PCB_TEXT_T:
         break;
 
     case PCB_LINE_T:
+        drawSegment = static_cast<DRAWSEGMENT*>( item );
         break;
 
     case PCB_DIMENSION_T:
@@ -314,6 +335,10 @@ SEARCH_RESULT GENERAL_COLLECTOR::Inspect( EDA_ITEM* testItem, void* testData )
             // Extract the module since it could be hidden
             module = static_cast<MODULE*>( item->GetParent() );
         }
+        break;
+
+    case PCB_MODULE_EDGE_T:
+        drawSegment = static_cast<EDGE_MODULE*>( item );
         break;
 
     case PCB_MODULE_T:
@@ -366,17 +391,26 @@ SEARCH_RESULT GENERAL_COLLECTOR::Inspect( EDA_ITEM* testItem, void* testData )
         goto exit;
     }
 
-    if( item->IsOnLayer( m_Guide->GetPreferredLayer() ) ||
-            m_Guide->IgnorePreferredLayer() )
+    if( via )
+    {
+        auto type = via->GetViaType();
+
+        if( ( m_Guide->IgnoreThroughVias() && type == VIATYPE::THROUGH )
+                || ( m_Guide->IgnoreBlindBuriedVias() && type == VIATYPE::BLIND_BURIED )
+                || ( m_Guide->IgnoreMicroVias() && type == VIATYPE::MICROVIA ) )
+        {
+            goto exit;
+        }
+    }
+
+    if( item->IsOnLayer( m_Guide->GetPreferredLayer() ) || m_Guide->IgnorePreferredLayer() )
     {
         PCB_LAYER_ID layer = item->GetLayer();
 
-        /* Modules and their subcomponents: reference, value and pads
-         * are not sensitive to the layer visibility controls.  They all
-         * have their own separate visibility controls for vias,
-         * GetLayer() has no meaning, but IsOnLayer() works fine. User
-         * text in module *is* sensitive to layer visibility but that
-         * was already handled */
+        // Modules and their subcomponents: reference, value and pads are not sensitive
+        // to the layer visibility controls.  They all have their own separate visibility
+        // controls for vias, GetLayer() has no meaning, but IsOnLayer() works fine. User
+        // text in module *is* sensitive to layer visibility but that was already handled.
 
         if( via || module || pad || m_Guide->IsLayerVisible( layer )
                 || !m_Guide->IgnoreNonVisibleLayers() )
@@ -385,16 +419,49 @@ SEARCH_RESULT GENERAL_COLLECTOR::Inspect( EDA_ITEM* testItem, void* testData )
             {
                 if( !item->IsLocked() || !m_Guide->IgnoreLockedItems() )
                 {
-                    if( item->HitTest( m_RefPos ) )
+                    int  accuracy = KiROUND( 5 * m_Guide->OnePixelInIU() );
+
+                    if( zone )
                     {
-                        Append( item );
-                        goto exit;
+                        bool testFill = !m_Guide->IgnoreZoneFills();
+
+                        if( zone->HitTestForCorner( m_RefPos, accuracy * 2 )
+                            || zone->HitTestForEdge( m_RefPos, accuracy )
+                            || ( testFill && zone->HitTestFilledArea( m_RefPos ) ) )
+                        {
+                            Append( item );
+                            goto exit;
+                        }
+                    }
+                    else if( item->Type() == PCB_MODULE_T )
+                    {
+                        if( module->HitTest( m_RefPos, accuracy )
+                                && module->HitTestAccurate( m_RefPos, accuracy ) )
+                        {
+                            Append( item );
+                            goto exit;
+                        }
+                    }
+                    else if( drawSegment )
+                    {
+                        if( drawSegment->HitTest( m_RefPos, accuracy ) )
+                        {
+                            Append( item );
+                            goto exit;
+                        }
+                    }
+                    else
+                    {
+                        if( item->HitTest( m_RefPos, 0 ) )
+                        {
+                            Append( item );
+                            goto exit;
+                        }
                     }
                 }
             }
         }
     }
-
 
     if( m_Guide->IncludeSecondary() )
     {
@@ -404,23 +471,56 @@ SEARCH_RESULT GENERAL_COLLECTOR::Inspect( EDA_ITEM* testItem, void* testData )
 
         PCB_LAYER_ID layer = item->GetLayer();
 
-        /* Modules and their subcomponents: reference, value and pads
-         * are not sensitive to the layer visibility controls.  They all
-         * have their own separate visibility controls. User texts
-         * follows layer visibility controls (but that was already
-         * checked) */
+        // Modules and their subcomponents: reference, value and pads are not sensitive
+        // to the layer visibility controls.  They all have their own separate visibility
+        // controls for vias, GetLayer() has no meaning, but IsOnLayer() works fine. User
+        // text in module *is* sensitive to layer visibility but that was already handled.
 
-        if( via || module || pad || m_Guide->IsLayerVisible( layer )
+        if( via || module || pad || zone || m_Guide->IsLayerVisible( layer )
                 || !m_Guide->IgnoreNonVisibleLayers() )
         {
             if( !m_Guide->IsLayerLocked( layer ) || !m_Guide->IgnoreLockedLayers() )
             {
                 if( !item->IsLocked() || !m_Guide->IgnoreLockedItems() )
                 {
-                    if( item->HitTest( m_RefPos ) )
+                    int  accuracy = KiROUND( 5 * m_Guide->OnePixelInIU() );
+
+                    if( zone )
                     {
-                        Append2nd( item );
-                        goto exit;
+                        bool testFill = !m_Guide->IgnoreZoneFills();
+
+                        if( zone->HitTestForCorner( m_RefPos, accuracy * 2 )
+                            || zone->HitTestForEdge( m_RefPos, accuracy )
+                            || ( testFill && zone->HitTestFilledArea( m_RefPos ) ) )
+                        {
+                            Append2nd( item );
+                            goto exit;
+                        }
+                    }
+                    else if( item->Type() == PCB_MODULE_T )
+                    {
+                        if( module->HitTest( m_RefPos, accuracy )
+                                && module->HitTestAccurate( m_RefPos, accuracy ) )
+                        {
+                            Append( item );
+                            goto exit;
+                        }
+                    }
+                    else if( drawSegment )
+                    {
+                        if( drawSegment->HitTest( m_RefPos, accuracy ) )
+                        {
+                            Append( item );
+                            goto exit;
+                        }
+                    }
+                    else
+                    {
+                        if( item->HitTest( m_RefPos, 0 ) )
+                        {
+                            Append( item );
+                            goto exit;
+                        }
                     }
                 }
             }
@@ -428,7 +528,7 @@ SEARCH_RESULT GENERAL_COLLECTOR::Inspect( EDA_ITEM* testItem, void* testData )
     }
 
 exit:
-    return SEARCH_CONTINUE;     // always when collecting
+    return SEARCH_RESULT::CONTINUE; // always when collecting
 }
 
 
@@ -449,8 +549,6 @@ void GENERAL_COLLECTOR::Collect( BOARD_ITEM* aItem, const KICAD_T aScanList[],
 
     aItem->Visit( m_inspector, NULL, m_ScanTypes );
 
-    SetTimeNow();               // when snapshot was taken
-
     // record the length of the primary list before concatenating on to it.
     m_PrimaryLength = m_List.size();
 
@@ -468,7 +566,7 @@ SEARCH_RESULT PCB_TYPE_COLLECTOR::Inspect( EDA_ITEM* testItem, void* testData )
     // the scanList, so therefore we can collect anything given to us here.
     Append( testItem );
 
-    return SEARCH_CONTINUE;     // always when collecting
+    return SEARCH_RESULT::CONTINUE; // always when collecting
 }
 
 
@@ -484,10 +582,15 @@ SEARCH_RESULT PCB_LAYER_COLLECTOR::Inspect( EDA_ITEM* testItem, void* testData )
 {
     BOARD_ITEM* item = (BOARD_ITEM*) testItem;
 
-    if( item->GetLayer() == m_layer_id )
+    if( item->Type() == PCB_PAD_T )     // multilayer
+    {
+        if( static_cast<D_PAD*>( item )->IsOnLayer( m_layer_id ) )
+            Append( testItem );
+    }
+    else if( item->GetLayer() == m_layer_id )
         Append( testItem );
 
-    return SEARCH_CONTINUE;
+    return SEARCH_RESULT::CONTINUE;
 }
 
 

@@ -28,13 +28,33 @@
 
 #include <tool/tool_action.h>
 #include <tool/actions.h>
-#include <boost/optional.hpp>
+#include <core/optional.h>
 
 class TOOL_EVENT;
 class TOOL_MANAGER;
 
+// Type of microwave items that are "simple" - just get placed on the board directly,
+// without a graphical interactive setup stage
+enum MWAVE_TOOL_SIMPLE_ID
+{
+    GAP,
+    STUB,
+    STUB_ARC,
+    FUNCTION_SHAPE,
+};
+
+
+enum class ZONE_MODE
+{
+    ADD,             ///< Add a new zone/keepout with fresh settings
+    CUTOUT,          ///< Make a cutout to an existing zone
+    SIMILAR,         ///< Add a new zone with the same settings as an existing one
+    GRAPHIC_POLYGON
+};
+
+
 /**
- * Class PCB_ACTIONS
+ * PCB_ACTIONS
  *
  * Gathers all the actions that are shared by tools. The instance of PCB_ACTIONS is created
  * inside of ACTION_MANAGER object that registers the actions.
@@ -54,21 +74,18 @@ public:
 
     /// Selects an item (specified as the event parameter).
     static TOOL_ACTION selectItem;
+    static TOOL_ACTION unselectItem;
 
     /// Selects a list of items (specified as the event parameter)
     static TOOL_ACTION selectItems;
-
-    /// Unselects an item (specified as the event parameter).
-    static TOOL_ACTION unselectItem;
-
-    /// Unselects a list of items (specified as the event parameter)
     static TOOL_ACTION unselectItems;
 
-    /// Selects a connection between junctions.
-    static TOOL_ACTION selectConnection;
+    /// Runs a selection menu to select from a list of items
+    static TOOL_ACTION selectionMenu;
 
-    /// Selects whole copper connection.
-    static TOOL_ACTION selectCopper;
+    /// Selects tracks between junctions or expands an existing selection to pads or the
+    /// entire connection.
+    static TOOL_ACTION selectConnection;
 
     /// Selects all connections belonging to a single net.
     static TOOL_ACTION selectNet;
@@ -82,17 +99,12 @@ public:
     /// Filters the items in the current selection (invokes dialog)
     static TOOL_ACTION filterSelection;
 
-    // Edit Tool
-    /// Activation of the edit tool
-    static TOOL_ACTION editActivate;
-
-    /// move an item
+    /// move or drag an item
     static TOOL_ACTION move;
+    static TOOL_ACTION drag;
 
-    /// Rotation of selected objects clockwise
+    /// Rotation of selected objects
     static TOOL_ACTION rotateCw;
-
-    /// Rotation of selected objects counter-clockwise
     static TOOL_ACTION rotateCcw;
 
     /// Flipping of selected objects
@@ -101,11 +113,11 @@ public:
     /// Mirroring of selected items
     static TOOL_ACTION mirror;
 
+    /// Updates selected tracks & vias to the current track & via dimensions
+    static TOOL_ACTION changeTrackWidth;
+
     /// Activation of the edit tool
     static TOOL_ACTION properties;
-
-    /// Modified selection notification
-    static TOOL_ACTION selectionModified;
 
     /// Activation of the exact move tool
     static TOOL_ACTION moveExact;
@@ -116,63 +128,40 @@ public:
     /// Activation of the duplication tool with incrementing (e.g. pad number)
     static TOOL_ACTION duplicateIncrement;
 
-    /// Exchange footprints of modules
-    static TOOL_ACTION exchangeFootprints;
-
     /// Deleting a BOARD_ITEM
     static TOOL_ACTION remove;
-    static TOOL_ACTION removeAlt;
+    static TOOL_ACTION deleteFull;
 
+    static TOOL_ACTION selectLayerPair;
+
+    /// Break a single track into two segments at the cursor
     static TOOL_ACTION breakTrack;
+
+    /// Breaks track when router is not activated
+    static TOOL_ACTION inlineBreakTrack;
+
     static TOOL_ACTION drag45Degree;
     static TOOL_ACTION dragFreeAngle;
 
 
-    // Drawing Tool
-    /// Activation of the drawing tool (line)
+    // Drawing Tool Activations
     static TOOL_ACTION drawLine;
-
-    // Activation of the drawing tool (graphic polygons)
-    static TOOL_ACTION drawGraphicPolygon;
-
-    /// Activation of the drawing tool (circle)
+    static TOOL_ACTION drawPolygon;
     static TOOL_ACTION drawCircle;
-
-    /// Activation of the drawing tool (arc)
     static TOOL_ACTION drawArc;
-
-    /// Activation of the drawing tool (text)
     static TOOL_ACTION placeText;
-
-    /// Activation of the drawing tool (dimension)
     static TOOL_ACTION drawDimension;
-
-    /// Activation of the drawing tool (drawing a ZONE)
     static TOOL_ACTION drawZone;
-
-    /// Activation of the drawing tool (drawing a VIA)
     static TOOL_ACTION drawVia;
-
-    /// Activation of the drawing tool (drawing a keepout area)
     static TOOL_ACTION drawZoneKeepout;
-
-    /// Activation of the drawing tool (drawing a ZONE cutout)
     static TOOL_ACTION drawZoneCutout;
-
-    /// Activation of the drawing tool (drawing a similar ZONE to another one)
     static TOOL_ACTION drawSimilarZone;
-
-    /// Activation of the drawing tool (placing a TARGET)
     static TOOL_ACTION placeTarget;
-
-    /// Activation of the drawing tool (placing a MODULE)
     static TOOL_ACTION placeModule;
-
-    /// Activation of the drawing tool (placing a drawing from DXF file)
-    static TOOL_ACTION placeDXF;
-
-    /// Activation of the drawing tool (placing the footprint anchor)
+    static TOOL_ACTION placeImportedGraphics;
     static TOOL_ACTION setAnchor;
+    static TOOL_ACTION deleteLastPoint;
+    static TOOL_ACTION closeZoneOutline;
 
     /// Increase width of currently drawn line
     static TOOL_ACTION incWidth;
@@ -186,23 +175,25 @@ public:
     // Push and Shove Router Tool
 
     /// Activation of the Push and Shove router
-    static TOOL_ACTION routerActivateSingle;
+    static TOOL_ACTION routeSingleTrack;
 
     /// Activation of the Push and Shove router (differential pair mode)
-    static TOOL_ACTION routerActivateDiffPair;
+    static TOOL_ACTION routeDiffPair;
 
     /// Activation of the Push and Shove router (tune single line mode)
-    static TOOL_ACTION routerActivateTuneSingleTrace;
+    static TOOL_ACTION routerTuneSingleTrace;
 
     /// Activation of the Push and Shove router (diff pair tuning mode)
-    static TOOL_ACTION routerActivateTuneDiffPair;
+    static TOOL_ACTION routerTuneDiffPair;
 
     /// Activation of the Push and Shove router (skew tuning mode)
-    static TOOL_ACTION routerActivateTuneDiffPairSkew;
+    static TOOL_ACTION routerTuneDiffPairSkew;
+
+    static TOOL_ACTION routerUndoLastSegment;
 
     /// Activation of the Push and Shove settings dialogs
-    static TOOL_ACTION routerActivateSettingsDialog;
-    static TOOL_ACTION routerActivateDpDimensionsDialog;
+    static TOOL_ACTION routerSettingsDialog;
+    static TOOL_ACTION routerDiffPairDialog;
 
 
     /// Activation of the Push and Shove router (inline dragging mode)
@@ -216,22 +207,13 @@ public:
     static TOOL_ACTION pointEditorRemoveCorner;
 
     // Placement tool
-    /// Align items to the top edge of selection bounding box
     static TOOL_ACTION alignTop;
-
-    /// Align items to the bottom edge of selection bounding box
     static TOOL_ACTION alignBottom;
-
-    /// Align items to the left edge of selection bounding box
     static TOOL_ACTION alignLeft;
-
-    /// Align items to the right edge of selection bounding box
     static TOOL_ACTION alignRight;
-
-    /// Distributes items evenly along the horizontal axis
+    static TOOL_ACTION alignCenterX;
+    static TOOL_ACTION alignCenterY;
     static TOOL_ACTION distributeHorizontally;
-
-    /// Distributes items evenly along the vertical axis
     static TOOL_ACTION distributeVertically;
 
     // Position Relative Tool
@@ -242,15 +224,16 @@ public:
     static TOOL_ACTION selectpositionRelativeItem;
 
     // Display modes
+    static TOOL_ACTION showRatsnest;
+    static TOOL_ACTION ratsnestLineMode;
     static TOOL_ACTION trackDisplayMode;
     static TOOL_ACTION padDisplayMode;
     static TOOL_ACTION viaDisplayMode;
+    static TOOL_ACTION graphicDisplayMode;
     static TOOL_ACTION zoneDisplayEnable;
     static TOOL_ACTION zoneDisplayDisable;
     static TOOL_ACTION zoneDisplayOutlines;
-    static TOOL_ACTION highContrastMode;
-    static TOOL_ACTION highContrastInc;
-    static TOOL_ACTION highContrastDec;
+    static TOOL_ACTION zoneDisplayToggle;
 
     // Layer control
     static TOOL_ACTION layerTop;
@@ -260,6 +243,30 @@ public:
     static TOOL_ACTION layerInner4;
     static TOOL_ACTION layerInner5;
     static TOOL_ACTION layerInner6;
+    static TOOL_ACTION layerInner7;
+    static TOOL_ACTION layerInner8;
+    static TOOL_ACTION layerInner9;
+    static TOOL_ACTION layerInner10;
+    static TOOL_ACTION layerInner11;
+    static TOOL_ACTION layerInner12;
+    static TOOL_ACTION layerInner13;
+    static TOOL_ACTION layerInner14;
+    static TOOL_ACTION layerInner15;
+    static TOOL_ACTION layerInner16;
+    static TOOL_ACTION layerInner17;
+    static TOOL_ACTION layerInner18;
+    static TOOL_ACTION layerInner19;
+    static TOOL_ACTION layerInner20;
+    static TOOL_ACTION layerInner21;
+    static TOOL_ACTION layerInner22;
+    static TOOL_ACTION layerInner23;
+    static TOOL_ACTION layerInner24;
+    static TOOL_ACTION layerInner25;
+    static TOOL_ACTION layerInner26;
+    static TOOL_ACTION layerInner27;
+    static TOOL_ACTION layerInner28;
+    static TOOL_ACTION layerInner29;
+    static TOOL_ACTION layerInner30;
     static TOOL_ACTION layerBottom;
     static TOOL_ACTION layerNext;
     static TOOL_ACTION layerPrev;
@@ -268,6 +275,8 @@ public:
     static TOOL_ACTION layerToggle;
 
     static TOOL_ACTION layerChanged;        // notification
+
+    static TOOL_ACTION flipBoard;
 
     // Track & via size control
     static TOOL_ACTION trackWidthInc;
@@ -287,7 +296,65 @@ public:
     /// Duplicate zone onto another layer
     static TOOL_ACTION zoneDuplicate;
 
+    // Global edit tool
+    static TOOL_ACTION boardSetup;
+    static TOOL_ACTION editTracksAndVias;
+    static TOOL_ACTION editTextAndGraphics;
+    static TOOL_ACTION globalDeletions;
+    static TOOL_ACTION cleanupTracksAndVias;
+    static TOOL_ACTION updateFootprint;
+    static TOOL_ACTION updateFootprints;
+    static TOOL_ACTION changeFootprint;
+    static TOOL_ACTION changeFootprints;
+    static TOOL_ACTION swapLayers;
+
+    static TOOL_ACTION importNetlist;
+
+    static TOOL_ACTION importSpecctraSession;
+    static TOOL_ACTION exportSpecctraDSN;
+
+    static TOOL_ACTION generateGerbers;
+    static TOOL_ACTION generateDrillFiles;
+    static TOOL_ACTION generatePosFile;
+    static TOOL_ACTION generateReportFile;
+    static TOOL_ACTION generateD356File;
+    static TOOL_ACTION generateBOM;
+
+    static TOOL_ACTION listNets;
+    static TOOL_ACTION runDRC;
+
+    static TOOL_ACTION editFootprintInFpEditor;
+    static TOOL_ACTION showLayersManager;
+    static TOOL_ACTION showMicrowaveToolbar;
+    static TOOL_ACTION showPythonConsole;
+
     // Module editor tools
+
+    static TOOL_ACTION toggleFootprintTree;
+
+    // We don't use ACTION::new here because we need to distinguish between New Library
+    // and New Footprint.
+    static TOOL_ACTION newFootprint;
+
+    // Create a new footprint using the Footprint Wizard
+    static TOOL_ACTION createFootprint;
+
+    // We don't use ACTION::save here because we need to distinguish between saving to
+    // the library and saving to the board (which have different tooltips and icons).
+    static TOOL_ACTION saveToBoard;
+    static TOOL_ACTION saveToLibrary;
+
+    static TOOL_ACTION editFootprint;
+    static TOOL_ACTION deleteFootprint;
+    static TOOL_ACTION cutFootprint;
+    static TOOL_ACTION copyFootprint;
+    static TOOL_ACTION pasteFootprint;
+    static TOOL_ACTION importFootprint;
+    static TOOL_ACTION exportFootprint;
+
+    static TOOL_ACTION footprintProperties;
+    static TOOL_ACTION defaultPadProperties;
+
     /// Activation of the drawing tool (placing a PAD)
     static TOOL_ACTION placePad;
 
@@ -300,26 +367,18 @@ public:
     /// Tool for creating an array of objects
     static TOOL_ACTION createArray;
 
-    /// Copy selected items to clipboard
-    static TOOL_ACTION copyToClipboard;
-
-    /// Paste from clipboard
-    static TOOL_ACTION pasteFromClipboard;
-
-    /// Paste from clipboard
-    static TOOL_ACTION cutToClipboard;
-
     /// Display module edges as outlines
     static TOOL_ACTION moduleEdgeOutlines;
 
-    /// Display module texts as outlines
+    /// Display module texts as lines
     static TOOL_ACTION moduleTextOutlines;
 
     // Pad tools
+
     /// Copy the selected pad's settings to the board design settings
     static TOOL_ACTION copyPadSettings;
 
-    /// Copy the pad settings in the board design settings to the selected pad
+    /// Copy the default pad settings to the selected pad
     static TOOL_ACTION applyPadSettings;
 
     /// Copy the current pad's settings to other pads in the module or on the board
@@ -336,26 +395,6 @@ public:
 
     static TOOL_ACTION microwaveCreateLine;
 
-    /// Cursor control with keyboard
-    static TOOL_ACTION cursorUp;
-    static TOOL_ACTION cursorDown;
-    static TOOL_ACTION cursorLeft;
-    static TOOL_ACTION cursorRight;
-
-    static TOOL_ACTION cursorUpFast;
-    static TOOL_ACTION cursorDownFast;
-    static TOOL_ACTION cursorLeftFast;
-    static TOOL_ACTION cursorRightFast;
-
-    static TOOL_ACTION cursorClick;
-    static TOOL_ACTION cursorDblClick;
-
-    // Panning with keyboard
-    static TOOL_ACTION panUp;
-    static TOOL_ACTION panDown;
-    static TOOL_ACTION panLeft;
-    static TOOL_ACTION panRight;
-
     // Locking
     static TOOL_ACTION toggleLock;
     static TOOL_ACTION lock;
@@ -364,37 +403,35 @@ public:
     // Miscellaneous
     static TOOL_ACTION selectionTool;
     static TOOL_ACTION pickerTool;
-    static TOOL_ACTION resetCoords;
     static TOOL_ACTION measureTool;
-    static TOOL_ACTION switchCursor;
-    static TOOL_ACTION switchUnits;
-    static TOOL_ACTION deleteItemCursor;
+    static TOOL_ACTION updateUnits;
+    static TOOL_ACTION clearHighlight;
     static TOOL_ACTION highlightNet;
-    static TOOL_ACTION highlightNetCursor;
+    static TOOL_ACTION toggleLastNetHighlight;
+    static TOOL_ACTION highlightNetTool;
+    static TOOL_ACTION highlightNetSelection;
+    static TOOL_ACTION highlightItem;
     static TOOL_ACTION drillOrigin;
-    static TOOL_ACTION crossProbeSchToPcb;
     static TOOL_ACTION appendBoard;
-    static TOOL_ACTION showHelp;
-    static TOOL_ACTION showLocalRatsnest;
-    static TOOL_ACTION toBeDone;
+    static TOOL_ACTION showEeschema;
+    static TOOL_ACTION boardStatistics;
+
+    // Ratsnest
+    static TOOL_ACTION localRatsnestTool;
+    static TOOL_ACTION hideDynamicRatsnest;
+    static TOOL_ACTION updateLocalRatsnest;
 
     /// Find an item
     static TOOL_ACTION find;
 
     /// Find an item and start moving
-    static TOOL_ACTION findMove;
+    static TOOL_ACTION getAndPlace;
 
-    static TOOL_ACTION editFootprintInFpEditor;
-    static TOOL_ACTION copyPadToSettings;
-    static TOOL_ACTION copySettingsToPads;
-    static TOOL_ACTION globalEditPads;
-
+    static TOOL_ACTION autoplaceOffboardComponents;
+    static TOOL_ACTION autoplaceSelectedComponents;
 
     ///> @copydoc COMMON_ACTIONS::TranslateLegacyId()
-    virtual boost::optional<TOOL_EVENT> TranslateLegacyId( int aId ) override;
-
-    ///> @copydoc COMMON_ACTIONS::RegisterAllTools()
-    virtual void RegisterAllTools( TOOL_MANAGER* aToolManager ) override;
+    virtual OPT<TOOL_EVENT> TranslateLegacyId( int aId ) override;
 };
 
 #endif

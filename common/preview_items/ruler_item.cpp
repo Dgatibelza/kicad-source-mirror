@@ -26,8 +26,8 @@
 #include <preview_items/preview_utils.h>
 #include <gal/graphics_abstraction_layer.h>
 #include <layers_id_colors_and_visibility.h>
+#include <painter.h>
 #include <view/view.h>
-#include <pcb_painter.h>
 
 #include <base_units.h>
 #include <common.h>
@@ -39,22 +39,20 @@ static const double midTickLengthFactor = 1.5;
 static const double majorTickLengthFactor = 2.5;
 
 
-static void drawCursorStrings( KIGFX::VIEW* aView, const VECTOR2D& aCursor,
-    const VECTOR2D& aRulerVec )
+static void drawCursorStrings(
+        KIGFX::VIEW* aView, const VECTOR2D& aCursor, const VECTOR2D& aRulerVec, EDA_UNITS aUnits )
 {
     // draw the cursor labels
     std::vector<wxString> cursorStrings;
 
-    cursorStrings.push_back( DimensionLabel( "r", aRulerVec.EuclideanNorm(), g_UserUnit ) );
+    cursorStrings.push_back( DimensionLabel( "x", aRulerVec.x, aUnits ) );
+    cursorStrings.push_back( DimensionLabel( "y", aRulerVec.y, aUnits ) );
+
+    cursorStrings.push_back( DimensionLabel( "r", aRulerVec.EuclideanNorm(), aUnits ) );
 
     double degs = RAD2DECIDEG( -aRulerVec.Angle() );
-    cursorStrings.push_back( DimensionLabel( "θ", degs, DEGREES ) );
-
-    for( auto& str: cursorStrings )
-    {
-        // FIXME: remove spaces that choke OpenGL lp:1668455
-        str.erase( std::remove( str.begin(), str.end(), ' ' ), str.end() );
-    }
+    cursorStrings.push_back(
+            DimensionLabel( wxString::FromUTF8( "θ" ), degs, EDA_UNITS::DEGREES ) );
 
     auto temp = aRulerVec;
     DrawTextNextToCursor( aView, aCursor, -temp, cursorStrings );
@@ -73,7 +71,7 @@ struct TICK_FORMAT
 };
 
 
-static TICK_FORMAT getTickFormatForScale( double aScale, double& aTickSpace )
+static TICK_FORMAT getTickFormatForScale( double aScale, double& aTickSpace, EDA_UNITS aUnits )
 {
     // simple 1/2/5 scales per decade
     static std::vector<TICK_FORMAT> tickFormats =
@@ -87,7 +85,7 @@ static TICK_FORMAT getTickFormatForScale( double aScale, double& aTickSpace )
     aTickSpace = 1;
 
     // convert to a round (mod-10) number of mils
-    if( g_UserUnit == INCHES )
+    if( aUnits == EDA_UNITS::INCHES )
     {
         aTickSpace *= 2.54;
     }
@@ -118,14 +116,14 @@ static TICK_FORMAT getTickFormatForScale( double aScale, double& aTickSpace )
  * @param aLine line vector
  * @param aMinorTickLen length of minor ticks in IU
  */
-void drawTicksAlongLine( KIGFX::VIEW *aView, const VECTOR2D& aOrigin,
-        const VECTOR2D& aLine, double aMinorTickLen )
+void drawTicksAlongLine( KIGFX::VIEW* aView, const VECTOR2D& aOrigin, const VECTOR2D& aLine,
+        double aMinorTickLen, EDA_UNITS aUnits )
 {
     VECTOR2D tickLine = aLine.Rotate( -M_PI_2 );
     auto gal = aView->GetGAL();
     double tickSpace;
-    TICK_FORMAT tickF = getTickFormatForScale( gal->GetWorldScale(), tickSpace );
-    auto rs = static_cast<KIGFX::PCB_RENDER_SETTINGS*>( aView->GetPainter()->GetSettings() );
+    TICK_FORMAT tickF = getTickFormatForScale( gal->GetWorldScale(), tickSpace, aUnits );
+    auto rs = aView->GetPainter()->GetSettings();
 
     // number of ticks in whole ruler
     int numTicks = (int) std::ceil( aLine.EuclideanNorm() / tickSpace );
@@ -170,11 +168,7 @@ void drawTicksAlongLine( KIGFX::VIEW *aView, const VECTOR2D& aOrigin,
 
         if( drawLabel )
         {
-            wxString label = DimensionLabel( "", tickSpace * i, g_UserUnit );
-
-            // FIXME: spaces choke OpenGL lp:1668455
-            label.erase( std::remove( label.begin(), label.end(), ' ' ), label.end() );
-
+            wxString label = DimensionLabel( "", tickSpace * i, aUnits );
             gal->BitmapText( label, tickPos + labelOffset, labelAngle );
         }
     }
@@ -205,10 +199,12 @@ void drawBacksideTicks( KIGFX::GAL& aGal, const VECTOR2D& aOrigin,
 }
 
 
-RULER_ITEM::RULER_ITEM( const TWO_POINT_GEOMETRY_MANAGER& aGeomMgr ):
-    EDA_ITEM( NOT_USED ),    // Never added to anything - just a preview
-    m_geomMgr( aGeomMgr )
-{}
+RULER_ITEM::RULER_ITEM( const TWO_POINT_GEOMETRY_MANAGER& aGeomMgr, EDA_UNITS userUnits )
+        : EDA_ITEM( NOT_USED ), // Never added to anything - just a preview
+          m_geomMgr( aGeomMgr ),
+          m_userUnits( userUnits )
+{
+}
 
 
 const BOX2I RULER_ITEM::ViewBBox() const
@@ -232,10 +228,10 @@ void RULER_ITEM::ViewGetLayers( int aLayers[], int& aCount ) const
 void RULER_ITEM::ViewDraw( int aLayer, KIGFX::VIEW* aView ) const
 {
     auto& gal = *aView->GetGAL();
-    auto rs = static_cast<KIGFX::RENDER_SETTINGS*>( aView->GetPainter()->GetSettings() );
+    auto rs = aView->GetPainter()->GetSettings();
 
-    const auto origin = m_geomMgr.GetOrigin();
-    const auto end = m_geomMgr.GetEnd();
+    VECTOR2D origin = m_geomMgr.GetOrigin();
+    VECTOR2D end = m_geomMgr.GetEnd();
 
     gal.SetLineWidth( 1.0 );
     gal.SetIsStroke( true );
@@ -252,17 +248,17 @@ void RULER_ITEM::ViewDraw( int aLayer, KIGFX::VIEW* aView ) const
     VECTOR2D rulerVec( end - origin );
 
     // constant text size on screen
-    SetConstantGlyphHeight( gal, 12.0 );
+    SetConstantGlyphHeight( gal, 14.0 );
 
-    drawCursorStrings( aView, end, rulerVec );
+    drawCursorStrings( aView, end, rulerVec, m_userUnits );
 
     // tick label size
-    SetConstantGlyphHeight( gal, 10.0 );
+    SetConstantGlyphHeight( gal, 12.0 );
 
     // basic tick size
     const double minorTickLen = 5.0 / gal.GetWorldScale();
 
-    drawTicksAlongLine( aView, origin, rulerVec, minorTickLen );
+    drawTicksAlongLine( aView, origin, rulerVec, minorTickLen, m_userUnits );
 
     gal.SetStrokeColor( rs->GetLayerColor( LAYER_AUX_ITEMS ).WithAlpha( PreviewOverlayDeemphAlpha( true ) ) );
     drawBacksideTicks( gal, origin, rulerVec, minorTickLen * majorTickLengthFactor, 2 );

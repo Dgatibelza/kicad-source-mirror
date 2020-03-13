@@ -25,9 +25,10 @@
 #ifndef BASE_EDIT_FRAME_H
 #define BASE_EDIT_FRAME_H
 
-#include <wxBasePcbFrame.h>
+#include <pcb_base_frame.h>
 
 class BOARD_ITEM_CONTAINER;
+class PCB_LAYER_WIDGET;
 
 /**
  * Common, abstract interface for edit frames.
@@ -37,12 +38,9 @@ class PCB_BASE_EDIT_FRAME : public PCB_BASE_FRAME
 public:
     PCB_BASE_EDIT_FRAME( KIWAY* aKiway, wxWindow* aParent, FRAME_T aFrameType,
                 const wxString& aTitle, const wxPoint& aPos, const wxSize& aSize,
-                long aStyle, const wxString& aFrameName ) :
-    PCB_BASE_FRAME( aKiway, aParent, aFrameType, aTitle, aPos, aSize, aStyle, aFrameName ),
-    m_rotationAngle( 900 ), m_undoRedoBlocked( false )
-    {}
+                long aStyle, const wxString& aFrameName );
 
-    virtual ~PCB_BASE_EDIT_FRAME() {};
+    virtual ~PCB_BASE_EDIT_FRAME();
 
     /**
      * Function GetModel()
@@ -64,12 +62,20 @@ public:
     wxString CreateNewLibrary(const wxString& aLibName = wxEmptyString);
 
     /**
+     * Function AddLibrary
+     * Add an existing library to either the global or project library table.
+     * @param aFileName the library to add; a file open dialog will be displayed if empty.
+     * @return true if successfully added
+     */
+    bool AddLibrary(const wxString& aLibName = wxEmptyString);
+
+    /**
      * Function OnEditItemRequest
      * Install the corresponding dialog editor for the given item
      * @param aDC = the current device context
      * @param aItem = a pointer to the BOARD_ITEM to edit
      */
-    virtual void OnEditItemRequest( wxDC* aDC, BOARD_ITEM* aItem ) = 0;
+    virtual void OnEditItemRequest( BOARD_ITEM* aItem ) = 0;
 
     // Undo buffer handling
 
@@ -96,9 +102,10 @@ public:
      */
     void SaveCopyInUndoList( const PICKED_ITEMS_LIST& aItemsList, UNDO_REDO_T aTypeCommand,
                             const wxPoint& aTransformPoint = wxPoint( 0, 0 ) ) override;
+
     /**
      * Function RestoreCopyFromRedoList
-     *  Redo the last edition:
+     *  Redo the last edit:
      *  - Save the current board in Undo list
      *  - Get an old version of the board from Redo list
      *  @return none
@@ -107,7 +114,7 @@ public:
 
     /**
      * Function RestoreCopyFromUndoList
-     *  Undo the last edition:
+     *  Undo the last edit:
      *  - Save the current board in Redo list
      *  - Get an old version of the board from Undo list
      *  @return none
@@ -115,14 +122,19 @@ public:
     void RestoreCopyFromUndoList( wxCommandEvent& aEvent );
 
     /**
+     * Performs an undo of the last edit WITHOUT logging a corresponding redo.  Used to cancel
+     * an in-progress operation.
+     */
+    void RollbackFromUndo();
+
+    /**
      * Function PutDataInPreviousState
      * Used in undo or redo command.
      * Put data pointed by List in the previous state, i.e. the state memorized by List
      * @param aList = a PICKED_ITEMS_LIST pointer to the list of items to undo/redo
      * @param aRedoCommand = a bool: true for redo, false for undo
-     * @param aRebuildRatsnet = a bool: true to rebuild ratsnest (normal use), false
-     * to just retrieve last state (used in abort commands that do not need to
-     * rebuild ratsnest)
+     * @param aRebuildRatsnet = a bool: true to rebuild ratsnest (normal use), false to just
+     * retrieve last state (used in abort commands that do not need to rebuild ratsnest)
      */
     void PutDataInPreviousState( PICKED_ITEMS_LIST* aList,
                                  bool               aRedoCommand,
@@ -147,6 +159,15 @@ public:
     }
 
     /**
+     * Function SetGridVisibility()
+     *
+     * Override this function in the PCB_BASE_EDIT_FRAME to refill the layer widget
+     *
+     * @param aVisible = true if the grid must be shown
+     */
+    void SetGridVisibility( bool aVisible ) override;
+
+    /**
      * Function GetRotationAngle()
      * Returns the angle used for rotate operations.
      */
@@ -158,11 +179,16 @@ public:
      */
     void SetRotationAngle( int aRotationAngle );
 
+    void InstallTextOptionsFrame( BOARD_ITEM* aText );
+    void InstallGraphicItemPropertiesDialog( BOARD_ITEM* aItem );
+
     ///> @copydoc EDA_DRAW_FRAME::UseGalCanvas()
-    void UseGalCanvas( bool aEnable ) override;
+    void ActivateGalCanvas() override;
 
     ///> @copydoc PCB_BASE_FRAME::SetBoard()
     virtual void SetBoard( BOARD* aBoard ) override;
+
+    void OnGridSettings( wxCommandEvent& aEvent ) override;
 
 protected:
     /// User defined rotation angle (in tenths of a degree).
@@ -171,36 +197,10 @@ protected:
     /// Is undo/redo operation currently blocked?
     bool m_undoRedoBlocked;
 
-    /**
-     * Function createArray
-     * Create an array of the selected item (invokes the dialogue)
-     * This function is shared between pcbnew and modedit, as it is virtually
-     * the same
-     */
-    void createArray();
+    void unitsChangeRefresh() override;
 
-    /**
-     * Function duplicateItem
-     * Duplicate the specified item
-     * This function is shared between pcbnew and modedit, as it is virtually
-     * the same
-     * @param aItem the item to duplicate
-     * @param aIncrement (has meaning only for pads in footprint editor):
-     * increment pad name if appropriate
-     */
-    void duplicateItem( BOARD_ITEM* aItem, bool aIncrement );
-
-    /**
-     * Function duplicateItems
-     * Find and duplicate the currently selected items
-     * @param aIncrement (has meaning only for pads in footprint editor):
-     * increment pad name if appropriate
-     *
-     * @note The implementer should find the selected item (and do processing
-     * like finding parents when relevant, and then call
-     * duplicateItem(BOARD_ITEM*, bool) above
-     */
-    virtual void duplicateItems( bool aIncrement ) = 0;
+    /// Layer manager. It is the responsibility of the child frames to instantiate this
+    PCB_LAYER_WIDGET* m_Layers;
 };
 
 #endif

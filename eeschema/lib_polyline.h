@@ -2,7 +2,7 @@
  * This program source code file is part of KiCad, a free EDA CAD application.
  *
  * Copyright (C) 2004 Jean-Pierre Charras, jaen-pierre.charras@gipsa-lab.inpg.com
- * Copyright (C) 2004-2011 KiCad Developers, see change_log.txt for contributors.
+ * Copyright (C) 2004-2020 KiCad Developers, see change_log.txt for contributors.
  *
  * This program is free software; you can redistribute it and/or
  * modify it under the terms of the GNU General Public License
@@ -22,14 +22,10 @@
  * 51 Franklin Street, Fifth Floor, Boston, MA  02110-1301, USA
  */
 
-/**
- * @file lib_polyline.h
- */
-
 #ifndef _LIB_POLYLINE_H_
 #define _LIB_POLYLINE_H_
 
-#include <lib_draw_item.h>
+#include <lib_item.h>
 
 
 class LIB_POLYLINE : public LIB_ITEM
@@ -37,13 +33,8 @@ class LIB_POLYLINE : public LIB_ITEM
     int m_Width;                              // Line width
     std::vector<wxPoint> m_PolyPoints;        // list of points (>= 2)
 
-    int m_ModifyIndex;                        // Index of the polyline point to modify
-
-    void drawGraphic( EDA_DRAW_PANEL* aPanel, wxDC* aDC, const wxPoint& aOffset,
-                      COLOR4D aColor, GR_DRAWMODE aDrawMode, void* aData,
-                      const TRANSFORM& aTransform ) override;
-
-    void calcEdit( const wxPoint& aPosition ) override;
+    void print( wxDC* aDC, const wxPoint& aOffset, void* aData,
+                const TRANSFORM& aTransform ) override;
 
 public:
     LIB_POLYLINE( LIB_PART * aParent );
@@ -57,61 +48,63 @@ public:
         return wxT( "LIB_POLYLINE" );
     }
 
+    wxString GetTypeName() override
+    {
+        return _( "PolyLine" );
+    }
 
-    bool Save( OUTPUTFORMATTER& aFormatter ) override;
-
-    bool Load( LINE_READER& aLineReader, wxString& aErrorMsg ) override;
-
+    void ClearPoints() { m_PolyPoints.clear(); }
+    void Reserve( size_t aPointCount ) { m_PolyPoints.reserve( aPointCount ); }
     void AddPoint( const wxPoint& aPoint );
+
+    const std::vector< wxPoint >& GetPolyPoints() const { return m_PolyPoints; }
 
     /**
      * Delete the segment at \a aPosition.
      */
     void DeleteSegment( const wxPoint aPosition );
 
+    void AddCorner( const wxPoint& aPosition );
+    void RemoveCorner( int aIdx );
+
     /**
      * @return the number of corners
      */
     unsigned GetCornerCount() const { return m_PolyPoints.size(); }
 
-    bool HitTest( const wxPoint& aPosition ) const override;
-
-    bool HitTest( const wxPoint &aPosition, int aThreshold, const TRANSFORM& aTransform ) const override;
+    bool HitTest( const wxPoint& aPosition, int aAccuracy = 0 ) const override;
+    bool HitTest( const EDA_RECT& aRect, bool aContained, int aAccuracy = 0 ) const override;
 
     const EDA_RECT GetBoundingBox() const override;
 
     int GetPenSize( ) const override;
 
-    void GetMsgPanelInfo( std::vector< MSG_PANEL_ITEM >& aList ) override;
+    void GetMsgPanelInfo( EDA_UNITS aUnits, std::vector<MSG_PANEL_ITEM>& aList ) override;
 
-    void BeginEdit( STATUS_FLAGS aEditMode, const wxPoint aStartPoint = wxPoint( 0, 0 ) ) override;
-
+    void BeginEdit( const wxPoint aStartPoint ) override;
+    void CalcEdit( const wxPoint& aPosition ) override;
     bool ContinueEdit( const wxPoint aNextPoint ) override;
+    void EndEdit() override;
 
-    void EndEdit( const wxPoint& aPosition, bool aAbort = false ) override;
-
-    void SetOffset( const wxPoint& aOffset ) override;
+    void Offset( const wxPoint& aOffset ) override;
 
     bool Inside( EDA_RECT& aRect ) const override;
 
-    void Move( const wxPoint& aPosition ) override;
+    void MoveTo( const wxPoint& aPosition ) override;
 
     wxPoint GetPosition() const override { return m_PolyPoints[0]; }
 
     void MirrorHorizontal( const wxPoint& aCenter ) override;
-
     void MirrorVertical( const wxPoint& aCenter ) override;
-
     void Rotate( const wxPoint& aCenter, bool aRotateCCW = true ) override;
 
     void Plot( PLOTTER* aPlotter, const wxPoint& aOffset, bool aFill,
                const TRANSFORM& aTransform ) override;
 
     int GetWidth() const override { return m_Width; }
-
     void SetWidth( int aWidth ) override { m_Width = aWidth; }
 
-    wxString GetSelectMenuText() const override;
+    wxString GetSelectMenuText( EDA_UNITS aUnits ) const override;
 
     BITMAP_DEF GetMenuImage() const override;
 
@@ -126,7 +119,8 @@ private:
      *      - Line segment point horizontal (X) position.
      *      - Line segment point vertical (Y) position.
      */
-    int compare( const LIB_ITEM& aOther ) const override;
+    int compare( const LIB_ITEM& aOther,
+            LIB_ITEM::COMPARE_FLAGS aCompareFlags = LIB_ITEM::COMPARE_FLAGS::NORMAL ) const override;
 };
 
 

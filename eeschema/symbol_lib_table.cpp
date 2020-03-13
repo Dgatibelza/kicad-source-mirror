@@ -1,8 +1,8 @@
 /*
  * This program source code file is part of KiCad, a free EDA CAD application.
  *
- * Copyright (C) 2016-2017 Wayne Stambaugh <stambaughw@gmail.com>
- * Copyright (C) 2016-2017 KiCad Developers, see AUTHORS.txt for contributors.
+ * Copyright (C) 2016-2019 Wayne Stambaugh <stambaughw@gmail.com>
+ * Copyright (C) 2016-2019 KiCad Developers, see AUTHORS.txt for contributors.
  *
  * This program is free software; you can redistribute it and/or
  * modify it under the terms of the GNU General Public License
@@ -25,10 +25,13 @@
 
 #include <fctsys.h>
 #include <common.h>
-#include <kiface_i.h>
 #include <macros.h>
 #include <lib_id.h>
 #include <lib_table_lexer.h>
+#include <pgm_base.h>
+#include <search_stack.h>
+#include <settings/settings_manager.h>
+#include <systemdirsappend.h>
 #include <symbol_lib_table.h>
 #include <class_libentry.h>
 
@@ -38,6 +41,11 @@ using namespace LIB_TABLE_T;
 
 
 static const wxString global_tbl_name( "sym-lib-table" );
+
+
+const char* SYMBOL_LIB_TABLE::PropPowerSymsOnly = "pwr_sym_only";
+const char* SYMBOL_LIB_TABLE::PropNonPowerSymsOnly = "non_pwr_sym_only";
+int SYMBOL_LIB_TABLE::m_modifyHash = 1;     // starts at 1 and goes up
 
 
 /// The global symbol library table.  This is not dynamically allocated because
@@ -57,7 +65,7 @@ void SYMBOL_LIB_TABLE_ROW::SetType( const wxString& aType )
     type = SCH_IO_MGR::EnumFromStr( aType );
 
     if( SCH_IO_MGR::SCH_FILE_T( -1 ) == type )
-        type = SCH_IO_MGR::SCH_KICAD;
+        type = SCH_IO_MGR::SCH_LEGACY;
 }
 
 
@@ -119,10 +127,11 @@ void SYMBOL_LIB_TABLE::Parse( LIB_TABLE_LEXER* in )
 
         // After (name), remaining (lib) elements are order independent, and in
         // some cases optional.
-        bool    sawType = false;
-        bool    sawOpts = false;
-        bool    sawDesc = false;
-        bool    sawUri  = false;
+        bool    sawType     = false;
+        bool    sawOpts     = false;
+        bool    sawDesc     = false;
+        bool    sawUri      = false;
+        bool    sawDisabled = false;
 
         while( ( tok = in->NextTok() ) != T_RIGHT )
         {
@@ -168,6 +177,13 @@ void SYMBOL_LIB_TABLE::Parse( LIB_TABLE_LEXER* in )
                 row->SetDescr( in->FromUTF8() );
                 break;
 
+            case T_disabled:
+                if( sawDisabled )
+                    in->Duplicate( tok );
+                sawDisabled = true;
+                row->SetEnabled( false );
+                break;
+
             default:
                 in->Unexpected( tok );
             }
@@ -194,7 +210,7 @@ void SYMBOL_LIB_TABLE::Parse( LIB_TABLE_LEXER* in )
             delete tmp;     // The table did not take ownership of the row.
 
             wxString msg = wxString::Format(
-                                _( "Duplicate library nickname '%s' found in symbol library "
+                                _( "Duplicate library nickname \"%s\" found in symbol library "
                                    "table file line %d" ), GetChars( nickname ), lineNum );
 
             if( !errMsg.IsEmpty() )
@@ -214,32 +230,65 @@ void SYMBOL_LIB_TABLE::Format( OUTPUTFORMATTER* aOutput, int aIndentLevel ) cons
     aOutput->Print( aIndentLevel, "(sym_lib_table\n" );
 
     for( LIB_TABLE_ROWS_CITER it = rows.begin();  it != rows.end();  ++it )
+    {
         it->Format( aOutput, aIndentLevel+1 );
+    }
 
     aOutput->Print( aIndentLevel, ")\n" );
 }
 
 
-void SYMBOL_LIB_TABLE::EnumerateSymbolLib( const wxString& aNickname, wxArrayString& aAliasNames )
+int SYMBOL_LIB_TABLE::GetModifyHash()
 {
-    const SYMBOL_LIB_TABLE_ROW* row = FindRow( aNickname );
-    wxASSERT( (SCH_PLUGIN*) row->plugin );
-    row->plugin->EnumerateSymbolLib( aAliasNames, row->GetFullURI( true ), row->GetProperties() );
+    int                     hash = 0;
+    std::vector< wxString > libNames = GetLogicalLibs();
+
+    for( const auto& libName : libNames )
+    {
+        const SYMBOL_LIB_TABLE_ROW* row = FindRow( libName );
+
+        if( !row || !row->plugin )
+        {
+            wxFAIL;
+            continue;
+        }
+
+        hash += row->plugin->GetModifyHash();
+    }
+
+    hash += m_modifyHash;
+
+    return hash;
 }
 
 
-const SYMBOL_LIB_TABLE_ROW* SYMBOL_LIB_TABLE::FindRow( const wxString& aNickname )
+void SYMBOL_LIB_TABLE::EnumerateSymbolLib( const wxString& aNickname, wxArrayString& aAliasNames,
+                                           bool aPowerSymbolsOnly )
+{
+    SYMBOL_LIB_TABLE_ROW* row = FindRow( aNickname );
+    wxCHECK( row && row->plugin, /* void */ );
+
+    wxString options = row->GetOptions();
+
+    if( aPowerSymbolsOnly )
+        row->SetOptions( row->GetOptions() + " " + PropPowerSymsOnly );
+
+    row->plugin->EnumerateSymbolLib( aAliasNames, row->GetFullURI( true ), row->GetProperties() );
+
+    if( aPowerSymbolsOnly )
+        row->SetOptions( options );
+}
+
+
+SYMBOL_LIB_TABLE_ROW* SYMBOL_LIB_TABLE::FindRow( const wxString& aNickname )
 
 {
     SYMBOL_LIB_TABLE_ROW* row = dynamic_cast< SYMBOL_LIB_TABLE_ROW* >( findRow( aNickname ) );
 
     if( !row )
     {
-        wxString msg = wxString::Format(
-            _( "sym-lib-table files contain no library with nickname '%s'" ),
-            GetChars( aNickname ) );
-
-        THROW_IO_ERROR( msg );
+        wxFAIL_MSG( "sym-lib-table files contain no library with nickname " + aNickname );
+        return nullptr;
     }
 
     // We've been 'lazy' up until now, but it cannot be deferred any longer,
@@ -252,34 +301,60 @@ const SYMBOL_LIB_TABLE_ROW* SYMBOL_LIB_TABLE::FindRow( const wxString& aNickname
 }
 
 
-LIB_ALIAS* SYMBOL_LIB_TABLE::LoadSymbol( const wxString& aNickname, const wxString& aAliasName )
+void SYMBOL_LIB_TABLE::LoadSymbolLib( std::vector<LIB_PART*>& aSymbolList,
+                                      const wxString& aNickname, bool aPowerSymbolsOnly )
 {
-    const SYMBOL_LIB_TABLE_ROW* row = FindRow( aNickname );
-    wxASSERT( (SCH_PLUGIN*) row->plugin );
+    SYMBOL_LIB_TABLE_ROW* row = FindRow( aNickname );
+    wxCHECK( row && row->plugin, /* void */  );
 
-    LIB_ALIAS* ret = row->plugin->LoadSymbol( row->GetFullURI( true ), aAliasName,
-                                              row->GetProperties() );
+    wxString options = row->GetOptions();
+
+    if( aPowerSymbolsOnly )
+        row->SetOptions( row->GetOptions() + " " + PropPowerSymsOnly );
+
+    row->plugin->EnumerateSymbolLib( aSymbolList, row->GetFullURI( true ), row->GetProperties() );
+
+    if( aPowerSymbolsOnly )
+        row->SetOptions( options );
 
     // The library cannot know its own name, because it might have been renamed or moved.
     // Therefore footprints cannot know their own library nickname when residing in
     // a symbol library.
     // Only at this API layer can we tell the symbol about its actual library nickname.
-    if( ret )
+    for( LIB_PART* part : aSymbolList )
     {
-        // remove "const"-ness, I really do want to set nickname without
-        // having to copy the LIB_ID and its two strings, twice each.
-        LIB_ID& id = (LIB_ID&) ret->GetPart()->GetLibId();
-
-        // Catch any misbehaving plugin, which should be setting internal alias name properly:
-        wxASSERT( aAliasName == id.GetLibItemName().wx_str() );
-
-        // and clearing nickname
-        wxASSERT( !id.GetLibNickname().size() );
+        LIB_ID id = part->GetLibId();
 
         id.SetLibNickname( row->GetNickName() );
+        part->SetLibId( id );
+    }
+}
+
+
+LIB_PART* SYMBOL_LIB_TABLE::LoadSymbol( const wxString& aNickname, const wxString& aSymbolName )
+{
+    SYMBOL_LIB_TABLE_ROW* row = FindRow( aNickname );
+    wxCHECK( row && row->plugin, nullptr );
+
+    LIB_PART* part = row->plugin->LoadSymbol( row->GetFullURI( true ), aSymbolName,
+                                              row->GetProperties() );
+
+    if( part == nullptr )
+        return part;
+
+    // The library cannot know its own name, because it might have been renamed or moved.
+    // Therefore footprints cannot know their own library nickname when residing in
+    // a symbol library.
+    // Only at this API layer can we tell the symbol about its actual library nickname.
+    if( part )
+    {
+        LIB_ID id = part->GetLibId();
+
+        id.SetLibNickname( row->GetNickName() );
+        part->SetLibId( id );
     }
 
-    return ret;
+    return part;
 }
 
 
@@ -287,7 +362,7 @@ SYMBOL_LIB_TABLE::SAVE_T SYMBOL_LIB_TABLE::SaveSymbol( const wxString& aNickname
                                                        const LIB_PART* aSymbol, bool aOverwrite )
 {
     const SYMBOL_LIB_TABLE_ROW* row = FindRow( aNickname );
-    wxASSERT( (SCH_PLUGIN*) row->plugin );
+    wxCHECK( row && row->plugin, SAVE_SKIPPED );
 
     if( !aOverwrite )
     {
@@ -296,9 +371,9 @@ SYMBOL_LIB_TABLE::SAVE_T SYMBOL_LIB_TABLE::SaveSymbol( const wxString& aNickname
 
         wxString name = aSymbol->GetLibId().GetLibItemName();
 
-        std::unique_ptr< LIB_ALIAS > symbol( row->plugin->LoadSymbol( row->GetFullURI( true ),
-                                                                      name,
-                                                                      row->GetProperties() ) );
+        std::unique_ptr< LIB_PART > symbol( row->plugin->LoadSymbol( row->GetFullURI( true ),
+                                                                     name,
+                                                                     row->GetProperties() ) );
 
         if( symbol.get() )
             return SAVE_SKIPPED;
@@ -313,25 +388,16 @@ SYMBOL_LIB_TABLE::SAVE_T SYMBOL_LIB_TABLE::SaveSymbol( const wxString& aNickname
 void SYMBOL_LIB_TABLE::DeleteSymbol( const wxString& aNickname, const wxString& aSymbolName )
 {
     const SYMBOL_LIB_TABLE_ROW* row = FindRow( aNickname );
-    wxASSERT( (SCH_PLUGIN*) row->plugin );
+    wxCHECK( row && row->plugin, /* void */ );
     return row->plugin->DeleteSymbol( row->GetFullURI( true ), aSymbolName,
                                       row->GetProperties() );
-}
-
-
-void SYMBOL_LIB_TABLE::DeleteAlias( const wxString& aNickname, const wxString& aAliasName )
-{
-    const SYMBOL_LIB_TABLE_ROW* row = FindRow( aNickname );
-    wxASSERT( (SCH_PLUGIN*) row->plugin );
-    return row->plugin->DeleteAlias( row->GetFullURI( true ), aAliasName,
-                                     row->GetProperties() );
 }
 
 
 bool SYMBOL_LIB_TABLE::IsSymbolLibWritable( const wxString& aNickname )
 {
     const SYMBOL_LIB_TABLE_ROW* row = FindRow( aNickname );
-    wxASSERT( (SCH_PLUGIN*) row->plugin );
+    wxCHECK( row && row->plugin, false );
     return row->plugin->IsSymbolLibWritable( row->GetFullURI( true ) );
 }
 
@@ -339,7 +405,7 @@ bool SYMBOL_LIB_TABLE::IsSymbolLibWritable( const wxString& aNickname )
 void SYMBOL_LIB_TABLE::DeleteSymbolLib( const wxString& aNickname )
 {
     const SYMBOL_LIB_TABLE_ROW* row = FindRow( aNickname );
-    wxASSERT( (SCH_PLUGIN*) row->plugin );
+    wxCHECK( row && row->plugin, /* void */ );
     row->plugin->DeleteSymbolLib( row->GetFullURI( true ), row->GetProperties() );
 }
 
@@ -347,12 +413,12 @@ void SYMBOL_LIB_TABLE::DeleteSymbolLib( const wxString& aNickname )
 void SYMBOL_LIB_TABLE::CreateSymbolLib( const wxString& aNickname )
 {
     const SYMBOL_LIB_TABLE_ROW* row = FindRow( aNickname );
-    wxASSERT( (SCH_PLUGIN*) row->plugin );
+    wxCHECK( row && row->plugin, /* void */ );
     row->plugin->CreateSymbolLib( row->GetFullURI( true ), row->GetProperties() );
 }
 
 
-LIB_ALIAS* SYMBOL_LIB_TABLE::LoadSymbolWithOptionalNickname( const LIB_ID& aLibId )
+LIB_PART* SYMBOL_LIB_TABLE::LoadSymbolWithOptionalNickname( const LIB_ID& aLibId )
 {
     wxString   nickname = aLibId.GetLibNickname();
     wxString   name     = aLibId.GetLibItemName();
@@ -372,13 +438,13 @@ LIB_ALIAS* SYMBOL_LIB_TABLE::LoadSymbolWithOptionalNickname( const LIB_ID& aLibI
         {
             // FootprintLoad() returns NULL on not found, does not throw exception
             // unless there's an IO_ERROR.
-            LIB_ALIAS* ret = LoadSymbol( nicks[i], name );
+            LIB_PART* ret = LoadSymbol( nicks[i], name );
 
             if( ret )
                 return ret;
         }
 
-        return NULL;
+        return nullptr;
     }
 }
 
@@ -400,13 +466,23 @@ bool SYMBOL_LIB_TABLE::LoadGlobalTable( SYMBOL_LIB_TABLE& aTable )
 
         if( !fn.DirExists() && !fn.Mkdir( 0x777, wxPATH_MKDIR_FULL ) )
         {
-            THROW_IO_ERROR( wxString::Format( _( "Cannot create global library table path '%s'." ),
+            THROW_IO_ERROR( wxString::Format( _( "Cannot create global library table path \"%s\"." ),
                                               GetChars( fn.GetPath() ) ) );
         }
 
         // Attempt to copy the default global file table from the KiCad
         // template folder to the user's home configuration path.
-        wxString fileName = Kiface().KifaceSearch().FindValidPath( global_tbl_name );
+        SEARCH_STACK ss;
+
+        SystemDirsAppend( &ss );
+
+        wxString templatePath =
+            Pgm().GetLocalEnvVariables().at( wxT( "KICAD_TEMPLATE_DIR" ) ).GetValue();
+
+        if( !templatePath.IsEmpty() )
+            ss.AddPaths( templatePath, 0 );
+
+        wxString fileName = ss.FindValidPath( global_tbl_name );
 
         // The fallback is to create an empty global symbol table for the user to populate.
         if( fileName.IsEmpty() || !::wxCopyFile( fileName, fn.GetFullPath(), false ) )
@@ -427,7 +503,7 @@ wxString SYMBOL_LIB_TABLE::GetGlobalTableFileName()
 {
     wxFileName fn;
 
-    fn.SetPath( GetKicadConfigPath() );
+    fn.SetPath( SETTINGS_MANAGER::GetUserSettingsPath() );
     fn.SetName( global_tbl_name );
 
     return fn.GetFullPath();

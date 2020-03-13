@@ -25,7 +25,7 @@
 #include <geometry/shape_line_chain.h>
 #include <geometry/shape_rect.h>
 #include <geometry/shape_circle.h>
-#include <geometry/shape_convex.h>
+#include <geometry/shape_simple.h>
 
 #include "pns_solid.h"
 #include "pns_utils.h"
@@ -58,9 +58,9 @@ const SHAPE_LINE_CHAIN SOLID::Hull( int aClearance, int aWalkaroundThickness ) c
         return SegmentHull( *seg, aClearance, aWalkaroundThickness );
     }
 
-    case SH_CONVEX:
+    case SH_SIMPLE:
     {
-        SHAPE_CONVEX* convex = static_cast<SHAPE_CONVEX*>( m_shape );
+        SHAPE_SIMPLE* convex = static_cast<SHAPE_SIMPLE*>( m_shape );
 
         return ConvexHull( *convex, cl );
     }
@@ -78,5 +78,16 @@ ITEM* SOLID::Clone() const
     ITEM* solid = new SOLID( *this );
     return solid;
 }
+
+void SOLID::SetPos( const VECTOR2I& aCenter )
+{
+    auto delta = aCenter - m_pos;
+
+    if( m_shape )
+        m_shape->Move( delta );
+
+    m_pos = aCenter;
+}
+
 
 }

@@ -41,7 +41,7 @@
 using namespace KIGFX;
 
 VIEW_GROUP::VIEW_GROUP( VIEW* aView ) :
-    m_layer( LAYER_GP_OVERLAY )
+    m_layer( LAYER_SELECT_OVERLAY )
 {
 }
 
@@ -91,42 +91,98 @@ VIEW_ITEM *VIEW_GROUP::GetItem( unsigned int idx ) const
 
 const BOX2I VIEW_GROUP::ViewBBox() const
 {
-    BOX2I maxBox;
+    BOX2I bb;
 
-    maxBox.SetMaximum();
-    return maxBox;
+    if( !m_groupItems.size() )
+    {
+        bb.SetMaximum();
+    }
+    else
+    {
+        bb = m_groupItems[0]->ViewBBox();
+
+        for( auto item : m_groupItems )
+            bb.Merge( item->ViewBBox() );
+    }
+
+    return bb;
 }
 
 
 void VIEW_GROUP::ViewDraw( int aLayer, VIEW* aView ) const
 {
-    auto gal = aView->GetGAL();
-    PAINTER* painter = aView->GetPainter();
+    KIGFX::GAL* gal = aView->GetGAL();
+    PAINTER*    painter = aView->GetPainter();
+    bool        isSelection = m_layer == LAYER_SELECT_OVERLAY;
+    const auto  drawList = updateDrawList();
 
-    const auto drawList = updateDrawList();
+    std::unordered_map<int, std::vector<VIEW_ITEM*>> layer_item_map;
 
-    // Draw all items immediately (without caching)
+    // Build a list of layers used by the items in the group
     for( auto item : drawList )
     {
-        gal->PushDepth();
+        int item_layers[VIEW::VIEW_MAX_LAYERS], item_layers_count;
+        item->ViewGetLayers( item_layers, item_layers_count );
 
-        int layers[VIEW::VIEW_MAX_LAYERS], layers_count;
-        item->ViewGetLayers( layers, layers_count );
-        aView->SortLayers( layers, layers_count );
-
-        for( int i = 0; i < layers_count; i++ )
+        for( int i = 0; i < item_layers_count; i++ )
         {
-            if( aView->IsLayerVisible( layers[i] ) )
+            if( layer_item_map.count( item_layers[i] ) == 0 )
             {
-                gal->AdvanceDepth();
+                layer_item_map.emplace( std::make_pair( item_layers[i],
+                                                        std::vector<VIEW_ITEM*>() ) );
+            }
 
+            layer_item_map[ item_layers[i] ].push_back( item );
+        }
+    }
+
+    int layers[VIEW::VIEW_MAX_LAYERS] = { 0 };
+    int layers_count = 0;
+
+    for( const auto& entry : layer_item_map )
+    {
+        layers[ layers_count++ ] = entry.first;
+    }
+
+    aView->SortLayers( layers, layers_count );
+
+    // Now draw the layers in sorted order
+
+    gal->PushDepth();
+
+    for( int i = 0; i < layers_count; i++ )
+    {
+        int  layer = layers[i];
+        bool draw = aView->IsLayerVisible( layer );
+
+        if( isSelection )
+        {
+            switch( layer )
+            {
+            case LAYER_PADS_TH:
+            case LAYER_PADS_PLATEDHOLES:
+            case LAYER_PAD_FR:
+            case LAYER_PAD_BK:
+                draw = true;
+                break;
+            default:
+                break;
+            }
+        }
+
+        if( draw )
+        {
+            gal->AdvanceDepth();
+
+            for( auto item : layer_item_map[ layers[i] ] )
+            {
                 if( !painter->Draw( item, layers[i] ) )
                     item->ViewDraw( layers[i], aView ); // Alternative drawing method
             }
         }
-
-        gal->PopDepth();
     }
+
+    gal->PopDepth();
 }
 
 

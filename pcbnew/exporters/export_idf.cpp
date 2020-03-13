@@ -27,7 +27,7 @@
 
 
 #include <list>
-#include <wxPcbStruct.h>
+#include <pcb_edit_frame.h>
 #include <macros.h>
 #include <pcbnew.h>
 #include <class_board.h>
@@ -39,7 +39,7 @@
 #include "project.h"
 #include "kiway.h"
 #include "3d_cache/3d_cache.h"
-#include "3d_cache/3d_filename_resolver.h"
+#include "filename_resolver.h"
 
 #ifndef PCBNEW
 #define PCBNEW                  // needed to define the right value of Millimeter2iu(x)
@@ -49,7 +49,7 @@
 // assumed default graphical line thickness: == 0.1mm
 #define LINE_WIDTH (Millimeter2iu( 0.1 ))
 
-static S3D_FILENAME_RESOLVER* resolver;
+static FILENAME_RESOLVER* resolver;
 
 /**
  * Function idf_export_outline
@@ -287,7 +287,7 @@ static void idf_export_module( BOARD* aPcb, MODULE* aModule,
 
     aIDFBoard.GetUserOffset( dx, dy );
 
-    for( D_PAD* pad = aModule->PadsList(); pad; pad = pad->Next() )
+    for( auto pad : aModule->Pads() )
     {
         drill = (double) pad->GetDrillSize().x * scale;
         x     = pad->GetPosition().x * scale + dx;
@@ -379,8 +379,8 @@ static void idf_export_module( BOARD* aPcb, MODULE* aModule,
 
     IDF3_COMPONENT* comp = NULL;
 
-    std::list<S3D_INFO>::const_iterator sM = aModule->Models().begin();
-    std::list<S3D_INFO>::const_iterator eM = aModule->Models().end();
+    auto sM = aModule->Models().begin();
+    auto eM = aModule->Models().end();
     wxFileName idfFile;
     wxString   idfExt;
 
@@ -596,7 +596,7 @@ bool PCB_EDIT_FRAME::Export_IDF3( BOARD* aPcb, const wxString& aFullFileName,
         idf_export_outline( aPcb, idfBoard );
 
         // Output the drill holes and module (library) data.
-        for( MODULE* module = aPcb->m_Modules; module != 0; module = module->Next() )
+        for( auto module : aPcb->Modules() )
             idf_export_module( aPcb, module, idfBoard );
 
         if( !idfBoard.WriteFile( aFullFileName, idfUnit, false ) )

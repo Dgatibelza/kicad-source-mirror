@@ -1,8 +1,8 @@
 /*
  * This program source code file is part of KiCad, a free EDA CAD application.
  *
- * Copyright (C) 2012 Jean-Pierre Charras, jp.charras at wanadoo.fr
- * Copyright (C) 2004-2015 KiCad Developers, see change_log.txt for contributors.
+ * Copyright (C) 2017 Jean-Pierre Charras, jp.charras at wanadoo.fr
+ * Copyright (C) 2004-2020 KiCad Developers, see AUTHORS.txt for contributors.
  *
  * This program is free software; you can redistribute it and/or
  * modify it under the terms of the GNU General Public License
@@ -22,114 +22,28 @@
  * 51 Franklin Street, Fifth Floor, Boston, MA  02110-1301, USA
  */
 
-/**
- * @file lib_polyline.cpp
- */
-
 #include <fctsys.h>
 #include <gr_basic.h>
 #include <macros.h>
-#include <class_drawpanel.h>
-#include <plot_common.h>
+#include <sch_draw_panel.h>
+#include <plotter.h>
 #include <trigo.h>
-#include <wxstruct.h>
-#include <richio.h>
 #include <base_units.h>
 #include <msgpanel.h>
 #include <bitmaps.h>
 
 #include <general.h>
 #include <lib_polyline.h>
+#include <settings/color_settings.h>
 #include <transform.h>
 
 
-LIB_POLYLINE::LIB_POLYLINE( LIB_PART*      aParent ) :
+LIB_POLYLINE::LIB_POLYLINE( LIB_PART* aParent ) :
     LIB_ITEM( LIB_POLYLINE_T, aParent )
 {
     m_Fill  = NO_FILL;
     m_Width = 0;
     m_isFillable = true;
-    m_typeName   = _( "PolyLine" );
-    m_ModifyIndex = 0;
-}
-
-
-bool LIB_POLYLINE::Save( OUTPUTFORMATTER& aFormatter )
-{
-    int ccount = GetCornerCount();
-
-    aFormatter.Print( 0, "P %d %d %d %d", ccount, m_Unit, m_Convert, m_Width );
-
-    for( unsigned i = 0; i < GetCornerCount(); i++ )
-    {
-        aFormatter.Print( 0, " %d %d", m_PolyPoints[i].x, m_PolyPoints[i].y );
-    }
-
-    aFormatter.Print( 0, " %c\n", fill_tab[m_Fill] );
-
-    return true;
-}
-
-
-bool LIB_POLYLINE::Load( LINE_READER& aLineReader, wxString& aErrorMsg )
-{
-    char*   p;
-    int     i, ccount = 0;
-    wxPoint pt;
-    char*   line = (char*) aLineReader;
-
-    i = sscanf( line + 2, "%d %d %d %d", &ccount, &m_Unit, &m_Convert, &m_Width );
-
-    m_Fill = NO_FILL;
-
-    if( i < 4 )
-    {
-        aErrorMsg.Printf( _( "Polyline only had %d parameters of the required 4" ), i );
-        return false;
-    }
-
-    if( ccount <= 0 )
-    {
-        aErrorMsg.Printf( _( "Polyline count parameter %d is invalid" ), ccount );
-        return false;
-    }
-
-    strtok( line + 2, " \t\n" );     // Skip field
-    strtok( NULL, " \t\n" );         // Skip field
-    strtok( NULL, " \t\n" );         // Skip field
-    strtok( NULL, " \t\n" );
-
-    for( i = 0; i < ccount; i++ )
-    {
-        p = strtok( NULL, " \t\n" );
-
-        if( p == NULL || sscanf( p, "%d", &pt.x ) != 1 )
-        {
-            aErrorMsg.Printf( _( "Polyline point %d X position not defined" ), i );
-            return false;
-        }
-
-        p = strtok( NULL, " \t\n" );
-
-        if( p == NULL || sscanf( p, "%d", &pt.y ) != 1 )
-        {
-            aErrorMsg.Printf( _( "Polyline point %d Y position not defined" ), i );
-            return false;
-        }
-
-        AddPoint( pt );
-    }
-
-    if( ( p = strtok( NULL, " \t\n" ) ) != NULL )
-    {
-        if( p[0] == 'F' )
-            m_Fill = FILLED_SHAPE;
-
-        if( p[0] == 'f' )
-            m_Fill = FILLED_WITH_BG_BODYCOLOR;
-    }
-
-    return true;
 }
 
 
@@ -139,9 +53,14 @@ EDA_ITEM* LIB_POLYLINE::Clone() const
 }
 
 
-int LIB_POLYLINE::compare( const LIB_ITEM& aOther ) const
+int LIB_POLYLINE::compare( const LIB_ITEM& aOther, LIB_ITEM::COMPARE_FLAGS aCompareFlags ) const
 {
     wxASSERT( aOther.Type() == LIB_POLYLINE_T );
+
+    int retv = LIB_ITEM::compare( aOther );
+
+    if( retv )
+        return retv;
 
     const LIB_POLYLINE* tmp = (LIB_POLYLINE*) &aOther;
 
@@ -161,18 +80,18 @@ int LIB_POLYLINE::compare( const LIB_ITEM& aOther ) const
 }
 
 
-void LIB_POLYLINE::SetOffset( const wxPoint& aOffset )
+void LIB_POLYLINE::Offset( const wxPoint& aOffset )
 {
-    for( size_t i = 0; i < m_PolyPoints.size(); i++ )
-        m_PolyPoints[i] += aOffset;
+    for( wxPoint& point : m_PolyPoints )
+        point += aOffset;
 }
 
 
 bool LIB_POLYLINE::Inside( EDA_RECT& aRect ) const
 {
-    for( size_t i = 0; i < m_PolyPoints.size(); i++ )
+    for( const wxPoint& point : m_PolyPoints )
     {
-        if( aRect.Contains( m_PolyPoints[i].x, -m_PolyPoints[i].y ) )
+        if( aRect.Contains( point.x, -point.y ) )
             return true;
     }
 
@@ -180,46 +99,36 @@ bool LIB_POLYLINE::Inside( EDA_RECT& aRect ) const
 }
 
 
-void LIB_POLYLINE::Move( const wxPoint& aPosition )
+void LIB_POLYLINE::MoveTo( const wxPoint& aPosition )
 {
-    SetOffset( aPosition - m_PolyPoints[0] );
+    Offset( aPosition - m_PolyPoints[ 0 ] );
 }
 
 
 void LIB_POLYLINE::MirrorHorizontal( const wxPoint& aCenter )
 {
-    size_t i, imax = m_PolyPoints.size();
-
-    for( i = 0; i < imax; i++ )
+    for( wxPoint& point : m_PolyPoints )
     {
-        m_PolyPoints[i].x -= aCenter.x;
-        m_PolyPoints[i].x *= -1;
-        m_PolyPoints[i].x += aCenter.x;
+        point.x -= aCenter.x;
+        point.x *= -1;
+        point.x += aCenter.x;
     }
 }
 
 void LIB_POLYLINE::MirrorVertical( const wxPoint& aCenter )
 {
-    size_t i, imax = m_PolyPoints.size();
-
-    for( i = 0; i < imax; i++ )
+    for( wxPoint& point : m_PolyPoints )
     {
-        m_PolyPoints[i].y -= aCenter.y;
-        m_PolyPoints[i].y *= -1;
-        m_PolyPoints[i].y += aCenter.y;
+        point.y -= aCenter.y;
+        point.y *= -1;
+        point.y += aCenter.y;
     }
 }
 
 void LIB_POLYLINE::Rotate( const wxPoint& aCenter, bool aRotateCCW )
 {
-    int rot_angle = aRotateCCW ? -900 : 900;
-
-    size_t i, imax = m_PolyPoints.size();
-
-    for( i = 0; i < imax; i++ )
-    {
-        RotatePoint( &m_PolyPoints[i], aCenter, rot_angle );
-   }
+    for( wxPoint& point : m_PolyPoints )
+        RotatePoint( &point, aCenter, aRotateCCW ? -900 : 900 );
 }
 
 
@@ -231,120 +140,151 @@ void LIB_POLYLINE::Plot( PLOTTER* aPlotter, const wxPoint& aOffset, bool aFill,
     static std::vector< wxPoint > cornerList;
     cornerList.clear();
 
-    for( unsigned ii = 0; ii < m_PolyPoints.size(); ii++ )
+    for( wxPoint pos : m_PolyPoints )
     {
-        wxPoint pos = m_PolyPoints[ii];
         pos = aTransform.TransformCoordinate( pos ) + aOffset;
         cornerList.push_back( pos );
     }
 
     if( aFill && m_Fill == FILLED_WITH_BG_BODYCOLOR )
     {
-        aPlotter->SetColor( GetLayerColor( LAYER_DEVICE_BACKGROUND ) );
+        aPlotter->SetColor( aPlotter->ColorSettings()->GetColor( LAYER_DEVICE_BACKGROUND ) );
         aPlotter->PlotPoly( cornerList, FILLED_WITH_BG_BODYCOLOR, 0 );
     }
 
     bool already_filled = m_Fill == FILLED_WITH_BG_BODYCOLOR;
-    aPlotter->SetColor( GetLayerColor( LAYER_DEVICE ) );
-    aPlotter->PlotPoly( cornerList, already_filled ? NO_FILL : m_Fill, GetPenSize() );
+    auto pen_size = GetPenSize();
+
+    if( !already_filled || pen_size > 0 )
+    {
+        pen_size = std::max( 0, pen_size );
+        aPlotter->SetColor( aPlotter->ColorSettings()->GetColor( LAYER_DEVICE ) );
+        aPlotter->PlotPoly( cornerList, already_filled ? NO_FILL : m_Fill, pen_size );
+    }
 }
 
 
-void LIB_POLYLINE::AddPoint( const wxPoint& point )
+void LIB_POLYLINE::AddPoint( const wxPoint& aPosition )
 {
-    m_PolyPoints.push_back( point );
+    m_PolyPoints.push_back( aPosition );
+}
+
+
+void LIB_POLYLINE::AddCorner( const wxPoint& aPosition )
+{
+    int currentMinDistance = INT_MAX;
+    int closestLineStart = 0;
+
+    for( unsigned i = 0; i < m_PolyPoints.size() - 1; ++i )
+    {
+        int distance = (int) DistanceLinePoint( m_PolyPoints[i], m_PolyPoints[i + 1], aPosition );
+
+        if( distance < currentMinDistance )
+        {
+            currentMinDistance = distance;
+            closestLineStart = i;
+        }
+    }
+
+    m_PolyPoints.insert( m_PolyPoints.begin() + closestLineStart, aPosition );
+}
+
+
+void LIB_POLYLINE::RemoveCorner( int aIdx )
+{
+    m_PolyPoints.erase( m_PolyPoints.begin() + aIdx );
 }
 
 
 int LIB_POLYLINE::GetPenSize() const
 {
-    return ( m_Width == 0 ) ? GetDefaultLineThickness() : m_Width;
+    if( m_Width > 0 )
+        return m_Width;
+
+    if( m_Width == 0 )
+       return GetDefaultLineThickness();
+
+    return -1;   // the minimal pen value
 }
 
 
-void LIB_POLYLINE::drawGraphic( EDA_DRAW_PANEL* aPanel, wxDC* aDC, const wxPoint& aOffset,
-                                COLOR4D aColor, GR_DRAWMODE aDrawMode, void* aData,
-                                const TRANSFORM& aTransform )
+void LIB_POLYLINE::print( wxDC* aDC, const wxPoint& aOffset, void* aData,
+                          const TRANSFORM& aTransform )
 {
-    wxPoint  pos1;
-    COLOR4D color = GetLayerColor( LAYER_DEVICE );
-    wxPoint* buffer = NULL;
+    COLOR4D color   = GetLayerColor( LAYER_DEVICE );
+    COLOR4D bgColor = GetLayerColor( LAYER_DEVICE_BACKGROUND );
 
-    if( aColor == COLOR4D::UNSPECIFIED )                // Used normal color or selected color
-    {
-        if( IsSelected() )
-            color = GetItemSelectedColor();
-    }
-    else
-    {
-        color = aColor;
-    }
-
-    buffer = new wxPoint[ m_PolyPoints.size() ];
+    wxPoint* buffer = new wxPoint[ m_PolyPoints.size() ];
 
     for( unsigned ii = 0; ii < m_PolyPoints.size(); ii++ )
-    {
         buffer[ii] = aTransform.TransformCoordinate( m_PolyPoints[ii] ) + aOffset;
-    }
 
     FILL_T fill = aData ? NO_FILL : m_Fill;
 
-    if( aColor != COLOR4D::UNSPECIFIED )
-        fill = NO_FILL;
-
-    GRSetDrawMode( aDC, aDrawMode );
-
-    EDA_RECT* const clipbox  = aPanel? aPanel->GetClipBox() : NULL;
     if( fill == FILLED_WITH_BG_BODYCOLOR )
-        GRPoly( clipbox, aDC, m_PolyPoints.size(), buffer, 1, GetPenSize(),
-                (m_Flags & IS_MOVED) ? color : GetLayerColor( LAYER_DEVICE_BACKGROUND ),
-                GetLayerColor( LAYER_DEVICE_BACKGROUND ) );
+        GRPoly( nullptr, aDC, m_PolyPoints.size(), buffer, 1, GetPenSize(), bgColor, bgColor );
     else if( fill == FILLED_SHAPE  )
-        GRPoly( clipbox, aDC, m_PolyPoints.size(), buffer, 1, GetPenSize(),
-                color, color );
+        GRPoly( nullptr, aDC, m_PolyPoints.size(), buffer, 1, GetPenSize(), color, color );
     else
-        GRPoly( clipbox, aDC, m_PolyPoints.size(), buffer, 0, GetPenSize(),
-                color, color );
+        GRPoly( nullptr, aDC, m_PolyPoints.size(), buffer, 0, GetPenSize(), color, color );
 
     delete[] buffer;
-
-    /* Set to one (1) to draw bounding box around polyline to validate
-     * bounding box calculation. */
-#if 0
-    EDA_RECT bBox = GetBoundingBox();
-    bBox.RevertYAxis();
-    bBox = aTransform.TransformCoordinate( bBox );
-    bBox.Move( aOffset );
-    GRRect( clipbox, aDC, bBox, 0, LIGHTMAGENTA );
-#endif
 }
 
 
-bool LIB_POLYLINE::HitTest( const wxPoint& aPosition ) const
+bool LIB_POLYLINE::HitTest( const wxPoint& aPosition, int aAccuracy ) const
 {
-    int mindist = GetPenSize() / 2;
+    int              delta = std::max( aAccuracy + GetPenSize() / 2,
+                                       Mils2iu( MINIMUM_SELECTION_DISTANCE ) );
+    SHAPE_LINE_CHAIN shape;
 
-    // Have a minimal tolerance for hit test
-    if( mindist < MINIMUM_SELECTION_DISTANCE )
-        mindist = MINIMUM_SELECTION_DISTANCE;
+    for( wxPoint pt : m_PolyPoints )
+        shape.Append( DefaultTransform.TransformCoordinate( pt ) );
 
-    return HitTest( aPosition, mindist, DefaultTransform );
-}
-
-
-bool LIB_POLYLINE::HitTest( const wxPoint &aPosition, int aThreshold, const TRANSFORM& aTransform ) const
-{
-    wxPoint start, end;
-
-    if( aThreshold < 0 )
-        aThreshold = GetPenSize() / 2;
-
-    for( unsigned ii = 1; ii < GetCornerCount(); ii++ )
+    if( m_Fill != NO_FILL && m_PolyPoints.size() > 2 )
     {
-        start = aTransform.TransformCoordinate( m_PolyPoints[ii - 1] );
-        end   = aTransform.TransformCoordinate( m_PolyPoints[ii] );
+        shape.SetClosed( true );
+        return shape.PointInside( aPosition, delta );
+    }
+    else
+        return shape.PointOnEdge( aPosition, delta );
+}
 
-        if( TestSegmentHit( aPosition, start, end, aThreshold ) )
+
+bool LIB_POLYLINE::HitTest( const EDA_RECT& aRect, bool aContained, int aAccuracy ) const
+{
+    if( m_Flags & ( STRUCT_DELETED | SKIP_STRUCT ) )
+        return false;
+
+    EDA_RECT sel = aRect;
+
+    if ( aAccuracy )
+        sel.Inflate( aAccuracy );
+
+    if( aContained )
+        return sel.Contains( GetBoundingBox() );
+
+    // Fast test: if rect is outside the polygon bounding box, then they cannot intersect
+    if( !sel.Intersects( GetBoundingBox() ) )
+        return false;
+
+    // Account for the width of the line
+    sel.Inflate( GetPenSize() / 2 );
+
+    // Only test closing segment if the polyline is filled
+    int count = m_Fill == NO_FILL ? m_PolyPoints.size() - 1 : m_PolyPoints.size();
+
+    for( int ii = 0; ii < count; ii++ )
+    {
+        wxPoint pt = DefaultTransform.TransformCoordinate( m_PolyPoints[ ii ] );
+        wxPoint ptNext = DefaultTransform.TransformCoordinate( m_PolyPoints[ (ii+1) % count ] );
+
+        // Test if the point is within aRect
+        if( sel.Contains( pt ) )
+            return true;
+
+        // Test if this edge intersects aRect
+        if( sel.Intersects( pt, ptNext ) )
             return true;
     }
 
@@ -394,14 +334,14 @@ void LIB_POLYLINE::DeleteSegment( const wxPoint aPosition )
 }
 
 
-void LIB_POLYLINE::GetMsgPanelInfo( MSG_PANEL_ITEMS& aList )
+void LIB_POLYLINE::GetMsgPanelInfo( EDA_UNITS aUnits, MSG_PANEL_ITEMS& aList )
 {
     wxString msg;
     EDA_RECT bBox = GetBoundingBox();
 
-    LIB_ITEM::GetMsgPanelInfo( aList );
+    LIB_ITEM::GetMsgPanelInfo( aUnits, aList );
 
-    msg = StringFromValue( g_UserUnit, m_Width, true );
+    msg = MessageTextFromValue( aUnits, m_Width, true );
 
     aList.push_back( MSG_PANEL_ITEM( _( "Line Width" ), msg, BLUE ) );
 
@@ -412,156 +352,50 @@ void LIB_POLYLINE::GetMsgPanelInfo( MSG_PANEL_ITEMS& aList )
 }
 
 
-wxString LIB_POLYLINE::GetSelectMenuText() const
+wxString LIB_POLYLINE::GetSelectMenuText( EDA_UNITS aUnits ) const
 {
     return wxString::Format( _( "Polyline at (%s, %s) with %d points" ),
-                             GetChars( CoordinateToString( m_PolyPoints[0].x ) ),
-                             GetChars( CoordinateToString( m_PolyPoints[0].y ) ),
+                             MessageTextFromValue( aUnits, m_PolyPoints[0].x ),
+                             MessageTextFromValue( aUnits, m_PolyPoints[0].y ),
                              int( m_PolyPoints.size() ) );
 }
 
 
 BITMAP_DEF LIB_POLYLINE::GetMenuImage() const
 {
-    return add_polygon_xpm;
+    return add_graphical_segments_xpm;
 }
 
 
-void LIB_POLYLINE::BeginEdit( STATUS_FLAGS aEditMode, const wxPoint aPosition )
+void LIB_POLYLINE::BeginEdit( const wxPoint aPosition )
 {
-    wxCHECK_RET( ( aEditMode & ( IS_NEW | IS_MOVED | IS_RESIZED ) ) != 0,
-                 wxT( "Invalid edit mode for LIB_POLYLINE object." ) );
-
-    if( aEditMode == IS_NEW )
-    {
-        m_PolyPoints.push_back( aPosition );    // Start point of first segment.
-        m_PolyPoints.push_back( aPosition );    // End point of first segment.
-    }
-    else if( aEditMode == IS_RESIZED )
-    {
-        // Drag one edge point of the polyline
-        // Find the nearest edge point to be dragged
-        wxPoint startPoint = m_PolyPoints[0];
-
-        // Begin with the first list point as nearest point
-        int     index = 0;
-        m_ModifyIndex = 0;
-        m_initialPos  = startPoint;
-
-        // First distance is the current minimum distance
-        int     distanceMin = (aPosition - startPoint).x * (aPosition - startPoint).x
-                              + (aPosition - startPoint).y * (aPosition - startPoint).y;
-
-        wxPoint prevPoint = startPoint;
-
-        // Find the right index of the point to be dragged
-        for( wxPoint point : m_PolyPoints )
-        {
-            int distancePoint = (aPosition - point).x * (aPosition - point).x +
-                                (aPosition - point).y * (aPosition - point).y;
-
-            if( distancePoint < distanceMin )
-            {
-                // Save point.
-                m_initialPos  = point;
-                m_ModifyIndex = index;
-                distanceMin   = distancePoint;
-            }
-
-            // check middle of an edge
-            wxPoint offset = ( aPosition + aPosition - point - prevPoint );
-            distancePoint = ( offset.x * offset.x + offset.y * offset.y ) / 4 + 1;
-
-            if( distancePoint < distanceMin )
-            {
-                // Save point.
-                m_initialPos  = point;
-                m_ModifyIndex = -index;  // negative indicates new vertex is to be inserted
-                distanceMin   = distancePoint;
-            }
-
-            prevPoint = point;
-            index++;
-        }
-
-        SetEraseLastDrawItem();
-    }
-    else if( aEditMode == IS_MOVED )
-    {
-        m_initialCursorPos = aPosition;
-        m_initialPos = m_PolyPoints[0];
-        SetEraseLastDrawItem();
-    }
-
-    m_Flags = aEditMode;
+    m_PolyPoints.push_back( aPosition );    // Start point of first segment.
+    m_PolyPoints.push_back( aPosition );    // End point of first segment.
 }
 
 
 bool LIB_POLYLINE::ContinueEdit( const wxPoint aPosition )
 {
-    wxCHECK_MSG( ( m_Flags & ( IS_NEW | IS_MOVED | IS_RESIZED ) ) != 0, false,
-                wxT( "Bad call to ContinueEdit().  LIB_POLYLINE is not being edited." ) );
+    // do not add zero length segments
+    if( m_PolyPoints[m_PolyPoints.size() - 2] != m_PolyPoints.back() )
+        m_PolyPoints.push_back( aPosition );
 
-    if( m_Flags == IS_NEW )
-    {
-        // do not add zero length segments
-        if( m_PolyPoints[m_PolyPoints.size() - 2] != m_PolyPoints.back() )
-            m_PolyPoints.push_back( aPosition );
-
-        return true;
-    }
-
-    return false;
+    return true;
 }
 
 
-void LIB_POLYLINE::EndEdit( const wxPoint& aPosition, bool aAbort )
+void LIB_POLYLINE::EndEdit()
 {
-    wxCHECK_RET( ( m_Flags & ( IS_NEW | IS_MOVED | IS_RESIZED ) ) != 0,
-                 wxT( "Bad call to EndEdit().  LIB_POLYLINE is not being edited." ) );
-
     // do not include last point twice
-    if( m_Flags == IS_NEW && 2 < m_PolyPoints.size() )
+    if( m_PolyPoints.size() > 2 )
     {
         if( m_PolyPoints[ m_PolyPoints.size() - 2 ] == m_PolyPoints.back() )
             m_PolyPoints.pop_back();
     }
-
-    if( (m_Flags == IS_RESIZED) && (m_PolyPoints.size() > 2) ) // do not delete last two points... keep it alive
-    {
-        if( ( m_ModifyIndex > 0 && m_PolyPoints[ m_ModifyIndex ] ==
-              m_PolyPoints[ m_ModifyIndex - 1 ] )
-          || ( m_ModifyIndex < (int) m_PolyPoints.size() - 1
-             && m_PolyPoints[ m_ModifyIndex ] == m_PolyPoints[ m_ModifyIndex + 1 ] ) )
-        {
-            m_PolyPoints.erase( m_PolyPoints.begin() + m_ModifyIndex ); // delete a point on this
-        }
-    }
-
-    m_Flags = 0;
-    SetEraseLastDrawItem( false );
 }
 
 
-void LIB_POLYLINE::calcEdit( const wxPoint& aPosition )
+void LIB_POLYLINE::CalcEdit( const wxPoint& aPosition )
 {
-    if( m_Flags == IS_NEW )
-    {
-        m_PolyPoints[ GetCornerCount() - 1 ] = aPosition;
-        SetEraseLastDrawItem();
-    }
-    else if( m_Flags == IS_RESIZED )
-    {
-        if( m_ModifyIndex < 0 ) // negative indicates new vertex is to be inserted
-        {
-            m_ModifyIndex = -m_ModifyIndex;
-            m_PolyPoints.insert( m_PolyPoints.begin() + m_ModifyIndex, aPosition );
-        }
-
-        m_PolyPoints[ m_ModifyIndex ] = aPosition;
-    }
-    else if( m_Flags == IS_MOVED )
-    {
-        Move( m_initialPos + aPosition - m_initialCursorPos );
-    }
+    m_PolyPoints[ GetCornerCount() - 1 ] = aPosition;
 }

@@ -1,6 +1,7 @@
 /*
  * This program source code file is part of KiCad, a free EDA CAD application.
  *
+ * Copyright (C) 2019  KiCad Developers, see CHANGELOG.TXT for contributors.
  * Copyright (C) 2016-2017 CERN
  * @author Maciej Suminski <maciej.suminski@cern.ch>
  *
@@ -22,14 +23,18 @@
  * 51 Franklin Street, Fifth Floor, Boston, MA  02110-1301, USA
  */
 
+#include "wildcards_and_files_ext.h"
 #include "dialog_spice_model.h"
 
-#include <netlist_exporters/netlist_exporter_pspice.h>
 #include <sim/spice_value.h>
 #include <confirm.h>
 #include <project.h>
 
 #include <wx/tokenzr.h>
+#include <wx/wupdlock.h>
+
+#include <cctype>
+#include <cstring>
 
 // Helper function to shorten conditions
 static bool empty( const wxTextCtrl* aCtrl )
@@ -54,13 +59,70 @@ static int wxCALLBACK comparePwlValues( wxIntPtr aItem1, wxIntPtr aItem2, wxIntP
 }
 
 
-DIALOG_SPICE_MODEL::DIALOG_SPICE_MODEL( wxWindow* aParent, SCH_COMPONENT& aComponent, SCH_FIELDS& aFields )
-    : DIALOG_SPICE_MODEL_BASE( aParent ), m_component( aComponent ), m_fields( aFields ),
-    m_spiceEmptyValidator( true ), m_notEmptyValidator( wxFILTER_EMPTY )
+// Structure describing a type of Spice model
+struct SPICE_MODEL_INFO
+{
+    SPICE_PRIMITIVE type;               ///< Character identifying the model
+    wxString description;               ///< Human-readable description
+    std::vector<std::string> keywords;  ///< Keywords indicating the model
+};
+
+
+// Recognized model types
+static const std::vector<SPICE_MODEL_INFO> modelTypes =
+{
+    { SP_DIODE,     _( "Diode" ),      { "d" } },
+    { SP_BJT,       _( "BJT" ),        { "npn", "pnp" } },
+    { SP_MOSFET,    _( "MOSFET" ),     { "nmos", "pmos", "vdmos" } },
+    { SP_JFET,      _( "JFET" ),       { "njf", "pjf" } },
+    { SP_SUBCKT,    _( "Subcircuit" ), {} },
+};
+
+
+// Returns index of an entry in modelTypes array (above) corresponding to a Spice primitive
+static int getModelTypeIdx( char aPrimitive )
+{
+    const char prim = std::toupper( aPrimitive );
+
+    for( size_t i = 0; i < modelTypes.size(); ++i )
+    {
+        if( modelTypes[i].type == prim )
+            return i;
+    }
+
+    return -1;
+}
+
+
+DIALOG_SPICE_MODEL::DIALOG_SPICE_MODEL( wxWindow* aParent, SCH_COMPONENT& aComponent, SCH_FIELDS* aFields )
+    : DIALOG_SPICE_MODEL_BASE( aParent ), m_component( aComponent ), m_schfields( aFields ),
+      m_libfields( nullptr ), m_useSchFields( true ),
+      m_spiceEmptyValidator( true ), m_notEmptyValidator( wxFILTER_EMPTY )
+{
+    Init();
+}
+
+
+DIALOG_SPICE_MODEL::DIALOG_SPICE_MODEL( wxWindow* aParent, SCH_COMPONENT& aComponent, LIB_FIELDS* aFields )
+    : DIALOG_SPICE_MODEL_BASE( aParent ), m_component( aComponent ), m_schfields( nullptr ),
+      m_libfields( aFields ), m_useSchFields( false ),
+      m_spiceEmptyValidator( true ), m_notEmptyValidator( wxFILTER_EMPTY )
+{
+    Init();
+}
+
+
+void DIALOG_SPICE_MODEL::Init()
 {
     m_pasValue->SetValidator( m_spiceValidator );
 
     m_modelType->SetValidator( m_notEmptyValidator );
+    m_modelType->Clear();
+
+    // Create a list of handled models
+    for( const auto& model : modelTypes )
+        m_modelType->Append( model.description );
+
     m_modelName->SetValidator( m_notEmptyValidator );
 
     m_genDc->SetValidator( m_spiceEmptyValidator );
@@ -92,7 +154,6 @@ DIALOG_SPICE_MODEL::DIALOG_SPICE_MODEL( wxWindow* aParent, SCH_COMPONENT& aCompo
     m_pwlValueCol = m_pwlValList->AppendColumn( "Value [V/A]", wxLIST_FORMAT_LEFT, 100 );
 
     m_sdbSizerOK->SetDefault();
-
 }
 
 
@@ -131,25 +192,16 @@ bool DIALOG_SPICE_MODEL::TransferDataFromWindow()
         if( !m_model->Validate() )
             return false;
 
-        switch( m_modelType->GetSelection() )
-        {
-            case 0: m_fieldsTmp[SF_PRIMITIVE] = (char) SP_SUBCKT; break;
-            case 1: m_fieldsTmp[SF_PRIMITIVE] = (char) SP_BJT; break;
-            case 2: m_fieldsTmp[SF_PRIMITIVE] = (char) SP_MOSFET; break;
-            case 3: m_fieldsTmp[SF_PRIMITIVE] = (char) SP_DIODE; break;
+        int modelIdx = m_modelType->GetSelection();
 
-            default:
-                wxASSERT_MSG( false, "Unhandled semiconductor type" );
-                return false;
-                break;
-        }
+        if( modelIdx > 0 && modelIdx < (int)modelTypes.size() )
+            m_fieldsTmp[SF_PRIMITIVE] = static_cast<char>( modelTypes[modelIdx].type );
 
         m_fieldsTmp[SF_MODEL] = m_modelName->GetValue();
 
         if( !empty( m_modelLibrary ) )
             m_fieldsTmp[SF_LIB_FILE] = m_modelLibrary->GetValue();
     }
-
 
     // Power source
     else if( page == m_power )
@@ -178,19 +230,23 @@ bool DIALOG_SPICE_MODEL::TransferDataFromWindow()
     {
         if( m_fieldsTmp.count( (SPICE_FIELD) i ) > 0 && !m_fieldsTmp.at( i ).IsEmpty() )
         {
-            getField( i ).SetText( m_fieldsTmp[i] );
+            if( m_useSchFields )
+                getSchField( i ).SetText( m_fieldsTmp[i] );
+            else
+                getLibField( i ).SetText( m_fieldsTmp[i] );
         }
         else
         {
             // Erase empty fields (having empty fields causes a warning in the properties dialog)
             const wxString& spiceField = NETLIST_EXPORTER_PSPICE::GetSpiceFieldName( (SPICE_FIELD) i );
 
-            auto fieldIt = std::find_if( m_fields.begin(), m_fields.end(), [&]( const SCH_FIELD& f ) {
-                return f.GetName() == spiceField;
-            } );
-
-            if( fieldIt != m_fields.end() )
-                m_fields.erase( fieldIt );
+            if( m_useSchFields )
+                m_schfields->erase( std::remove_if( m_schfields->begin(), m_schfields->end(),
+                        [&]( const SCH_FIELD& f )
+                            { return f.GetName() == spiceField; } ), m_schfields->end() );
+            else
+                m_libfields->erase( std::remove_if( m_libfields->begin(), m_libfields->end(),
+                        [&]( const LIB_FIELD& f ) { return f.GetName( NATIVE_FIELD_NAME ) == spiceField; } ), m_libfields->end() );
         }
     }
 
@@ -207,16 +263,33 @@ bool DIALOG_SPICE_MODEL::TransferDataToWindow()
     {
         const wxString& spiceField = spiceFields[idx];
 
-        auto fieldIt = std::find_if( m_fields.begin(), m_fields.end(), [&]( const SCH_FIELD& f ) {
-            return f.GetName() == spiceField;
-        } );
+        m_fieldsTmp[idx] = NETLIST_EXPORTER_PSPICE::GetSpiceFieldDefVal( (SPICE_FIELD) idx, &m_component,
+            NET_ADJUST_INCLUDE_PATHS | NET_ADJUST_PASSIVE_VALS );
 
         // Do not modify the existing value, just add missing fields with default values
-        if( fieldIt != m_fields.end() && !fieldIt->GetText().IsEmpty() )
-            m_fieldsTmp[idx] = fieldIt->GetText();
-        else
-            m_fieldsTmp[idx] = NETLIST_EXPORTER_PSPICE::GetSpiceFieldDefVal( (SPICE_FIELD) idx, &m_component,
-                NET_ADJUST_INCLUDE_PATHS | NET_ADJUST_PASSIVE_VALS );
+        if( m_useSchFields && m_schfields )
+        {
+            for( const auto& field : *m_schfields )
+            {
+                if( field.GetName() == spiceField  && !field.GetText().IsEmpty() )
+                {
+                    m_fieldsTmp[idx] = field.GetText();
+                    break;
+                }
+            }
+        }
+        else if( m_libfields)
+        {
+            // TODO: There must be a good way to template out these repetitive calls
+            for( const LIB_FIELD& field : *m_libfields )
+            {
+                if( field.GetName( NATIVE_FIELD_NAME ) == spiceField  && !field.GetText().IsEmpty() )
+                {
+                    m_fieldsTmp[idx] = field.GetText();
+                    break;
+                }
+            }
+        }
     }
 
     // Analyze the component fields to fill out the dialog
@@ -235,16 +308,13 @@ bool DIALOG_SPICE_MODEL::TransferDataToWindow()
             m_pasValue->SetValue( m_fieldsTmp[SF_MODEL] );
             break;
 
-        case SP_SUBCKT:
         case SP_DIODE:
         case SP_BJT:
         case SP_MOSFET:
+        case SP_JFET:
+        case SP_SUBCKT:
             m_notebook->SetSelection( m_notebook->FindPage( m_model ) );
-            m_modelType->SetSelection( primitive == SP_SUBCKT ? 0
-                    : primitive == SP_BJT ? 1
-                    : primitive == SP_MOSFET ? 2
-                    : primitive == SP_DIODE ? 3
-                    : -1 );
+            m_modelType->SetSelection( getModelTypeIdx( primitive ) );
             m_modelName->SetValue( m_fieldsTmp[SF_MODEL] );
             m_modelLibrary->SetValue( m_fieldsTmp[SF_LIB_FILE] );
 
@@ -427,7 +497,7 @@ bool DIALOG_SPICE_MODEL::parsePowerSource( const wxString& aModel )
             }
         }
 
-        // Get the next token now, so if any of the branches catches an expection, try to
+        // Get the next token now, so if any of the branches catches an exception, try to
         // process it in another branch
         tkn = tokenizer.GetNextToken().Lower();
     }
@@ -534,43 +604,39 @@ bool DIALOG_SPICE_MODEL::generatePowerSource( wxString& aTarget ) const
 
     if( genericProcessing )
     {
-        bool finished = false;
-        unsigned int paramCounter = 0;
-
         trans += "(";
 
-        for( auto textCtrl : genericControls )
+        auto first_empty = std::find_if( genericControls.begin(), genericControls.end(), empty );
+        auto first_not_empty = std::find_if( genericControls.begin(), genericControls.end(),
+                []( const wxTextCtrl* c ){ return !empty( c ); } );
+
+        if( std::distance( first_not_empty, genericControls.end() ) == 0 )
         {
-            if( empty( textCtrl ) )
-            {
-                finished = true;
-
-                if( paramCounter < genericReqParamsCount )
-                {
-                    if( paramCounter == 0 )
-                    {
-                        // It is fine, no parameters were entered
-                        useTrans = false;
-                        break;
-                    }
-
-                    DisplayError( NULL,
-                            wxString::Format( wxT( "You need to specify at least the "
-                                    "first %d parameters for the transient source" ),
+            // all empty
+            useTrans = false;
+        }
+        else if( std::distance( genericControls.begin(), first_empty ) < (int)genericReqParamsCount )
+        {
+            DisplayError( nullptr,
+                    wxString::Format( wxT( "You need to specify at least the "
+                                           "first %d parameters for the transient source" ),
                             genericReqParamsCount ) );
 
-                    return false;
-                }
-            }
-            else if( finished )
-            {
-                DisplayError( NULL, wxT( "You cannot leave interleaved blank "
-                                        "spaces for the transient source" ) );
-                return false;
-            }
-
-            trans += wxString::Format( "%s ", textCtrl->GetValue() );
-            ++paramCounter;
+            return false;
+        }
+        else if( std::find_if_not( first_empty, genericControls.end(),
+                         empty ) != genericControls.end() )
+        {
+            DisplayError( nullptr, wxT( "You cannot leave interleaved empty fields "
+                                        "when defining a transient source" ) );
+            return false;
+        }
+        else
+        {
+            std::for_each( genericControls.begin(), first_empty,
+                    [&trans] ( wxTextCtrl* ctrl ) {
+                trans += wxString::Format( "%s ", ctrl->GetValue() );
+            } );
         }
 
         trans.Trim();
@@ -582,6 +648,7 @@ bool DIALOG_SPICE_MODEL::generatePowerSource( wxString& aTarget ) const
     if( useTrans )
         aTarget += trans;
 
+    // Remove whitespaces from left and right side
     aTarget.Trim( false );
     aTarget.Trim( true );
 
@@ -606,12 +673,22 @@ void DIALOG_SPICE_MODEL::loadLibrary( const wxString& aFilePath )
     }
 
     // Display the library contents
-    m_libraryContents->LoadFile( filePath.GetFullPath() );
+    wxWindowUpdateLocker updateLock( this );
+    m_libraryContents->Clear();
+    wxTextFile file;
+    file.Open( filePath.GetFullPath() );
+    int line_nr = 0;
+
+    // Stores the libray content. It will be displayed after reading the full library
+    wxString fullText;
 
     // Process the file, looking for components
-    for( int line_nr = 0; line_nr < m_libraryContents->GetNumberOfLines(); ++line_nr )
+    while( !file.Eof() )
     {
-        wxStringTokenizer tokenizer( m_libraryContents->GetLineText( line_nr ) );
+        const wxString& line = line_nr == 0 ? file.GetFirstLine() : file.GetNextLine();
+        fullText << line << '\n';
+
+        wxStringTokenizer tokenizer( line );
 
         while( tokenizer.HasMoreTokens() )
         {
@@ -627,9 +704,9 @@ void DIALOG_SPICE_MODEL::loadLibrary( const wxString& aFilePath )
                     break;
 
                 token = tokenizer.GetNextToken();
-                MODEL::TYPE type = MODEL::parseModelType( token );
+                SPICE_PRIMITIVE type = MODEL::parseModelType( token );
 
-                if( type != MODEL::UNKNOWN )
+                if( type != SP_UNKNOWN )
                     m_models.emplace( name, MODEL( line_nr, type ) );
             }
 
@@ -643,7 +720,7 @@ void DIALOG_SPICE_MODEL::loadLibrary( const wxString& aFilePath )
                 if( name.IsEmpty() )
                     break;
 
-                m_models.emplace( name, MODEL( line_nr, MODEL::SUBCKT ) );
+                m_models.emplace( name, MODEL( line_nr, SP_SUBCKT ) );
             }
 
             else if( token == ".ends" )
@@ -652,13 +729,25 @@ void DIALOG_SPICE_MODEL::loadLibrary( const wxString& aFilePath )
                 in_subckt = false;
             }
         }
+
+        ++line_nr;
     }
+
+    // display the full library content:
+    m_libraryContents->AppendText( fullText );
+
+    wxArrayString modelsList;
 
     // Refresh the model name combobox values
     m_modelName->Clear();
 
     for( const auto& model : m_models )
+    {
         m_modelName->Append( model.first );
+        modelsList.Add( model.first );
+    }
+
+    m_modelName->AutoComplete( modelsList );
 
     // Restore the previous value or if there is none - pick the first one from the loaded library
     if( !curModel.IsEmpty() )
@@ -668,21 +757,43 @@ void DIALOG_SPICE_MODEL::loadLibrary( const wxString& aFilePath )
 }
 
 
-SCH_FIELD& DIALOG_SPICE_MODEL::getField( int aFieldType )
+SCH_FIELD& DIALOG_SPICE_MODEL::getSchField( int aFieldType )
 {
     const wxString& spiceField = NETLIST_EXPORTER_PSPICE::GetSpiceFieldName( (SPICE_FIELD) aFieldType );
 
-    auto fieldIt = std::find_if( m_fields.begin(), m_fields.end(), [&]( const SCH_FIELD& f ) {
+    auto fieldIt = std::find_if( m_schfields->begin(), m_schfields->end(), [&]( const SCH_FIELD& f ) {
         return f.GetName() == spiceField;
     } );
 
     // Found one, so return it
-    if( fieldIt != m_fields.end() )
+    if( fieldIt != m_schfields->end() )
         return *fieldIt;
 
     // Create a new field with requested name
-    m_fields.emplace_back( wxPoint(), m_fields.size(), &m_component, spiceField );
-    return m_fields.back();
+    m_schfields->emplace_back( wxPoint(), m_schfields->size(), &m_component, spiceField );
+    return m_schfields->back();
+}
+
+
+LIB_FIELD& DIALOG_SPICE_MODEL::getLibField( int aFieldType )
+{
+    const wxString& spiceField = NETLIST_EXPORTER_PSPICE::GetSpiceFieldName( (SPICE_FIELD) aFieldType );
+
+    auto fieldIt = std::find_if( m_libfields->begin(), m_libfields->end(), [&]( const LIB_FIELD& f ) {
+        return f.GetName( NATIVE_FIELD_NAME ) == spiceField;
+    } );
+
+    // Found one, so return it
+    if( fieldIt != m_libfields->end() )
+        return *fieldIt;
+
+    // Create a new field with requested name
+    LIB_FIELD new_field( m_libfields->size() );
+    m_libfields->front().Copy( &new_field );
+    new_field.SetName( spiceField );
+
+    m_libfields->push_back( new_field );
+    return m_libfields->back();
 }
 
 
@@ -700,9 +811,11 @@ bool DIALOG_SPICE_MODEL::addPwlValue( const wxString& aTime, const wxString& aVa
     float timeF;
     m_pwlTime->GetValue().ToDouble( &timeD );
     timeF = timeD;
+    long data;
+    std::memcpy( &data, &timeF, sizeof( timeF ) );
 
     // Store the time value, so the entries can be sorted
-    m_pwlValList->SetItemData( idx, *reinterpret_cast<long*>( &timeF ) );
+    m_pwlValList->SetItemData( idx, data );
 
     // Sort items by timestamp
     m_pwlValList->SortItems( comparePwlValues, -1 );
@@ -718,8 +831,8 @@ void DIALOG_SPICE_MODEL::onSelectLibrary( wxCommandEvent& event )
     if( searchPath.IsEmpty() )
         searchPath = Prj().GetProjectPath();
 
-    wxFileDialog openDlg( this, wxT( "Select library" ), searchPath, "",
-            "Spice library file (*.lib)|*.lib;*.LIB|Any file|*",
+    wxString     wildcards = SpiceLibraryFileWildcard() + "|" + AllFilesWildcard();
+    wxFileDialog openDlg( this, _( "Select library" ), searchPath, "", wildcards,
             wxFD_OPEN | wxFD_FILE_MUST_EXIST );
 
     if( openDlg.ShowModal() == wxID_CANCEL )
@@ -745,7 +858,7 @@ void DIALOG_SPICE_MODEL::onModelSelected( wxCommandEvent& event )
 
     if( it != m_models.end() )
     {
-        m_modelType->SetSelection( (int) it->second.model );
+        m_modelType->SetSelection( getModelTypeIdx( it->second.model ) );
 
         // scroll to the bottom, so the model definition is shown in the first line
         m_libraryContents->ShowPosition(
@@ -754,7 +867,6 @@ void DIALOG_SPICE_MODEL::onModelSelected( wxCommandEvent& event )
     }
     else
     {
-        m_modelType->SetSelection( wxNOT_FOUND );
         m_libraryContents->ShowPosition( 0 );
     }
 }
@@ -773,19 +885,19 @@ void DIALOG_SPICE_MODEL::onPwlRemove( wxCommandEvent& event )
 }
 
 
-DIALOG_SPICE_MODEL::MODEL::TYPE DIALOG_SPICE_MODEL::MODEL::parseModelType( const wxString& aValue )
+SPICE_PRIMITIVE DIALOG_SPICE_MODEL::MODEL::parseModelType( const wxString& aValue )
 {
-    if( aValue.IsEmpty() )
-        return UNKNOWN;
-
+    wxCHECK( !aValue.IsEmpty(), SP_UNKNOWN );
     const wxString val( aValue.Lower() );
 
-    if( val.StartsWith( "npn" ) || val.StartsWith( "pnp" ) )
-        return BJT;
-    else if( val.StartsWith( "nmos" ) || val.StartsWith( "pmos" ) )
-        return MOSFET;
-    else if( val[0] == 'd' )
-        return DIODE;
+    for( const auto& model : modelTypes )
+    {
+        for( const auto& keyword : model.keywords )
+        {
+            if( val.StartsWith( keyword ) )
+                return model.type;
+        }
+    }
 
-    return UNKNOWN;
+    return SP_UNKNOWN;
 }

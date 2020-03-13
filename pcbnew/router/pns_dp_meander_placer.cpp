@@ -19,7 +19,7 @@
  * with this program.  If not, see <http://www.gnu.org/licenses/>.
  */
 
-#include <boost/optional.hpp>
+#include <core/optional.h>
 
 #include <base_units.h> // God forgive me doing this...
 
@@ -33,18 +33,19 @@
 
 namespace PNS {
 
-using boost::optional;
-
 DP_MEANDER_PLACER::DP_MEANDER_PLACER( ROUTER* aRouter ) :
     MEANDER_PLACER_BASE( aRouter )
 {
-    m_world = NULL;
+    m_world       = NULL;
     m_currentNode = NULL;
+
+    m_padToDieP = 0;
+    m_padToDieN = 0;
 
     // Init temporary variables (do not leave uninitialized members)
     m_initialSegment = NULL;
-    m_lastLength = 0;
-    m_lastStatus = TOO_SHORT;
+    m_lastLength     = 0;
+    m_lastStatus     = TOO_SHORT;
 }
 
 
@@ -107,6 +108,10 @@ bool DP_MEANDER_PLACER::Start( const VECTOR2I& aP, ITEM* aStartItem )
     m_tunedPathP = topo.AssembleTrivialPath( m_originPair.PLine().GetLink( 0 ) );
     m_tunedPathN = topo.AssembleTrivialPath( m_originPair.NLine().GetLink( 0 ) );
 
+    m_padToDieP = GetTotalPadToDieLength( m_originPair.PLine() );
+    m_padToDieN = GetTotalPadToDieLength( m_originPair.NLine() );
+    m_padToDieLenth = std::max( m_padToDieP, m_padToDieN );
+
     m_world->Remove( m_originPair.PLine() );
     m_world->Remove( m_originPair.NLine() );
 
@@ -121,10 +126,10 @@ void DP_MEANDER_PLACER::release()
 }
 
 
-int DP_MEANDER_PLACER::origPathLength() const
+long long int DP_MEANDER_PLACER::origPathLength() const
 {
-    int totalP = 0;
-    int totalN = 0;
+    long long int totalP = m_padToDieLenth;
+    long long int totalN = m_padToDieLenth;
 
     for( const ITEM* item : m_tunedPathP.CItems() )
     {
@@ -152,7 +157,7 @@ const SEG DP_MEANDER_PLACER::baselineSegment( const DIFF_PAIR::COUPLED_SEGMENTS&
 }
 
 
-static bool pairOrientation( const DIFF_PAIR::COUPLED_SEGMENTS& aPair )
+bool DP_MEANDER_PLACER::pairOrientation( const DIFF_PAIR::COUPLED_SEGMENTS& aPair )
 {
     VECTOR2I midp = ( aPair.coupledP.A + aPair.coupledN.A ) / 2;
 
@@ -199,7 +204,7 @@ bool DP_MEANDER_PLACER::Move( const VECTOR2I& aP, ITEM* aEndItem )
 
     int offset = ( tuned.Gap() + tuned.Width() ) / 2;
 
-    if( !pairOrientation( coupledSegments[0] ) )
+    if( pairOrientation( coupledSegments[0] ) )
         offset *= -1;
 
     m_result.SetBaselineOffset( offset );
@@ -245,7 +250,7 @@ bool DP_MEANDER_PLACER::Move( const VECTOR2I& aP, ITEM* aEndItem )
     while( curIndexN < tunedN.PointCount() )
         m_result.AddCorner( tunedP.CPoint( -1 ), tunedN.CPoint( curIndexN++ ) );
 
-    int dpLen = origPathLength();
+    long long int dpLen = origPathLength();
 
     m_lastStatus = TUNED;
 
@@ -302,7 +307,7 @@ bool DP_MEANDER_PLACER::Move( const VECTOR2I& aP, ITEM* aEndItem )
 }
 
 
-bool DP_MEANDER_PLACER::FixRoute( const VECTOR2I& aP, ITEM* aEndItem )
+bool DP_MEANDER_PLACER::FixRoute( const VECTOR2I& aP, ITEM* aEndItem, bool aForceFinish )
 {
     LINE lP( m_originPair.PLine(), m_finalShapeP );
     LINE lN( m_originPair.NLine(), m_finalShapeN );
@@ -310,8 +315,32 @@ bool DP_MEANDER_PLACER::FixRoute( const VECTOR2I& aP, ITEM* aEndItem )
     m_currentNode->Add( lP );
     m_currentNode->Add( lN );
 
-    Router()->CommitRouting( m_currentNode );
+    CommitPlacement();
 
+    return true;
+}
+
+
+bool DP_MEANDER_PLACER::AbortPlacement()
+{
+    m_world->KillChildren();
+    return true;
+}
+
+
+bool DP_MEANDER_PLACER::HasPlacedAnything() const
+{
+     return m_originPair.CP().SegmentCount() > 0 ||
+             m_originPair.CN().SegmentCount() > 0;
+}
+
+
+bool DP_MEANDER_PLACER::CommitPlacement()
+{
+    if( m_currentNode )
+        Router()->CommitRouting( m_currentNode );
+
+    m_currentNode = NULL;
     return true;
 }
 
@@ -360,7 +389,7 @@ int DP_MEANDER_PLACER::CurrentLayer() const
 }
 
 
-const wxString DP_MEANDER_PLACER::TuningInfo() const
+const wxString DP_MEANDER_PLACER::TuningInfo( EDA_UNITS aUnits ) const
 {
     wxString status;
 
@@ -379,11 +408,11 @@ const wxString DP_MEANDER_PLACER::TuningInfo() const
         return _( "?" );
     }
 
-    status += LengthDoubleToString( (double) m_lastLength, false );
+    status += ::MessageTextFromValue( aUnits, m_lastLength, false );
     status += "/";
-    status += LengthDoubleToString( (double) m_settings.m_targetLength, false );
+    status += ::MessageTextFromValue( aUnits, m_settings.m_targetLength, false );
     status += " (gap: ";
-    status += LengthDoubleToString( (double) m_originPair.Gap(), false );
+    status += ::MessageTextFromValue( aUnits, m_originPair.Gap(), false );
     status += ")";
 
     return status;

@@ -28,12 +28,13 @@
  */
 #include <wx/dir.h>
 
-#include <fctsys.h>
-#include <wxPcbStruct.h>
-#include <kiface_i.h>
-
-#include <pcbnew.h>
 #include <class_board.h>
+#include <confirm.h>
+#include <fctsys.h>
+#include <kiface_i.h>
+#include <pcb_edit_frame.h>
+#include <pcbnew_settings.h>
+#include <pcbnew.h>
 
 
 /* the dialog to create VRML files, derived from DIALOG_EXPORT_3DFILE_BASE,
@@ -41,19 +42,11 @@
  */
 #include <dialog_export_vrml_base.h> // the wxFormBuilder header file
 
-#define OPTKEY_OUTPUT_UNIT wxT( "VrmlExportUnit" )
-#define OPTKEY_3DFILES_OPT wxT( "VrmlExportCopyFiles" )
-#define OPTKEY_USE_RELATIVE_PATHS wxT( "VrmlUseRelativePaths" )
-#define OPTKEY_USE_PLAIN_PCB wxT( "VrmlUsePlainPCB" )
-#define OPTKEY_VRML_REF_UNITS wxT( "VrmlRefUnits" )
-#define OPTKEY_VRML_REF_X wxT( "VrmlRefX" )
-#define OPTKEY_VRML_REF_Y wxT( "VrmlRefY" )
-
 
 class DIALOG_EXPORT_3DFILE : public DIALOG_EXPORT_3DFILE_BASE
 {
 private:
-    wxConfigBase*   m_config;
+    PCB_EDIT_FRAME* m_parent;
     int             m_unitsOpt;             // Remember last units option
     bool            m_copy3DFilesOpt;       // Remember last copy model files option
     bool            m_useRelativePathsOpt;  // Remember last use absolute paths option
@@ -64,17 +57,20 @@ private:
 
 public:
     DIALOG_EXPORT_3DFILE( PCB_EDIT_FRAME* parent ) :
-        DIALOG_EXPORT_3DFILE_BASE( parent )
+        DIALOG_EXPORT_3DFILE_BASE( parent ), m_parent( parent )
     {
-        m_config = Kiface().KifaceSettings();
         m_filePicker->SetFocus();
-        m_config->Read( OPTKEY_OUTPUT_UNIT, &m_unitsOpt, 1 );
-        m_config->Read( OPTKEY_3DFILES_OPT, &m_copy3DFilesOpt, false );
-        m_config->Read( OPTKEY_USE_RELATIVE_PATHS, &m_useRelativePathsOpt, false );
-        m_config->Read( OPTKEY_USE_PLAIN_PCB, &m_usePlainPCBOpt, false );
-        m_config->Read( OPTKEY_VRML_REF_UNITS, &m_RefUnits, 0 );
-        m_config->Read( OPTKEY_VRML_REF_X, &m_XRef, 0.0 );
-        m_config->Read( OPTKEY_VRML_REF_Y, &m_YRef, 0.0 );
+
+        auto cfg = m_parent->GetSettings();
+
+        m_unitsOpt            = cfg->m_ExportVrml.units;
+        m_copy3DFilesOpt      = cfg->m_ExportVrml.copy_3d_models;
+        m_useRelativePathsOpt = cfg->m_ExportVrml.use_relative_paths;
+        m_usePlainPCBOpt      = cfg->m_ExportVrml.use_plain_pcb;
+        m_RefUnits            = cfg->m_ExportVrml.ref_units;
+        m_XRef                = cfg->m_ExportVrml.ref_x;
+        m_YRef                = cfg->m_ExportVrml.ref_y;
+
         m_rbSelectUnits->SetSelection( m_unitsOpt );
         m_cbCopyFiles->SetValue( m_copy3DFilesOpt );
         m_cbUseRelativePaths->SetValue( m_useRelativePathsOpt );
@@ -99,13 +95,21 @@ public:
     {
         m_unitsOpt = GetUnits();
         m_copy3DFilesOpt = GetCopyFilesOption();
-        m_config->Write( OPTKEY_OUTPUT_UNIT, m_unitsOpt );
-        m_config->Write( OPTKEY_3DFILES_OPT, m_copy3DFilesOpt );
-        m_config->Write( OPTKEY_USE_RELATIVE_PATHS, m_useRelativePathsOpt );
-        m_config->Write( OPTKEY_USE_PLAIN_PCB, m_usePlainPCBOpt );
-        m_config->Write( OPTKEY_VRML_REF_UNITS, m_VRML_RefUnitChoice->GetSelection() );
-        m_config->Write( OPTKEY_VRML_REF_X, m_VRML_Xref->GetValue() );
-        m_config->Write( OPTKEY_VRML_REF_Y, m_VRML_Yref->GetValue() );
+
+        auto cfg = m_parent->GetSettings();
+
+        cfg->m_ExportVrml.units              = m_unitsOpt;
+        cfg->m_ExportVrml.copy_3d_models     = m_copy3DFilesOpt;
+        cfg->m_ExportVrml.use_relative_paths = m_useRelativePathsOpt;
+        cfg->m_ExportVrml.use_plain_pcb      = m_usePlainPCBOpt;
+        cfg->m_ExportVrml.ref_units          = m_VRML_RefUnitChoice->GetSelection();
+
+        double val = 0.0;
+        m_VRML_Xref->GetValue().ToDouble( &val );
+        cfg->m_ExportVrml.ref_x = val;
+
+        m_VRML_Yref->GetValue().ToDouble( &val );
+        cfg->m_ExportVrml.ref_y = val;
     };
 
     void SetSubdir( const wxString & aDir )
@@ -130,12 +134,12 @@ public:
 
     double GetXRef()
     {
-        return DoubleValueFromString( UNSCALED_UNITS, m_VRML_Xref->GetValue() );
+        return DoubleValueFromString( EDA_UNITS::UNSCALED, m_VRML_Xref->GetValue() );
     }
 
     double GetYRef()
     {
-        return DoubleValueFromString( UNSCALED_UNITS, m_VRML_Yref->GetValue() );
+        return DoubleValueFromString( EDA_UNITS::UNSCALED, m_VRML_Yref->GetValue() );
     }
 
     int GetUnits()
@@ -174,7 +178,7 @@ bool DIALOG_EXPORT_3DFILE::TransferDataFromWindow()
 
     if( fn.Exists() )
     {
-        if( wxMessageBox( _( "Are you sure you want to overwrite the exiting file(s)?" ),
+        if( wxMessageBox( _( "Are you sure you want to overwrite the existing file?" ),
                           _( "Warning" ), wxYES_NO | wxCENTER | wxICON_QUESTION, this ) == wxNO )
             return false;
     }
@@ -187,33 +191,27 @@ void PCB_EDIT_FRAME::OnExportVRML( wxCommandEvent& event )
 {
     // These variables are static to keep info during the session.
     static wxString subDirFor3Dshapes;
-    static wxString last_brdName;   // the last board name used to build the vrml filename
-    static wxString last_vrmlName;  // the last wrml file name built
 
-    // If the board name has changed since the last export,
-    // do not use the old path, initialized by an other board
-    if( last_brdName.IsEmpty() || last_brdName != GetBoard()->GetFileName() )
+    // Build default output file name
+    wxString path = GetLastPath( LAST_PATH_VRML );
+
+    if( path.IsEmpty() )
     {
-        last_brdName = GetBoard()->GetFileName();
-        last_vrmlName = last_brdName;
+        wxFileName brdFile = GetBoard()->GetFileName();
+        brdFile.SetExt( "wrl" );
+        path = brdFile.GetFullPath();
     }
 
     if( subDirFor3Dshapes.IsEmpty() )
-    {
         subDirFor3Dshapes = wxT( "shapes3D" );
-    }
 
     // The general VRML scale factor
     // Assuming the VRML default unit is the mm
     // this is the mm to VRML scaling factor for mm, 0.1 inch, and inch
     double scaleList[4] = { 1.0, 0.001, 10.0/25.4, 1.0/25.4 };
 
-    // Build default file name, to display in the file picker
-    wxFileName fn = last_vrmlName;
-    fn.SetExt( wxT( "wrl" ) );
-
     DIALOG_EXPORT_3DFILE dlg( this );
-    dlg.FilePicker()->SetPath( fn.GetFullPath() );
+    dlg.FilePicker()->SetPath( path );
     dlg.SetSubdir( subDirFor3Dshapes );
 
     if( dlg.ShowModal() != wxID_OK )
@@ -234,8 +232,10 @@ void PCB_EDIT_FRAME::OnExportVRML( wxCommandEvent& event )
     bool useRelativePaths = dlg.GetUseRelativePathsOption();
     bool usePlainPCB = dlg.GetUsePlainPCBOption();
 
-    last_vrmlName = dlg.FilePicker()->GetPath();
-    wxFileName modelPath = last_vrmlName;
+    path = dlg.FilePicker()->GetPath();
+    SetLastPath( LAST_PATH_VRML, path );
+    wxFileName modelPath = path;
+
     wxBusyCursor dummy;
 
     subDirFor3Dshapes = dlg.GetSubdir3Dshapes();
@@ -243,15 +243,20 @@ void PCB_EDIT_FRAME::OnExportVRML( wxCommandEvent& event )
 
     if( export3DFiles && !modelPath.DirExists() )
     {
-        modelPath.Mkdir();
+        if( !modelPath.Mkdir() )
+        {
+            wxString msg = wxString::Format(
+                    _( "Unable to create directory \"%s\"" ), modelPath.GetPath() );
+            DisplayErrorMessage( this, msg );
+            return;
+        }
     }
 
-    if( !ExportVRML_File( last_vrmlName, scale, export3DFiles, useRelativePaths,
+    if( !ExportVRML_File( path, scale, export3DFiles, useRelativePaths,
                           usePlainPCB, modelPath.GetPath(), aXRef, aYRef ) )
     {
-        wxString msg;
-        msg.Printf( _( "Unable to create file '%s'" ), GetChars( last_vrmlName ) );
-        wxMessageBox( msg );
+        wxString msg = wxString::Format( _( "Unable to create file \"%s\"" ), path );
+        DisplayErrorMessage( this, msg );
         return;
     }
 }

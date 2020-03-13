@@ -28,15 +28,15 @@
 
 #include <fctsys.h>
 #include <confirm.h>
-#include <wxPcbStruct.h>
+#include <pcb_edit_frame.h>
 
 #include <class_board.h>
 
 #include <pcbnew.h>
-#include <module_editor_frame.h>
+#include <footprint_edit_frame.h>
 
 
-bool PCB_EDIT_FRAME::Clear_Pcb( bool aQuery )
+bool PCB_EDIT_FRAME::Clear_Pcb( bool aQuery, bool aFinal )
 {
     if( GetBoard() == NULL )
         return false;
@@ -44,9 +44,12 @@ bool PCB_EDIT_FRAME::Clear_Pcb( bool aQuery )
     if( aQuery && !GetBoard()->IsEmpty() )
     {
         if( !IsOK( this,
-                   _( "Current Board will be lost and this operation cannot be undone. Continue ?" ) ) )
+                   _( "Current Board will be lost and this operation cannot be undone. Continue?" ) ) )
             return false;
     }
+
+    // Release the lock file, if exists
+    ReleaseFile();
 
     // Clear undo and redo lists because we want a full deletion
     GetScreen()->ClearUndoRedoList();
@@ -55,37 +58,38 @@ bool PCB_EDIT_FRAME::Clear_Pcb( bool aQuery )
     // Items visibility flags will be set because a new board will be created.
     // Grid and ratsnest can be left to their previous state
     bool showGrid = IsElementVisible( LAYER_GRID );
-    bool showRats = IsElementVisible( LAYER_RATSNEST );
+    bool showRats = GetDisplayOptions().m_ShowGlobalRatsnest;
 
-    // delete the old BOARD and create a new BOARD so that the default
-    // layer names are put into the BOARD.
-    SetBoard( new BOARD() );
-    SetElementVisibility( LAYER_GRID, showGrid );
-    SetElementVisibility( LAYER_RATSNEST, showRats );
+    if( !aFinal )
+    {
+        // delete the old BOARD and create a new BOARD so that the default
+        // layer names are put into the BOARD.
+        SetBoard( new BOARD() );
+        SetElementVisibility( LAYER_GRID, showGrid );
+        SetElementVisibility( LAYER_RATSNEST, showRats );
 
-    SetCurItem( NULL );
+        // clear filename, to avoid overwriting an old file
+        GetBoard()->SetFileName( wxEmptyString );
 
-    // clear filename, to avoid overwriting an old file
-    GetBoard()->SetFileName( wxEmptyString );
+        GetScreen()->InitDataPoints( GetPageSizeIU() );
 
-    GetScreen()->InitDataPoints( GetPageSizeIU() );
+        GetBoard()->ResetNetHighLight();
 
-    GetBoard()->ResetHighLight();
+        // Enable all layers (SetCopperLayerCount() will adjust the copper layers enabled)
+        GetBoard()->SetEnabledLayers( LSET().set() );
 
-    // Enable all layers (SetCopperLayerCount() will adjust the copper layers enabled)
-    GetBoard()->SetEnabledLayers( LSET().set() );
+        // Default copper layers count set to 2: double layer board
+        GetBoard()->SetCopperLayerCount( 2 );
 
-    // Default copper layers count set to 2: double layer board
-    GetBoard()->SetCopperLayerCount( 2 );
+        // Update display (some options depend on the board setup)
+        GetBoard()->SetVisibleLayers( LSET().set() );
+        ReCreateLayerBox();
+        ReCreateAuxiliaryToolbar();
+        ReFillLayerWidget();
+        UpdateTitle();
 
-    // Update display (some options depend on the board setup)
-    GetBoard()->SetVisibleLayers( LSET().set() );
-    ReCreateLayerBox();
-    ReCreateAuxiliaryToolbar();
-    ReFillLayerWidget();
-    UpdateTitle();
-
-    Zoom_Automatique( false );
+        Zoom_Automatique( false );
+    }
 
     return true;
 }
@@ -96,11 +100,16 @@ bool FOOTPRINT_EDIT_FRAME::Clear_Pcb( bool aQuery )
     if( GetBoard() == NULL )
         return false;
 
-    if( aQuery && GetScreen()->IsModify() && !GetBoard()->IsEmpty() )
+    if( aQuery && IsContentModified() )
     {
-        if( !IsOK( this,
-                   _( "Current Footprint will be lost and this operation cannot be undone. Continue ?" ) ) )
+        wxSafeYield( this, true );      // Allow frame to come to front before showing warning.
+
+        if( !HandleUnsavedChanges( this, _( "The current footprint has been modified.  "
+                                            "Save changes?" ),
+                    [&]() -> bool { return SaveFootprint( GetBoard()->Modules().front() ); } ) )
+        {
             return false;
+        }
     }
 
     // Clear undo and redo lists because we want a full deletion
@@ -113,9 +122,8 @@ bool FOOTPRINT_EDIT_FRAME::Clear_Pcb( bool aQuery )
     if( GetBoard() )
         board->SetDesignSettings( GetBoard()->GetDesignSettings() );
 
+    board->SynchronizeNetsAndNetClasses();
     SetBoard( board );
-
-    SetCurItem( NULL );
 
     // clear filename, to avoid overwriting an old file
     GetBoard()->SetFileName( wxEmptyString );

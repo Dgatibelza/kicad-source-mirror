@@ -34,10 +34,10 @@ class TOOL_MANAGER;
 class TOOL_ACTION;
 
 /**
- * Class ACTION_MANAGER
+ * ACTION_MANAGER
  *
- * Takes care of TOOL_ACTION objects. Registers them and allows to run them using associated
- * hot keys, names or ids.
+ * Takes care of TOOL_ACTION objects. Registers them and allows one to run them
+ * using associated hot keys, names or ids.
  */
 class ACTION_MANAGER
 {
@@ -63,16 +63,14 @@ public:
     void RegisterAction( TOOL_ACTION* aAction );
 
     /**
-     * Function UnregisterAction()
-     * Removes a tool action from the manager and makes it unavailable for further usage.
-     * @param aAction: action to be removed.
-     */
-    void UnregisterAction( TOOL_ACTION* aAction );
-
-    /**
      * Generates an unique ID from for an action with given name.
      */
     static int MakeActionId( const std::string& aActionName );
+
+    /**
+     * Get a list of currently-registered actions mapped by their name.
+     */
+    const std::map<std::string, TOOL_ACTION*>& GetActions();
 
     /**
      * Function FindAction()
@@ -99,9 +97,9 @@ public:
 
     /**
      * Function UpdateHotKeys()
-     * Updates TOOL_ACTIONs hot key assignment according to the current frame's Hot Key Editor settings.
+     * Optionally reads the hotkey config files and then rebuilds the internal hotkey maps.
      */
-    void UpdateHotKeys();
+    void UpdateHotKeys( bool aFullUpdate );
 
     /**
      * Function GetActionList()
@@ -117,9 +115,10 @@ public:
     }
 
 private:
-    ///> Resolves a reference to legacy hot key settings to a particular hot key.
-    ///> @param aAction is the action to be resolved.
-    int processHotKey( TOOL_ACTION* aAction );
+    // Resolves a hotkey by applying legacy and current settings over the action's
+    // default hotkey.
+    int processHotKey( TOOL_ACTION* aAction, std::map<std::string, int> aLegacyMap,
+                       std::map<std::string, int> aHotKeyMap );
 
     ///> Tool manager needed to run actions
     TOOL_MANAGER* m_toolMgr;

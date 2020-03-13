@@ -39,7 +39,7 @@ namespace PREVIEW
 {
 
 /**
- * Class POLYGON_ITEM
+ * POLYGON_ITEM
  *
  * A preview item which shows an in-progress polygon, which
  * can be used for zone outlines, etc
@@ -62,8 +62,8 @@ public:
      * @param aLeaderPts - the lines from the last fixed point to
      *        another point, eg the cursor.
      */
-    void SetPoints( const std::vector<VECTOR2I>& aLockedInPts,
-                    const std::vector<VECTOR2I>& aLeaderPts );
+    void SetPoints( const SHAPE_LINE_CHAIN& aLockedInPts,
+                    const SHAPE_LINE_CHAIN& aLeaderPts );
 
 private:
 
@@ -75,6 +75,8 @@ private:
 
     ///> polygon fill
     SHAPE_POLY_SET m_polyfill;
+
+    static const double POLY_LINE_WIDTH;
 };
 
 } // PREVIEW

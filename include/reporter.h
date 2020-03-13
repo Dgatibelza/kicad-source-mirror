@@ -26,6 +26,7 @@
 #define _REPORTER_H_
 
 #include <wx/string.h>
+#include <widgets/ui_common.h>
 
 /**
  * @file reporter.h
@@ -40,7 +41,7 @@ class WX_HTML_REPORT_PANEL;
 
 
 /**
- * Class REPORTER
+ * REPORTER
  * is a pure virtual class used to derive REPORTER objects from.
  *
  * The purpose of the REPORTER object is to offer a way for a procedural function
@@ -61,13 +62,16 @@ class WX_HTML_REPORT_PANEL;
 class REPORTER {
 
 public:
-    ///> Severity of the reported messages.
-    enum SEVERITY {
-        RPT_UNDEFINED = 0x0,
-        RPT_INFO      = 0x1,
-        RPT_WARNING   = 0x2,
-        RPT_ERROR     = 0x4,
-        RPT_ACTION    = 0x8
+    /**
+     * Location where the message is to be reported.
+     * LOC_HEAD messages are printed before all others (typically intro messages)
+     * LOC_BODY messages are printed in the middle
+     * LOC_TAIL messages are printed after all others (typically status messages)
+     */
+    enum LOCATION {
+        LOC_HEAD = 0,
+        LOC_BODY,
+        LOC_TAIL
     };
 
     /**
@@ -79,19 +83,47 @@ public:
      * RPT_ERROR, RPT_ACTION ) used to filter and format messages
      */
 
-    virtual REPORTER& Report( const wxString& aText, SEVERITY aSeverity = RPT_UNDEFINED ) = 0;
+    virtual REPORTER& Report( const wxString& aText, SEVERITY aSeverity = RPT_SEVERITY_UNDEFINED ) = 0;
 
-    REPORTER& Report( const char* aText, SEVERITY aSeverity = RPT_UNDEFINED );
+    /**
+     * Function ReportTail
+     * Places the report at the end of the list, for objects that support report ordering
+     */
+    virtual REPORTER& ReportTail( const wxString& aText, SEVERITY aSeverity = RPT_SEVERITY_UNDEFINED )
+    {
+        return Report( aText, aSeverity );
+    }
+
+    /**
+     * Function ReportHead
+     * Places the report at the beginning of the list for objects that support ordering
+     */
+    virtual REPORTER& ReportHead( const wxString& aText, SEVERITY aSeverity = RPT_SEVERITY_UNDEFINED )
+    {
+        return Report( aText, aSeverity );
+    }
+
+    REPORTER& Report( const char* aText, SEVERITY aSeverity = RPT_SEVERITY_UNDEFINED );
 
     REPORTER& operator <<( const wxString& aText ) { return Report( aText ); }
     REPORTER& operator <<( const wxChar* aText ) { return Report( wxString( aText ) ); }
     REPORTER& operator <<( wxChar aChar ) { return Report( wxString( aChar ) ); }
     REPORTER& operator <<( const char* aText ) { return Report( aText ); }
+
+    /**
+     * Function HasMessage
+     * Returns true if the reporter client is non-empty.
+     */
+    virtual bool HasMessage() const = 0;
+
+    virtual ~REPORTER()
+    {
+    }
 };
 
 
 /**
- * Class WX_TEXT_CTRL_REPORTER
+ * WX_TEXT_CTRL_REPORTER
  * is wrapper for reporting to a wxTextCtrl object.
  */
 class WX_TEXT_CTRL_REPORTER : public REPORTER
@@ -105,12 +137,18 @@ public:
     {
     }
 
-    REPORTER& Report( const wxString& aText, SEVERITY aSeverity = RPT_UNDEFINED ) override;
+    virtual ~WX_TEXT_CTRL_REPORTER()
+    {
+    }
+
+    REPORTER& Report( const wxString& aText, SEVERITY aSeverity = RPT_SEVERITY_UNDEFINED ) override;
+
+    bool HasMessage() const override;
 };
 
 
 /**
- * Class WX_STRING_REPORTER
+ * WX_STRING_REPORTER
  * is a wrapper for reporting to a wxString object.
  */
 class WX_STRING_REPORTER : public REPORTER
@@ -124,12 +162,18 @@ public:
     {
     }
 
-    REPORTER& Report( const wxString& aText, SEVERITY aSeverity = RPT_UNDEFINED ) override;
+    virtual ~WX_STRING_REPORTER()
+    {
+    }
+
+    REPORTER& Report( const wxString& aText, SEVERITY aSeverity = RPT_SEVERITY_UNDEFINED ) override;
+
+    bool HasMessage() const override;
 };
 
 
 /**
- * Class WX_HTML_PANEL_REPORTER
+ * WX_HTML_PANEL_REPORTER
  * is a wrapper for reporting to a wx HTML window
  */
 class WX_HTML_PANEL_REPORTER : public REPORTER
@@ -143,25 +187,64 @@ public:
     {
     }
 
-    REPORTER& Report( const wxString& aText, SEVERITY aSeverity = RPT_UNDEFINED ) override;
+    virtual ~WX_HTML_PANEL_REPORTER()
+    {
+    }
+
+    REPORTER& Report( const wxString& aText, SEVERITY aSeverity = RPT_SEVERITY_UNDEFINED ) override;
+
+    REPORTER& ReportTail( const wxString& aText, SEVERITY aSeverity = RPT_SEVERITY_UNDEFINED ) override;
+
+    REPORTER& ReportHead( const wxString& aText, SEVERITY aSeverity = RPT_SEVERITY_UNDEFINED ) override;
+
+    bool HasMessage() const override;
 };
 
 /**
- * Class NULL_REPORTER
+ * NULL_REPORTER
  *
  * A singleton reporter that reports to nowhere. Used as to simplify code by
  * avoiding the reportee to check for a non-NULL reporter object.
  */
 class NULL_REPORTER : public REPORTER
 {
-    public:
-        NULL_REPORTER()
-        {
-        };
+public:
+    NULL_REPORTER()
+    {
+    }
 
-        static REPORTER& GetInstance();
+    virtual ~NULL_REPORTER()
+    {
+    }
 
-        REPORTER& Report( const wxString& aText, SEVERITY aSeverity = RPT_UNDEFINED ) override;
+    static REPORTER& GetInstance();
+
+    REPORTER& Report( const wxString& aText, SEVERITY aSeverity = RPT_SEVERITY_UNDEFINED ) override;
+
+    bool HasMessage() const override { return false; }
+};
+
+/**
+ * STDOUT_REPORTER
+ *
+ * Debug type reporter, forwarding messages to std::cout.
+ */
+class STDOUT_REPORTER : public REPORTER
+{
+public:
+    STDOUT_REPORTER()
+    {
+    }
+
+    virtual ~STDOUT_REPORTER()
+    {
+    }
+
+    static REPORTER& GetInstance();
+
+    REPORTER& Report( const wxString& aText, SEVERITY aSeverity = RPT_SEVERITY_UNDEFINED ) override;
+
+    bool HasMessage() const override { return false; }
 };
 
 #endif     // _REPORTER_H_

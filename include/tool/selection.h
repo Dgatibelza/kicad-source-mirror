@@ -23,11 +23,12 @@
  * 51 Franklin Street, Fifth Floor, Boston, MA  02110-1301, USA
  */
 
-#ifndef __SELECTION_H
-#define __SELECTION_H
+#ifndef SELECTION_H
+#define SELECTION_H
 
-#include <set>
-
+#include <core/optional.h>
+#include <deque>
+#include <eda_rect.h>
 #include <base_struct.h>
 #include <view/view_group.h>
 
@@ -35,23 +36,26 @@
 class SELECTION : public KIGFX::VIEW_GROUP
 {
 public:
-    SELECTION() {};
+    SELECTION() : KIGFX::VIEW_GROUP::VIEW_GROUP()
+    {
+        m_isHover = false;
+    }
 
-    SELECTION( const SELECTION& aOther )
+    SELECTION( const SELECTION& aOther ) : KIGFX::VIEW_GROUP::VIEW_GROUP()
     {
         m_items = aOther.m_items;
         m_isHover = aOther.m_isHover;
     }
 
-    const SELECTION& operator= ( const SELECTION& aOther )
+    SELECTION& operator= ( const SELECTION& aOther )
     {
         m_items = aOther.m_items;
         m_isHover = aOther.m_isHover;
         return *this;
     }
 
-    using ITER = std::set<EDA_ITEM*>::iterator;
-    using CITER = std::set<EDA_ITEM*>::const_iterator;
+    using ITER = std::deque<EDA_ITEM*>::iterator;
+    using CITER = std::deque<EDA_ITEM*>::const_iterator;
 
     ITER begin() { return m_items.begin(); }
     ITER end() { return m_items.end(); }
@@ -70,12 +74,21 @@ public:
 
     virtual void Add( EDA_ITEM* aItem )
     {
-        m_items.insert( aItem );
+        // We're not sorting here; this is just a time-optimized way to do an
+        // inclusion check.  std::lower_bound will return the first i >= aItem
+        // and the second i > aItem check rules out i == aItem.
+        ITER i = std::lower_bound( m_items.begin(), m_items.end(), aItem );
+
+        if( i == m_items.end() || *i > aItem )
+            m_items.insert( i, aItem );
     }
 
     virtual void Remove( EDA_ITEM *aItem )
     {
-        m_items.erase( aItem );
+        ITER i = std::lower_bound( m_items.begin(), m_items.end(), aItem );
+
+        if( !( i == m_items.end() || *i > aItem  ) )
+            m_items.erase( i );
     }
 
     virtual void Clear() override
@@ -88,24 +101,25 @@ public:
         return m_items.size();
     }
 
-    virtual KIGFX::VIEW_ITEM* GetItem( unsigned int idx ) const override
+    virtual KIGFX::VIEW_ITEM* GetItem( unsigned int aIdx ) const override
     {
-        auto iter = m_items.begin();
+        if( aIdx < m_items.size() )
+            return m_items[ aIdx ];
 
-        std::advance( iter, idx );
-
-        return *iter;
+        return nullptr;
     }
 
     bool Contains( EDA_ITEM* aItem ) const
     {
-        return m_items.find( aItem ) != m_items.end();
+        CITER i = std::lower_bound( m_items.begin(), m_items.end(), aItem );
+
+        return !( i == m_items.end() || *i > aItem  );
     }
 
     /// Checks if there is anything selected
     bool Empty() const
     {
-        return ( m_items.size() == 0 );
+        return m_items.empty();
     }
 
     /// Returns the number of selected parts
@@ -114,42 +128,64 @@ public:
         return m_items.size();
     }
 
-    const std::set<EDA_ITEM*> GetItems() const
+    const std::deque<EDA_ITEM*> GetItems() const
     {
         return m_items;
     }
 
     /// Returns the center point of the selection area bounding box.
-    VECTOR2I GetCenter() const;
+    virtual VECTOR2I GetCenter() const
+    {
+        return static_cast<VECTOR2I>( GetBoundingBox().Centre() );
+    }
 
-    const BOX2I ViewBBox() const override;
+    virtual const BOX2I ViewBBox() const override
+    {
+        BOX2I r;
+        r.SetMaximum();
+        return r;
+    }
 
     /// Returns the top left point of the selection area bounding box.
-    VECTOR2I GetPosition() const;
-
-    EDA_RECT    GetBoundingBox() const;
-    EDA_ITEM*   GetTopLeftItem( bool onlyModules = false ) const;
-    EDA_ITEM*   GetTopLeftModule() const;
-
-    EDA_ITEM* operator[]( const int index ) const
+    VECTOR2I GetPosition() const
     {
-        if( index < 0 || (unsigned int) index >= m_items.size() )
-            return nullptr;
+        return static_cast<VECTOR2I>( GetBoundingBox().GetPosition() );
+    }
 
-        auto iter = m_items.begin();
-        std::advance( iter, index );
-        return *iter;
+    EDA_RECT GetBoundingBox() const
+    {
+        EDA_RECT bbox;
+
+        if( Front() )
+        {
+            bbox = Front()->GetBoundingBox();
+
+            for( auto i = m_items.begin() + 1; i != m_items.end(); ++i )
+                bbox.Merge( (*i)->GetBoundingBox() );
+        }
+
+        return bbox;
+    }
+
+    virtual EDA_ITEM* GetTopLeftItem( bool onlyModules = false ) const
+    {
+        return nullptr;
+    }
+
+    EDA_ITEM* operator[]( const size_t aIdx ) const
+    {
+        if( aIdx < m_items.size() )
+            return m_items[ aIdx ];
+
+        return nullptr;
     }
 
     EDA_ITEM* Front() const
     {
-        if ( !m_items.size() )
-            return nullptr;
-
-        return *m_items.begin();
+        return m_items.size() ? m_items.front() : nullptr;
     }
 
-    std::set<EDA_ITEM*>& Items()
+    std::deque<EDA_ITEM*>& Items()
     {
         return m_items;
     }
@@ -168,11 +204,36 @@ public:
         return nullptr;
     }
 
-    virtual const VIEW_GROUP::ITEMS updateDrawList() const override;
+    /**
+     * Checks if there is at least one item of requested kind.
+     *
+     * @param aType is the type to check for.
+     * @return True if there is at least one item of such kind.
+     */
+    bool HasType( KICAD_T aType ) const
+    {
+        for( auto item : m_items )
+        {
+            if( item->Type() == aType )
+                return true;
+        }
+
+        return false;
+    }
+
+    virtual const VIEW_GROUP::ITEMS updateDrawList() const override
+    {
+        std::vector<VIEW_ITEM*> items;
+
+        for( auto item : m_items )
+            items.push_back( item );
+
+        return items;
+    }
 
     bool HasReferencePoint() const
     {
-        return m_referencePoint != boost::none;
+        return m_referencePoint != NULLOPT;
     }
 
     VECTOR2I GetReferencePoint() const
@@ -187,17 +248,27 @@ public:
 
     void ClearReferencePoint()
     {
-        m_referencePoint = boost::none;
+        m_referencePoint = NULLOPT;
     }
 
-private:
+    /**
+     * Checks if all items in the selection are the same KICAD_T type
+     *
+     * @return True if all items are the same type, this includes zero or single items
+     */
+    bool AreAllItemsIdentical() const
+    {
+        return ( std::all_of( m_items.begin() + 1, m_items.end(),
+                        [&]( const EDA_ITEM* r )
+                        {
+                            return r->Type() == m_items.front()->Type();
+                        } ) );
+    }
 
-    boost::optional<VECTOR2I> m_referencePoint;
-
-    /// Set of selected items
-    std::set<EDA_ITEM*> m_items;
-
-    bool m_isHover;
+protected:
+    OPT<VECTOR2I>         m_referencePoint;
+    std::deque<EDA_ITEM*> m_items;
+    bool                  m_isHover;
 
     // mute hidden overloaded virtual function warnings
     using VIEW_GROUP::Add;
@@ -211,18 +282,5 @@ enum SELECTION_LOCK_FLAGS
     SELECTION_LOCKED = 2
 };
 
-// Selection type flags for RequestSelection()
-enum SELECTION_TYPE_FLAGS
-{
-    // Items that can be deleted (but not necessarily modified, eg. DRC markers)
-    SELECTION_DELETABLE = 1,
-    // Items that can be edited (moved, rotated, properties)
-    SELECTION_EDITABLE = 2,
-    // Remove pads without a host module
-    SELECTION_SANITIZE_PADS = 4,
-    // Request a hover-only selection
-    SELECTION_HOVER = 8,
-    SELECTION_DEFAULT = 0x7
-};
 
 #endif

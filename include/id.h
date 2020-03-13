@@ -31,6 +31,8 @@
 #ifndef ID_H_
 #define ID_H_
 
+#include <wx/defs.h>
+
 /**
  * Common command IDs shared by more than one of the KiCad applications.
  *
@@ -61,37 +63,36 @@
 #define ROOM_FOR_3D_VIEWER 100
 #define ROOM_FOR_PANEL_PREV_MODEL 50
 
+
+/// IDs range for menuitems file history:
+/// The default range file history size is 9 (compatible with default wxWidget range).
+#define DEFAULT_FILE_HISTORY_SIZE 9
+#define MAX_FILE_HISTORY_SIZE 99
+
 enum main_id
 {
     ID_RUN_PCB                  = wxID_HIGHEST,
-    ID_RUN_PCB_MODULE_EDITOR,
-    ID_RUN_CVPCB,
-    ID_RUN_LIBRARY,     // pcbnew & eeschema each use this internally to load their respective lib editors
 
-    ID_LOAD_PROJECT,
     ID_APPEND_PROJECT,
-    ID_NEW_PROJECT,
-    ID_NEW_PROJECT_FROM_TEMPLATE,
     ID_SAVE_PROJECT,
-    ID_SAVE_PROJECT_AS,
     ID_LOAD_FILE,
-    ID_APPEND_FILE,
     ID_NEW_BOARD,
     ID_SAVE_BOARD,
     ID_SAVE_BOARD_AS,
     ID_AUTO_SAVE_TIMER,
 
-    ID_CONFIG_REQ,
-    ID_CONFIG_SAVE,
-    ID_CONFIG_READ,
+    // ID for menuitems used in our file history management,
+    // when we do not use wxFILE_ID (restricted to 9 items)
+    ID_FILE,
+    ID_FILE1,
+    ID_FILEMAX = ID_FILE + MAX_FILE_HISTORY_SIZE,
+    ID_FILE_LIST_EMPTY,
+    ID_FILE_LIST_CLEAR,
 
-    ID_PREFERENCES_HOTKEY_START,
-    ID_PREFERENCES_HOTKEY_EXPORT_CONFIG,
-    ID_PREFERENCES_HOTKEY_IMPORT_CONFIG,
-    ID_PREFERENCES_HOTKEY_SHOW_EDITOR,
     ID_PREFERENCES_HOTKEY_SHOW_CURRENT_LIST,
-    ID_PREFERENCES_HOTKEY_END,
     ID_PREFERENCES_CONFIGURE_PATHS,
+    ID_EDIT_SYMBOL_LIBRARY_TABLE,
+    ID_EDIT_FOOTPRINT_LIBRARY_TABLE,
 
     ID_GEN_PLOT,
     ID_GEN_PLOT_PS,
@@ -100,13 +101,10 @@ enum main_id
     ID_GEN_PLOT_SVG,
     ID_GEN_PLOT_DXF,
     ID_GEN_PLOT_PDF,
-    ID_GEN_COPY_SHEET_TO_CLIPBOARD,
-    ID_GEN_COPY_BLOCK_TO_CLIPBOARD,
 
     ID_GEN_EXPORT_FILE,
     ID_GEN_IMPORT_FILE,
 
-    ID_EXIT,
     ID_OPTIONS_SETUP,
 
     // id for toolbars
@@ -115,12 +113,8 @@ enum main_id
     ID_OPT_TOOLBAR,
     ID_AUX_TOOLBAR,
 
-    ID_EDIT,
+    ID_EDIT_HOTKEY,
     ID_NO_TOOL_SELECTED,
-    ID_ZOOM_SELECTION,
-    ID_SEL_BG_COLOR,
-
-    ID_REPEAT_BUTT,
 
     ID_LANGUAGE_CHOICE,
     ID_LANGUAGE_DEFAULT,
@@ -141,39 +135,14 @@ enum main_id
     ID_LANGUAGE_KOREAN,
     ID_LANGUAGE_CATALAN,
     ID_LANGUAGE_CHINESE_SIMPLIFIED,
+    ID_LANGUAGE_CHINESE_TRADITIONAL,
     ID_LANGUAGE_DUTCH,
     ID_LANGUAGE_JAPANESE,
     ID_LANGUAGE_BULGARIAN,
     ID_LANGUAGE_LITHUANIAN,
     ID_LANGUAGE_CHOICE_END,
 
-    ID_KICAD_SELECT_ICONS_OPTIONS,
-    ID_KICAD_SELECT_ICONS_IN_MENUS,
-    ID_KICAD_SELECT_ICON_OPTIONS_END,
-
-    ID_SET_REPEAT_OPTION,
-
     // Popup Menu (mouse Right button) (id consecutifs)
-
-    ID_POPUP_GENERAL_START_RANGE,   // first number
-    ID_POPUP_CANCEL_CURRENT_COMMAND,
-    ID_POPUP_CLOSE_CURRENT_TOOL,
-    ID_POPUP_MOVE_BLOCK,
-    ID_POPUP_MOVE_BLOCK_EXACT,
-    ID_POPUP_DRAG_BLOCK,
-    ID_POPUP_DUPLICATE_BLOCK,
-    ID_POPUP_ROTATE_BLOCK,
-    ID_POPUP_DELETE_BLOCK,
-    ID_POPUP_FLIP_BLOCK,
-    ID_POPUP_PLACE_BLOCK,
-    ID_POPUP_ZOOM_BLOCK,
-    ID_POPUP_SELECT_ITEMS_BLOCK,
-    ID_POPUP_MIRROR_X_BLOCK,
-    ID_POPUP_MIRROR_Y_BLOCK,
-    ID_POPUP_OTHER_COMMANDS,
-    ID_POPUP_GENERAL_END_RANGE, // last number
-
-    ID_POPUP_ENTER_MENU,
 
     ID_ON_ZOOM_SELECT,
     ID_POPUP_ZOOM_START_RANGE,       // first zoom id
@@ -198,10 +167,9 @@ enum main_id
     ID_POPUP_ZOOM_END_RANGE,         // last zoom id
 
     ID_ON_GRID_SELECT,
-    ID_POPUP_GRID_PLUS,
-    ID_POPUP_GRID_MOINS,
     ID_POPUP_GRID_SELECT,
-    ID_POPUP_GRID_LEVEL_1000,       // id for first predefined grid in inches (1000 * 0.0001 inch)
+    ID_POPUP_GRID_FIRST,
+    ID_POPUP_GRID_LEVEL_1000 = ID_POPUP_GRID_FIRST, // These must be in same order as menu
     ID_POPUP_GRID_LEVEL_500,
     ID_POPUP_GRID_LEVEL_250,
     ID_POPUP_GRID_LEVEL_200,
@@ -212,10 +180,10 @@ enum main_id
     ID_POPUP_GRID_LEVEL_10,
     ID_POPUP_GRID_LEVEL_5,
     ID_POPUP_GRID_LEVEL_2,
-    ID_POPUP_GRID_LEVEL_1,       // id for last predefined grid in inches ( 0.0001 inch)
+    ID_POPUP_GRID_LEVEL_1,
     ID_POPUP_GRID_LEVEL_5MM,
     ID_POPUP_GRID_LEVEL_2_5MM,
-    ID_POPUP_GRID_LEVEL_1MM,     // id for first predefined grid in mm (1mm)
+    ID_POPUP_GRID_LEVEL_1MM,
     ID_POPUP_GRID_LEVEL_0_5MM,
     ID_POPUP_GRID_LEVEL_0_25MM,
     ID_POPUP_GRID_LEVEL_0_2MM,
@@ -224,9 +192,10 @@ enum main_id
     ID_POPUP_GRID_LEVEL_0_0_25MM,
     ID_POPUP_GRID_LEVEL_0_0_1MM,
     ID_POPUP_GRID_USER,
+    ID_POPUP_GRID_SEPARATOR,
+    ID_POPUP_GRID_SETTINGS,
 
-    ID_SHEET_SET,
-    ID_COMPONENT_BUTT,
+    ID_GRID_SETTINGS,
 
     ID_ZOOM_BEGIN,
     ID_ZOOM_IN = ID_ZOOM_BEGIN,
@@ -242,31 +211,14 @@ enum main_id
     ID_OFFCENTER_ZOOM_OUT,
     ID_ZOOM_END,
 
-    // Panning command event IDs.
-    ID_PAN_UP,
-    ID_PAN_DOWN,
-    ID_PAN_LEFT,
-    ID_PAN_RIGHT,
-
-    ID_GET_NETLIST,
-    ID_OPEN_CMP_TABLE,
-    ID_GET_TOOLS,
-    ID_FIND_ITEMS,
 
     ID_EDA_SOCKET_EVENT_SERV,
     ID_EDA_SOCKET_EVENT,
 
-    // Common to all
-    ID_TB_OPTIONS_SELECT_UNIT_MM,
-    ID_TB_OPTIONS_SELECT_UNIT_INCH,
-    ID_TB_OPTIONS_SELECT_CURSOR,
-    ID_TB_OPTIONS_SHOW_POLAR_COORD,
-    ID_TB_OPTIONS_SHOW_GRID,
-    ID_HELP_GET_INVOLVED,
-
     // Common to Pcbnew and CvPcb
     ID_TB_OPTIONS_SHOW_MODULE_TEXT_SKETCH,
     ID_TB_OPTIONS_SHOW_MODULE_EDGE_SKETCH,
+    ID_TB_OPTIONS_SHOW_GRAPHIC_SKETCH,
     ID_TB_OPTIONS_SHOW_PADS_SKETCH,
 
     ID_DIALOG_ERC,      ///< eeschema ERC modeless dialog ID
@@ -293,6 +245,10 @@ enum main_id
 
     ID_KICAD_PANEL_PREV_MODEL_START,
     ID_KICAD_PANEL_PREV_MODEL_END = ID_KICAD_PANEL_PREV_MODEL_START + ROOM_FOR_PANEL_PREV_MODEL,
+
+    // Reseve ID for popup menus, when we need to know a menu item is inside a popup menu
+    ID_POPUP_MENU_START,
+    ID_POPUP_MENU_END = ID_POPUP_MENU_START + 1000,
 
     ID_END_LIST
 };

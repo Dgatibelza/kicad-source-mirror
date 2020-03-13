@@ -1,9 +1,9 @@
 /*
  * This program source code file is part of KiCad, a free EDA CAD application.
  *
- * Copyright (C) 2004 Jean-Pierre Charras, jaen-pierre.charras@gipsa-lab.inpg.com
+ * Copyright (C) 2019 Jean-Pierre Charras, jp.charras at wanadoo.fr
  * Copyright (C) 2011 Wayne Stambaugh <stambaughw@verizon.net>
- * Copyright (C) 2004-2011 KiCad Developers, see change_log.txt for contributors.
+ * Copyright (C) 2004-2020 KiCad Developers, see AUTHORS.txt for contributors.
  *
  * This program is free software; you can redistribute it and/or
  * modify it under the terms of the GNU General Public License
@@ -23,25 +23,133 @@
  * 51 Franklin Street, Fifth Floor, Boston, MA  02110-1301, USA
  */
 
-/**
- * @file eeschema/cross-probing.cpp
- */
-
 #include <fctsys.h>
 #include <pgm_base.h>
 #include <kiface_i.h>
 #include <kiway_express.h>
 #include <macros.h>
 #include <eda_dde.h>
-#include <class_drawpanel.h>
-
-#include <schframe.h>
+#include <sch_edit_frame.h>
 #include <general.h>
-#include <eeschema_id.h>
-#include <lib_draw_item.h>
+#include <lib_item.h>
 #include <lib_pin.h>
 #include <sch_component.h>
 #include <sch_sheet.h>
+#include <sch_view.h>
+#include <reporter.h>
+#include <netlist_exporters/netlist_exporter_kicad.h>
+#include <tools/ee_actions.h>
+#include <tools/sch_editor_control.h>
+
+
+SCH_ITEM* SCH_EDITOR_CONTROL::FindComponentAndItem( const wxString& aReference,
+                                                    bool            aSearchHierarchy,
+                                                    SCH_SEARCH_T    aSearchType,
+                                                    const wxString& aSearchText )
+{
+    SCH_SHEET_PATH* sheetWithComponentFound = NULL;
+    SCH_COMPONENT*  Component = NULL;
+    wxPoint         pos;
+    LIB_PIN*        pin = nullptr;
+    SCH_SHEET_LIST  sheetList( g_RootSheet );
+    SCH_ITEM*       foundItem = nullptr;
+
+    if( !aSearchHierarchy )
+        sheetList.push_back( *g_CurrentSheet );
+    else
+        sheetList.BuildSheetList( g_RootSheet );
+
+    for( SCH_SHEET_PATH& sheet : sheetList)
+    {
+        SCH_SCREEN* screen = sheet.LastScreen();
+
+        for( auto item : screen->Items().OfType( SCH_COMPONENT_T ) )
+        {
+            SCH_COMPONENT* pSch = static_cast<SCH_COMPONENT*>( item );
+
+            if( aReference.CmpNoCase( pSch->GetRef( &sheet ) ) == 0 )
+            {
+                Component = pSch;
+                sheetWithComponentFound = &sheet;
+
+                if( aSearchType == HIGHLIGHT_PIN )
+                {
+                    pos = pSch->GetPosition();  // temporary: will be changed if the pin is found.
+                    pin = pSch->GetPin( aSearchText );
+
+                    if( pin )
+                    {
+                        pos += pin->GetPosition();
+                        foundItem = Component;
+                        break;
+                    }
+                }
+                else
+                {
+                    pos = pSch->GetPosition();
+                    foundItem = Component;
+                    break;
+                }
+            }
+        }
+
+        if( foundItem )
+            break;
+    }
+
+    if( Component )
+    {
+        if( *sheetWithComponentFound != *g_CurrentSheet )
+        {
+            sheetWithComponentFound->LastScreen()->SetZoom( m_frame->GetScreen()->GetZoom() );
+            *g_CurrentSheet = *sheetWithComponentFound;
+            m_frame->DisplayCurrentSheet();
+        }
+
+        wxPoint delta;
+        pos  -= Component->GetPosition();
+        delta = Component->GetTransform().TransformCoordinate( pos );
+        pos   = delta + Component->GetPosition();
+
+        m_frame->GetCanvas()->GetViewControls()->SetCrossHairCursorPosition( pos, false );
+        m_frame->CenterScreen( pos, false );
+    }
+
+    /* Print diag */
+    wxString msg_item;
+    wxString msg;
+
+    if( aSearchType == HIGHLIGHT_PIN )
+        msg_item.Printf( _( "pin %s" ), aSearchText );
+    else
+        msg_item = _( "component" );
+
+    if( Component )
+    {
+        if( foundItem )
+            msg.Printf( _( "%s %s found" ), aReference, msg_item );
+        else
+            msg.Printf( _( "%s found but %s not found" ), aReference, msg_item );
+    }
+    else
+        msg.Printf( _( "Component %s not found" ), aReference );
+
+    m_frame->SetStatusText( msg );
+
+    m_probingPcbToSch = true;   // recursion guard
+    {
+        // Clear any existing highlighting
+        m_toolMgr->RunAction( EE_ACTIONS::clearSelection, true );
+
+        if( foundItem )
+            m_toolMgr->RunAction( EE_ACTIONS::addItemToSel, true, foundItem );
+    }
+    m_probingPcbToSch = false;
+
+    m_frame->GetCanvas()->Refresh();
+
+    return foundItem;
+}
 
 
 /**
@@ -56,12 +164,16 @@
  * \li \c \$PART: \c "reference" \c \$REF: \c "ref" Put cursor on component reference.
  * \li \c \$PART: \c "reference" \c \$VAL: \c "value" Put cursor on component value.
  * \li \c \$PART: \c "reference" \c \$PAD: \c "pin name" Put cursor on the component pin.
+ * \li \c \$NET: \c "netname" Highlight a specified net
+ * \li \c \$CLEAR: \c "HIGHLIGHTED" Clear components highlight
  * <p>
+ * They are a keyword followed by a quoted string.
  * @param cmdline = received command from Pcbnew
  */
 void SCH_EDIT_FRAME::ExecuteRemoteCommand( const char* cmdline )
 {
-    char     line[1024];
+    SCH_EDITOR_CONTROL* editor = m_toolManager->GetTool<SCH_EDITOR_CONTROL>();
+    char                line[1024];
 
     strncpy( line, cmdline, sizeof(line) - 1 );
     line[ sizeof(line) - 1 ] = '\0';
@@ -69,7 +181,30 @@ void SCH_EDIT_FRAME::ExecuteRemoteCommand( const char* cmdline )
     char* idcmd = strtok( line, " \n\r" );
     char* text  = strtok( NULL, "\"\n\r" );
 
-    if( (idcmd == NULL) || (text == NULL) )
+    if( idcmd == NULL )
+        return;
+
+    if( strcmp( idcmd, "$NET:" ) == 0 )
+    {
+        m_SelectedNetName = FROM_UTF8( text );
+        GetToolManager()->RunAction( EE_ACTIONS::updateNetHighlighting, true );
+
+        SetStatusText( _( "Selected net: " ) + UnescapeString( m_SelectedNetName ) );
+        return;
+    }
+
+    if( strcmp( idcmd, "$CLEAR:" ) == 0 )
+    {
+        if( text && strcmp( text, "HIGHLIGHTED" ) == 0 )
+        {
+            GetCanvas()->GetView()->HighlightItem( nullptr, nullptr );
+            GetCanvas()->Refresh();
+        }
+
+        return;
+    }
+
+    if( text == NULL )
         return;
 
     if( strcmp( idcmd, "$PART:" ) != 0 )
@@ -80,9 +215,10 @@ void SCH_EDIT_FRAME::ExecuteRemoteCommand( const char* cmdline )
     /* look for a complement */
     idcmd = strtok( NULL, " \n\r" );
 
-    if( idcmd == NULL )    // component only
+    if( idcmd == NULL )    // Highlight component only (from Cvpcb or Pcbnew)
     {
-        FindComponentAndItem( part_ref, true, FIND_COMPONENT_ONLY, wxEmptyString, false );
+        // Highlight component part_ref, or clear Highlight, if part_ref is not existing
+        editor->FindComponentAndItem( part_ref, true, HIGHLIGHT_COMPONENT, wxEmptyString );
         return;
     }
 
@@ -95,63 +231,66 @@ void SCH_EDIT_FRAME::ExecuteRemoteCommand( const char* cmdline )
 
     if( strcmp( idcmd, "$REF:" ) == 0 )
     {
-        FindComponentAndItem( part_ref, true, FIND_REFERENCE, msg, false );
+        // Highlighting the reference itself isn't actually that useful, and it's harder to
+        // see.  Highlight the parent and display the message.
+        editor->FindComponentAndItem( part_ref, true, HIGHLIGHT_COMPONENT, msg );
     }
     else if( strcmp( idcmd, "$VAL:" ) == 0 )
     {
-        FindComponentAndItem( part_ref, true, FIND_VALUE, msg, false );
+        // Highlighting the value itself isn't actually that useful, and it's harder to see.
+        // Highlight the parent and display the message.
+        editor->FindComponentAndItem( part_ref, true, HIGHLIGHT_COMPONENT, msg );
     }
     else if( strcmp( idcmd, "$PAD:" ) == 0 )
     {
-        FindComponentAndItem( part_ref, true, FIND_PIN, msg, false );
+        editor->FindComponentAndItem( part_ref, true, HIGHLIGHT_PIN, msg );
     }
     else
     {
-        FindComponentAndItem( part_ref, true, FIND_COMPONENT_ONLY, wxEmptyString, false );
+        editor->FindComponentAndItem( part_ref, true, HIGHLIGHT_COMPONENT, wxEmptyString );
     }
 }
 
 
-std::string FormatProbeItem( EDA_ITEM* aItem, SCH_COMPONENT* aPart )
+std::string FormatProbeItem( EDA_ITEM* aItem, SCH_COMPONENT* aComp )
 {
+    // This is a keyword followed by a quoted string.
+
     // Cross probing to Pcbnew if a pin or a component is found
     switch( aItem->Type() )
     {
     case SCH_FIELD_T:
-    case LIB_FIELD_T:
-        if( aPart )
-            return StrPrintf( "$PART: %s",
-                              TO_UTF8( aPart->GetField( REFERENCE )->GetText() ) );
+        if( aComp )
+            return StrPrintf( "$PART: \"%s\"", TO_UTF8( aComp->GetField( REFERENCE )->GetText() ) );
         break;
 
     case SCH_COMPONENT_T:
-        aPart = (SCH_COMPONENT*) aItem;
-        return StrPrintf( "$PART: %s", TO_UTF8( aPart->GetField( REFERENCE )->GetText() ) );
+        aComp = (SCH_COMPONENT*) aItem;
+        return StrPrintf( "$PART: \"%s\"", TO_UTF8( aComp->GetField( REFERENCE )->GetText() ) );
 
     case SCH_SHEET_T:
         {
-        SCH_SHEET* sheet = (SCH_SHEET*)aItem;
-        return StrPrintf( "$SHEET: %8.8lX", (unsigned long) sheet->GetTimeStamp() );
+            SCH_SHEET* sheet = (SCH_SHEET*)aItem;
+            return StrPrintf( "$SHEET: \"%s\"", TO_UTF8( sheet->m_Uuid.AsString() ) );
         }
 
-    case LIB_PIN_T:
+    case SCH_PIN_T:
         {
-            if( !aPart )
-                break;
-
-            LIB_PIN* pin = (LIB_PIN*) aItem;
+            SCH_PIN* pin = (SCH_PIN*) aItem;
+            aComp = pin->GetParentComponent();
 
             if( !pin->GetNumber().IsEmpty() )
             {
-                return StrPrintf( "$PIN: %s $PART: %s", TO_UTF8( pin->GetNumber() ),
-                         TO_UTF8( aPart->GetField( REFERENCE )->GetText() ) );
+                return StrPrintf( "$PIN: \"%s\" $PART: \"%s\"",
+                                  TO_UTF8( pin->GetNumber() ),
+                                  TO_UTF8( aComp->GetField( REFERENCE )->GetText() ) );
             }
             else
             {
-                return StrPrintf( "$PART: %s", TO_UTF8( aPart->GetField( REFERENCE )->GetText() ) );
+                return StrPrintf( "$PART: \"%s\"",
+                                  TO_UTF8( aComp->GetField( REFERENCE )->GetText() ) );
             }
         }
-        break;
 
     default:
         break;
@@ -170,7 +309,7 @@ void SCH_EDIT_FRAME::SendMessageToPCBNEW( EDA_ITEM* aObjectToSync, SCH_COMPONENT
 
     std::string packet = FormatProbeItem( aObjectToSync, aLibItem );
 
-    if( packet.size() )
+    if( !packet.empty() )
     {
         if( Kiface().IsSingle() )
             SendCommand( MSG_TO_PCB, packet.c_str() );
@@ -179,15 +318,52 @@ void SCH_EDIT_FRAME::SendMessageToPCBNEW( EDA_ITEM* aObjectToSync, SCH_COMPONENT
             // Typically ExpressMail is going to be s-expression packets, but since
             // we have existing interpreter of the cross probe packet on the other
             // side in place, we use that here.
-            Kiway().ExpressMail( FRAME_PCB, MAIL_CROSS_PROBE, packet, this );
+            Kiway().ExpressMail( FRAME_PCB_EDITOR, MAIL_CROSS_PROBE, packet, this );
         }
+    }
+}
+
+
+void SCH_EDIT_FRAME::SendCrossProbeNetName( const wxString& aNetName )
+{
+    // The command is a keyword followed by a quoted string.
+
+    std::string packet = StrPrintf( "$NET: \"%s\"", TO_UTF8( aNetName ) );
+
+    if( !packet.empty() )
+    {
+        if( Kiface().IsSingle() )
+            SendCommand( MSG_TO_PCB, packet.c_str() );
+        else
+        {
+            // Typically ExpressMail is going to be s-expression packets, but since
+            // we have existing interpreter of the cross probe packet on the other
+            // side in place, we use that here.
+            Kiway().ExpressMail( FRAME_PCB_EDITOR, MAIL_CROSS_PROBE, packet, this );
+        }
+    }
+}
+
+
+void SCH_EDIT_FRAME::SendCrossProbeClearHighlight()
+{
+    std::string packet = "$CLEAR\n";
+
+    if( Kiface().IsSingle() )
+        SendCommand( MSG_TO_PCB, packet.c_str() );
+    else
+    {
+        // Typically ExpressMail is going to be s-expression packets, but since
+        // we have existing interpreter of the cross probe packet on the other
+        // side in place, we use that here.
+        Kiway().ExpressMail( FRAME_PCB_EDITOR, MAIL_CROSS_PROBE, packet, this );
     }
 }
 
 
 void SCH_EDIT_FRAME::KiwayMailIn( KIWAY_EXPRESS& mail )
 {
-    const std::string& payload = mail.GetPayload();
+    std::string& payload = mail.GetPayload();
 
     switch( mail.Command() )
     {
@@ -195,18 +371,40 @@ void SCH_EDIT_FRAME::KiwayMailIn( KIWAY_EXPRESS& mail )
         ExecuteRemoteCommand( payload.c_str() );
         break;
 
-    case MAIL_SCH_PCB_UPDATE_REQUEST:
-    {
-        wxCommandEvent dummy;
+    case MAIL_SCH_GET_NETLIST:
+        if( payload.find( "quiet-annotate" ) != std::string::npos )
+        {
+            SCH_SCREENS schematic;
+            schematic.UpdateSymbolLinks();
+            SCH_SHEET_LIST sheets( g_RootSheet );
+            sheets.AnnotatePowerSymbols();
+            AnnotateComponents( true, UNSORTED, INCREMENTAL_BY_REF, 0, false, false, true,
+                                NULL_REPORTER::GetInstance() );
+        }
 
-        OnUpdatePCB( dummy );
+        if( payload.find( "no-annotate" ) == std::string::npos )
+        {
+            // Ensure schematic is OK for netlist creation (especially that it is fully annotated):
+            if( !prepareForNetlist() )
+                return;
+        }
+
+        {
+            NETLIST_OBJECT_LIST* net_atoms = BuildNetListBase();
+            NETLIST_EXPORTER_KICAD exporter( this, net_atoms, g_ConnectionGraph );
+            STRING_FORMATTER formatter;
+
+            exporter.Format( &formatter, GNL_ALL );
+
+            payload = formatter.GetString();
+        }
         break;
-    }
 
     case MAIL_BACKANNOTATE_FOOTPRINTS:
         try
         {
-            backAnnotateFootprints( payload );
+            SCH_EDITOR_CONTROL* controlTool = m_toolManager->GetTool<SCH_EDITOR_CONTROL>();
+            controlTool->BackAnnotateFootprints( payload );
         }
         catch( const IO_ERROR& DBG( ioe ) )
         {
@@ -215,7 +413,47 @@ void SCH_EDIT_FRAME::KiwayMailIn( KIWAY_EXPRESS& mail )
         break;
 
     case MAIL_SCH_REFRESH:
+    {
+        SCH_SCREENS schematic;
+        schematic.UpdateSymbolLinks();
+        schematic.TestDanglingEnds();
+
+        GetCanvas()->GetView()->UpdateAllItems( KIGFX::ALL );
         GetCanvas()->Refresh();
+        break;
+    }
+    case MAIL_IMPORT_FILE:
+    {
+        // Extract file format type and path (plugin type and path separated with \n)
+        size_t split = payload.find( '\n' );
+        wxCHECK( split != std::string::npos, /*void*/ );
+        int importFormat;
+
+        try
+        {
+            importFormat = std::stoi( payload.substr( 0, split ) );
+        }
+        catch( std::invalid_argument& )
+        {
+            wxFAIL;
+            importFormat = -1;
+        }
+
+        std::string path = payload.substr( split + 1 );
+        wxASSERT( !path.empty() );
+
+        if( importFormat >= 0 )
+            importFile( path, importFormat );
+    }
+        break;
+
+    case MAIL_SCH_SAVE:
+        if( SaveProject() )
+            payload = "success";
+        break;
+
+    case MAIL_SCH_UPDATE:
+        m_toolManager->RunAction( ACTIONS::updateSchematicFromPcb, true );
         break;
 
     default:

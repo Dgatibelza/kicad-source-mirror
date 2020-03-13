@@ -2,7 +2,7 @@
  * This program source code file is part of KiCad, a free EDA CAD application.
  *
  * Copyright (C) 2014 Jean-Pierre Charras, jp.charras at wanadoo.fr
- * Copyright (C) 2014-2017 KiCad Developers, see AUTHORS.txt for contributors.
+ * Copyright (C) 2014-2019 KiCad Developers, see AUTHORS.txt for contributors.
  *
  * This program is free software; you can redistribute it and/or
  * modify it under the terms of the GNU General Public License
@@ -31,32 +31,26 @@
 #include <common.h>
 #include <confirm.h>
 #include <gestfich.h>
+#include <settings/common_settings.h>
 
 #include <wx/mimetype.h>
 #include <wx/tokenzr.h>
 #include <wx/filename.h>
+#include <wx/uri.h>
 #include <macros.h>
 
 
 void PGM_BASE::ReadPdfBrowserInfos()
 {
-    wxASSERT( m_common_settings );
-
-    wxString browser = m_common_settings->Read( wxT( "PdfBrowserName" ), wxEmptyString );
-    SetPdfBrowserName( browser );
-
-    int tmp;
-    m_common_settings->Read( wxT( "UseSystemBrowser" ), &tmp, 0 );
-    m_use_system_pdf_browser = bool( tmp );
+    SetPdfBrowserName( GetCommonSettings()->m_System.pdf_viewer_name );
+    m_use_system_pdf_browser = GetCommonSettings()->m_System.use_system_pdf_viewer;
 }
 
 
 void PGM_BASE::WritePdfBrowserInfos()
 {
-    wxASSERT( m_common_settings );
-
-    m_common_settings->Write( wxT( "PdfBrowserName" ), GetPdfBrowserName() );
-    m_common_settings->Write( wxT( "UseSystemBrowser" ), m_use_system_pdf_browser );
+    GetCommonSettings()->m_System.pdf_viewer_name = GetPdfBrowserName();
+    GetCommonSettings()->m_System.use_system_pdf_viewer = m_use_system_pdf_browser;
 }
 
 
@@ -98,19 +92,22 @@ bool GetAssociatedDocument( wxWindow* aParent,
         wxT( "http:" ),
         wxT( "https:" ),
         wxT( "ftp:" ),
-        wxT( "www." )
+        wxT( "www." ),
+        wxT( "file:" )
     };
 
-    for( unsigned ii = 0; ii < DIM(url_header); ii++ )
+    // Replace before resolving as we might have a URL in a variable
+    docname = ResolveUriByEnvVars( aDocName );
+
+    for( unsigned ii = 0; ii < arrayDim(url_header); ii++ )
     {
-        if( aDocName.First( url_header[ii] ) == 0 )   // looks like an internet url
+        if( docname.First( url_header[ii] ) == 0 )   // looks like an internet url
         {
-            wxLaunchDefaultBrowser( aDocName );
+            wxURI uri( docname );
+            wxLaunchDefaultBrowser( uri.BuildURI() );
             return true;
         }
     }
-
-    docname = aDocName;
 
 #ifdef __WINDOWS__
     docname.Replace( UNIX_STRING_DIR_SEP, WIN_STRING_DIR_SEP );
@@ -120,17 +117,17 @@ bool GetAssociatedDocument( wxWindow* aParent,
 
 
     /* Compute the full file name */
-    if( wxIsAbsolutePath( aDocName ) || aPaths == NULL)
-        fullfilename = aDocName;
+    if( wxIsAbsolutePath( docname ) || aPaths == NULL)
+        fullfilename = docname;
     /* If the file exists, this is a trivial case: return the filename
      * "as this".  the name can be an absolute path, or a relative path
      * like ./filename or ../<filename>
      */
-    else if( wxFileName::FileExists( aDocName ) )
-        fullfilename = aDocName;
+    else if( wxFileName::FileExists( docname ) )
+        fullfilename = docname;
     else
     {
-        fullfilename = aPaths->FindValidPath( aDocName );
+        fullfilename = aPaths->FindValidPath( docname );
     }
 
     wxString mask( wxT( "*" ) ), extension;
@@ -157,7 +154,7 @@ bool GetAssociatedDocument( wxWindow* aParent,
 
     if( !wxFileExists( fullfilename ) )
     {
-        msg.Printf( _( "Doc File '%s' not found" ), GetChars( aDocName ) );
+        msg.Printf( _( "Doc File \"%s\" not found" ), GetChars( docname ) );
         DisplayError( aParent, msg );
         return false;
     }
@@ -200,7 +197,7 @@ bool GetAssociatedDocument( wxWindow* aParent,
 
     if( !success )
     {
-        msg.Printf( _( "Unknown MIME type for doc file <%s>" ), GetChars( fullfilename ) );
+        msg.Printf( _( "Unknown MIME type for doc file \"%s\"" ), GetChars( fullfilename ) );
         DisplayError( aParent, msg );
     }
 
@@ -208,34 +205,27 @@ bool GetAssociatedDocument( wxWindow* aParent,
 }
 
 
-int KeyWordOk( const wxString& KeyList, const wxString& Database )
+bool KeywordMatch( const wxString& aKeys, const wxString& aDatabase )
 {
-    wxString KeysCopy, DataList;
+    if( aKeys.IsEmpty() )
+        return false;
 
-    if( KeyList.IsEmpty() )
-        return 0;
+    wxStringTokenizer keyTokenizer( aKeys, wxT( ", \t\n\r" ), wxTOKEN_STRTOK );
 
-    KeysCopy = KeyList; KeysCopy.MakeUpper();
-    DataList = Database; DataList.MakeUpper();
-
-    wxStringTokenizer Token( KeysCopy, wxT( " \n\r" ) );
-
-    while( Token.HasMoreTokens() )
+    while( keyTokenizer.HasMoreTokens() )
     {
-        wxString          Key = Token.GetNextToken();
+        wxString key = keyTokenizer.GetNextToken();
 
-        // Search Key in Datalist:
-        wxStringTokenizer Data( DataList, wxT( " \n\r" ) );
+        // Search for key in aDatabase:
+        wxStringTokenizer dataTokenizer( aDatabase, wxT( ", \t\n\r" ), wxTOKEN_STRTOK );
 
-        while( Data.HasMoreTokens() )
+        while( dataTokenizer.HasMoreTokens() )
         {
-            wxString word = Data.GetNextToken();
-
-            if( word == Key )
-                return 1; // Key found !
+            if( dataTokenizer.GetNextToken() == key )
+                return true;
         }
     }
 
     // keyword not found
-    return 0;
+    return false;
 }

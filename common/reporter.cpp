@@ -29,14 +29,14 @@
 #include <reporter.h>
 #include <wx_html_report_panel.h>
 
-REPORTER& REPORTER::Report( const char* aText, REPORTER::SEVERITY aSeverity )
+REPORTER& REPORTER::Report( const char* aText, SEVERITY aSeverity )
 {
     Report( FROM_UTF8( aText ) );
     return *this;
 }
 
 
-REPORTER& WX_TEXT_CTRL_REPORTER::Report( const wxString& aText, REPORTER::SEVERITY aSeverity )
+REPORTER& WX_TEXT_CTRL_REPORTER::Report( const wxString& aText, SEVERITY aSeverity )
 {
     wxCHECK_MSG( m_textCtrl != NULL, *this,
                  wxT( "No wxTextCtrl object defined in WX_TEXT_CTRL_REPORTER." ) );
@@ -45,13 +45,23 @@ REPORTER& WX_TEXT_CTRL_REPORTER::Report( const wxString& aText, REPORTER::SEVERI
     return *this;
 }
 
-REPORTER& WX_STRING_REPORTER::Report( const wxString& aText, REPORTER::SEVERITY aSeverity )
+bool WX_TEXT_CTRL_REPORTER::HasMessage() const
+{
+    return !m_textCtrl->IsEmpty();
+}
+
+REPORTER& WX_STRING_REPORTER::Report( const wxString& aText, SEVERITY aSeverity )
 {
     wxCHECK_MSG( m_string != NULL, *this,
                  wxT( "No wxString object defined in WX_STRING_REPORTER." ) );
 
     *m_string << aText;
     return *this;
+}
+
+bool WX_STRING_REPORTER::HasMessage() const
+{
+    return !m_string->IsEmpty();
 }
 
 REPORTER& WX_HTML_PANEL_REPORTER::Report( const wxString& aText, SEVERITY aSeverity )
@@ -61,6 +71,29 @@ REPORTER& WX_HTML_PANEL_REPORTER::Report( const wxString& aText, SEVERITY aSever
 
     m_panel->Report( aText, aSeverity );
     return *this;
+}
+
+REPORTER& WX_HTML_PANEL_REPORTER::ReportTail( const wxString& aText, SEVERITY aSeverity )
+{
+    wxCHECK_MSG( m_panel != NULL, *this,
+                 wxT( "No WX_HTML_REPORT_PANEL object defined in WX_HTML_PANEL_REPORTER." ) );
+
+    m_panel->Report( aText, aSeverity, LOC_TAIL );
+    return *this;
+}
+
+REPORTER& WX_HTML_PANEL_REPORTER::ReportHead( const wxString& aText, SEVERITY aSeverity )
+{
+    wxCHECK_MSG( m_panel != NULL, *this,
+                 wxT( "No WX_HTML_REPORT_PANEL object defined in WX_HTML_PANEL_REPORTER." ) );
+
+    m_panel->Report( aText, aSeverity, LOC_HEAD );
+    return *this;
+}
+
+bool WX_HTML_PANEL_REPORTER::HasMessage() const
+{
+    return m_panel->Count( RPT_SEVERITY_ERROR | RPT_SEVERITY_WARNING ) > 0;
 }
 
 REPORTER& NULL_REPORTER::Report( const wxString& aText, SEVERITY aSeverity )
@@ -73,9 +106,37 @@ REPORTER& NULL_REPORTER::GetInstance()
     static REPORTER* s_nullReporter = NULL;
 
     if( !s_nullReporter )
-    {
         s_nullReporter = new NULL_REPORTER();
-    }
 
     return *s_nullReporter;
+}
+
+
+REPORTER& STDOUT_REPORTER::Report( const wxString& aText, SEVERITY aSeverity )
+{
+    switch( aSeverity )
+    {
+        case RPT_SEVERITY_UNDEFINED: std::cout << "SEVERITY_UNDEFINED: "; break;
+        case RPT_SEVERITY_INFO:      std::cout << "SEVERITY_INFO: ";      break;
+        case RPT_SEVERITY_WARNING:   std::cout << "SEVERITY_WARNING: ";   break;
+        case RPT_SEVERITY_ERROR:     std::cout << "SEVERITY_ERROR: ";     break;
+        case RPT_SEVERITY_ACTION:    std::cout << "SEVERITY_ACTION: ";    break;
+        case RPT_SEVERITY_EXCLUSION:
+        case RPT_SEVERITY_IGNORE:    break;
+    }
+
+    std::cout << aText << std::endl;
+
+    return *this;
+}
+
+
+REPORTER& STDOUT_REPORTER::GetInstance()
+{
+    static REPORTER* s_stdoutReporter = nullptr;
+
+    if( !s_stdoutReporter )
+        s_stdoutReporter = new STDOUT_REPORTER();
+
+    return *s_stdoutReporter;
 }

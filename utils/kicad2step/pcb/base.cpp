@@ -31,6 +31,20 @@
 static const char bad_position[] = "* corrupt module in PCB file; invalid position";
 
 
+std::ostream& operator<<( std::ostream& aStream, const DOUBLET& aDoublet )
+{
+    aStream << aDoublet.x << "," << aDoublet.y;
+    return aStream;
+}
+
+
+std::ostream& operator<<( std::ostream& aStream, const TRIPLET& aTriplet )
+{
+    aStream << aTriplet.x << "," << aTriplet.y << "," << aTriplet.z;
+    return aStream;
+}
+
+
 bool Get2DPositionAndRotation( SEXPR::SEXPR* data, DOUBLET& aPosition, double& aRotation )
 {
     // form: (at X Y {rot})
@@ -242,4 +256,28 @@ bool GetXYZRotation( SEXPR::SEXPR* data, TRIPLET& aRotation )
     aRotation.z *= M_PI / 180.0;
 
     return true;
+}
+
+
+OPT<std::string> GetLayerName( const SEXPR::SEXPR& aLayerElem )
+{
+    OPT<std::string> layer;
+
+    if( aLayerElem.GetNumberOfChildren() == 2 )
+    {
+        const auto& layerChild = *aLayerElem.GetChild( 1 );
+
+        // The layer child can be quoted (string) or unquoted (symbol)
+        // depending on PCB version.
+        if( layerChild.IsString() )
+        {
+            layer = layerChild.GetString();
+        }
+        else if( layerChild.IsSymbol() )
+        {
+            layer = layerChild.GetSymbol();
+        }
+    }
+
+    return layer;
 }

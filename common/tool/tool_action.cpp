@@ -25,20 +25,75 @@
 #include <tool/tool_action.h>
 #include <tool/action_manager.h>
 
+#include <algorithm>
+#include <hotkeys_basic.h>
+
 TOOL_ACTION::TOOL_ACTION( const std::string& aName, TOOL_ACTION_SCOPE aScope,
-        int aDefaultHotKey, const wxString aMenuItem, const wxString& aMenuDesc,
-        const BITMAP_OPAQUE* aIcon, TOOL_ACTION_FLAGS aFlags, void* aParam ) :
-    m_name( aName ), m_scope( aScope ), m_defaultHotKey( aDefaultHotKey ),
-    m_menuItem( aMenuItem ), m_menuDescription( aMenuDesc ),
-    m_icon( aIcon ), m_id( -1 ), m_flags( aFlags ), m_param( aParam )
+                          int aDefaultHotKey, const std::string& aLegacyHotKeyName,
+                          const wxString& aLabel, const wxString& aTooltip,
+                          const BITMAP_OPAQUE* aIcon, TOOL_ACTION_FLAGS aFlags, void* aParam ) :
+        m_name( aName ),
+        m_scope( aScope ),
+        m_defaultHotKey( aDefaultHotKey ),
+        m_legacyName( aLegacyHotKeyName ),
+        m_label( aLabel ),
+        m_tooltip( aTooltip ),
+        m_icon( aIcon ),
+        m_id( -1 ),
+        m_flags( aFlags ),
+        m_param( aParam )
 {
+    SetHotKey( aDefaultHotKey );
     ACTION_MANAGER::GetActionList().push_back( this );
+}
+
+
+TOOL_ACTION::TOOL_ACTION() :
+        m_scope( AS_GLOBAL ),
+        m_defaultHotKey( 0 ),
+        m_icon( nullptr ),
+        m_id( -1 ),
+        m_flags( AF_NONE ),
+        m_param( nullptr )
+{
+    SetHotKey( 0 );
 }
 
 
 TOOL_ACTION::~TOOL_ACTION()
 {
     ACTION_MANAGER::GetActionList().remove( this );
+}
+
+
+wxString TOOL_ACTION::GetLabel() const
+{
+    return wxGetTranslation( m_label );
+}
+
+
+wxString TOOL_ACTION::GetMenuItem() const
+{
+    wxString label = wxGetTranslation( m_label );
+    label.Replace( "&", "&&" );
+    return AddHotkeyName( label, m_hotKey, IS_HOTKEY );
+}
+
+
+wxString TOOL_ACTION::GetDescription() const
+{
+    wxString tooltip = wxGetTranslation( m_tooltip );
+
+    if( GetHotKey() )
+        tooltip += wxString::Format( wxT( "  (%s)" ), KeyNameFromKeyCode( GetHotKey() ) );
+
+    return tooltip;
+}
+
+
+void TOOL_ACTION::SetHotKey( int aKeycode )
+{
+    m_hotKey = aKeycode;
 }
 
 

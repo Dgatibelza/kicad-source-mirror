@@ -2,7 +2,7 @@
  * This program source code file is part of KiCad, a free EDA CAD application.
  *
  * Copyright (C) 2017 Jean_Pierre Charras <jp.charras at wanadoo.fr>
- * Copyright (C) 1992-2017 KiCad Developers, see change_log.txt for contributors.
+ * Copyright (C) 1992-2017 KiCad Developers, see AUTHORS.txt for contributors.
  *
  * This program is free software; you can redistribute it and/or
  * modify it under the terms of the GNU General Public License
@@ -31,20 +31,21 @@
 
 #include <vector>
 
-#include <plot_common.h>
+#include <plotter.h>
 #include <kicad_string.h>
-#include <wxPcbStruct.h>
+#include <pcb_edit_frame.h>
 #include <pgm_base.h>
 #include <build_version.h>
 
 #include <class_board.h>
+#include <class_track.h>
 
 #include <pcbplot.h>
 #include <pcbnew.h>
 #include <gendrill_gerber_writer.h>
 #include <wildcards_and_files_ext.h>
 #include <reporter.h>
-#include <plot_auxiliary_data.h>
+#include <gbr_metadata.h>
 #include <class_module.h>
 
 
@@ -53,7 +54,7 @@ GERBER_WRITER::GERBER_WRITER( BOARD* aPcb )
 {
     m_zeroFormat      = SUPPRESS_LEADING;
     m_conversionUnits = 1.0;
-    m_unitsDecimal    = true;
+    m_unitsMetric    = true;
     m_drillFileExtension = "gbr";
     m_merge_PTH_NPTH = false;
 }
@@ -73,7 +74,7 @@ void GERBER_WRITER::CreateDrillandMapFilesSet( const wxString& aPlotDirectory,
 
     // append a pair representing the NPTH set of holes, for separate drill files.
     // (Gerber drill files are separate files for PTH and NPTH)
-    hole_sets.push_back( DRILL_LAYER_PAIR( F_Cu, B_Cu ) );
+    hole_sets.emplace_back( F_Cu, B_Cu );
 
     for( std::vector<DRILL_LAYER_PAIR>::const_iterator it = hole_sets.begin();
          it != hole_sets.end();  ++it )
@@ -95,13 +96,13 @@ void GERBER_WRITER::CreateDrillandMapFilesSet( const wxString& aPlotDirectory,
             {
                 wxString fullFilename = fn.GetFullPath();
 
-                int result = createDrillFile( fullFilename, doing_npth, pair.first, pair.second );
+                int result = createDrillFile( fullFilename, doing_npth, pair );
 
                 if( result < 0 )
                 {
                     if( aReporter )
                     {
-                        msg.Printf( _( "** Unable to create %s **\n" ), GetChars( fullFilename ) );
+                        msg.Printf( _( "** Unable to create %s **\n" ), fullFilename );
                         aReporter->Report( msg );
                     }
                     break;
@@ -110,7 +111,7 @@ void GERBER_WRITER::CreateDrillandMapFilesSet( const wxString& aPlotDirectory,
                 {
                     if( aReporter )
                     {
-                        msg.Printf( _( "Create file %s\n" ), GetChars( fullFilename ) );
+                        msg.Printf( _( "Create file %s\n" ), fullFilename );
                         aReporter->Report( msg );
                     }
                 }
@@ -127,7 +128,7 @@ void GERBER_WRITER::CreateDrillandMapFilesSet( const wxString& aPlotDirectory,
 static void convertOblong2Segment( wxSize aSize, double aOrient, wxPoint& aStart, wxPoint& aEnd );
 
 int GERBER_WRITER::createDrillFile( wxString& aFullFilename, bool aIsNpth,
-                                    int aLayer1, int aLayer2 )
+                                    DRILL_LAYER_PAIR aLayerPair )
 {
     int    holes_count;
 
@@ -136,7 +137,7 @@ int GERBER_WRITER::createDrillFile( wxString& aFullFilename, bool aIsNpth,
     GERBER_PLOTTER plotter;
 
     // Gerber drill file imply X2 format:
-    plotter.UseX2Attributes( true );
+    plotter.UseX2format( true );
     plotter.UseX2NetAttributes( true );
 
     // Add the standard X2 header, without FileFunction
@@ -148,68 +149,7 @@ int GERBER_WRITER::createDrillFile( wxString& aFullFilename, bool aIsNpth,
 
     // Add the standard X2 FileFunction for drill files
     // %TF.FileFunction,Plated[NonPlated],layer1num,layer2num,PTH[NPTH][Blind][Buried],Drill[Route][Mixed]*%
-    wxString text( "%TF.FileFunction," );
-
-    if( aIsNpth )
-        text << "NonPlated,";
-    else
-        text << "Plated,";
-
-    // In Gerber files, layers num are 1 to copper layer count instead of F_Cu to B_Cu
-    // (0 to copper layer count-1)
-    // Note also for a n copper layers board, gerber layers num are 1 ... n
-    aLayer1 += 1;
-
-    if( aLayer2 == B_Cu )
-        aLayer2 = m_pcb->GetCopperLayerCount();
-    else
-        aLayer2 += 1;
-
-    text << aLayer1 << ",";
-    text << aLayer2 << ",";
-
-    // Now add PTH or NPTH or Blind or Buried attribute
-    int toplayer = 1;
-    int bottomlayer = m_pcb->GetCopperLayerCount();
-
-    if( aIsNpth )
-        text << "NPTH";
-    else if( aLayer1 == toplayer && aLayer2 == bottomlayer )
-        text << "PTH";
-    else if( aLayer1 == toplayer || aLayer2 == bottomlayer )
-        text << "Blind";
-    else
-        text << "Buried";
-
-    // Now add Drill or Route or Mixed:
-    // file containing only round holes have Drill attribute
-    // file containing only oblong holes have Routed attribute
-    // file containing both holes have Mixed attribute
-    bool hasOblong = false;
-    bool hasDrill = false;
-
-    for( unsigned ii = 0; ii < m_holeListBuffer.size(); ii++ )
-    {
-        HOLE_INFO& hole_descr = m_holeListBuffer[ii];
-
-        if( hole_descr.m_Hole_Shape )   // m_Hole_Shape not 0 is an oblong hole)
-            hasOblong = true;
-        else
-            hasDrill = true;
-    }
-
-    if( hasOblong && hasDrill )
-        text << ",Mixed";
-    else if( hasDrill )
-        text << ",Drill";
-    else if( hasOblong )
-        text << ",Route";
-
-    // else: empty file.
-
-    // End of .FileFunction attribute:
-    text << "*%";
-
+    wxString text = BuildFileFunctionAttributeString( aLayerPair, aIsNpth );
     plotter.AddLineToHeader( text );
 
     // Add file polarity (positive)
@@ -252,20 +192,23 @@ int GERBER_WRITER::createDrillFile( wxString& aFullFilename, bool aIsNpth,
         else if( dyn_cast<const D_PAD*>( hole_descr.m_ItemParent ) )
         {
             last_item_is_via = false;
+            const D_PAD* pad = dyn_cast<const D_PAD*>( hole_descr.m_ItemParent );
 
-            if( hole_descr.m_Hole_Shape )
-                gbr_metadata.SetApertureAttrib( GBR_APERTURE_METADATA::GBR_APERTURE_ATTRIB_SLOTDRILL );
+            if( pad->GetProperty() == PAD_PROP_CASTELLATED )
+                gbr_metadata.SetApertureAttrib( GBR_APERTURE_METADATA::GBR_APERTURE_ATTRIB_CASTELLATEDDRILL );
             else
-                gbr_metadata.SetApertureAttrib( GBR_APERTURE_METADATA::GBR_APERTURE_ATTRIB_COMPONENTDRILL );
+            {
+                // Good practice of oblong pad holes (slots) is to use a specific aperture for routing, not used
+                // in drill commands
+                if( hole_descr.m_Hole_Shape )
+                    gbr_metadata.SetApertureAttrib( GBR_APERTURE_METADATA::GBR_APERTURE_ATTRIB_CMP_OBLONG_DRILL );
+                else
+                    gbr_metadata.SetApertureAttrib( GBR_APERTURE_METADATA::GBR_APERTURE_ATTRIB_CMP_DRILL );
+            }
 
             // Add object attribute: component reference to pads (mainly usefull for users)
-            const D_PAD* pad = dyn_cast<const D_PAD*>( hole_descr.m_ItemParent );
             wxString ref = pad->GetParent()->GetReference();
 
-#if 0   // Set to 1 to force a dummy reference for the parent pad.
-            if( ref.IsEmpty() )
-                ref = "<undefinedref>";
-#endif
             gbr_metadata.SetCmpReference( ref );
             gbr_metadata.SetNetAttribType( GBR_NETLIST_METADATA::GBR_NETINFO_CMP );
         }
@@ -283,6 +226,10 @@ int GERBER_WRITER::createDrillFile( wxString& aFullFilename, bool aIsNpth,
             convertOblong2Segment( hole_descr.m_Hole_Size,
                                    hole_descr.m_Hole_Orient, start, end );
             int width = std::min( hole_descr.m_Hole_Size.x, hole_descr.m_Hole_Size.y );
+
+            if ( width == 0 )
+                continue;
+
             plotter.ThickSegment( start+hole_pos, end+hole_pos,
                                   width, FILLED, &gbr_metadata );
             #endif

@@ -24,15 +24,20 @@
  */
 
 
+#include <algorithm>
 #include <fctsys.h>
 #include <build_version.h>
 #include <confirm.h>
 
-#include <schframe.h>
+#include <sch_edit_frame.h>
+#include <xnode.h>
+#include <connection_graph.h>
 #include "netlist_exporter_kicad.h"
 
 bool NETLIST_EXPORTER_KICAD::WriteNetlist( const wxString& aOutFileName, unsigned aNetlistOptions )
 {
+    wxASSERT( m_graph );
+
     try
     {
         FILE_OUTPUTFORMATTER formatter( aOutFileName );

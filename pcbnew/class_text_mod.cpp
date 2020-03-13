@@ -3,7 +3,7 @@
  *
  * Copyright (C) 2015 Jean-Pierre Charras, jp.charras at wanadoo.fr
  * Copyright (C) 2012 SoftPLC Corporation, Dick Hollenbeck <dick@softplc.com>
- * Copyright (C) 1992-2016 KiCad Developers, see AUTHORS.txt for contributors.
+ * Copyright (C) 1992-2019 KiCad Developers, see AUTHORS.txt for contributors.
  *
  * This program is free software; you can redistribute it and/or
  * modify it under the terms of the GNU General Public License
@@ -23,31 +23,24 @@
  * 51 Franklin Street, Fifth Floor, Boston, MA  02110-1301, USA
  */
 
-/**
- * @file class_module.cpp
- * @brief TEXT_MODULE class implementation.
- */
-
 #include <fctsys.h>
 #include <gr_basic.h>
-#include <wxstruct.h>
 #include <trigo.h>
-#include <class_drawpanel.h>
-#include <drawtxt.h>
+#include <gr_text.h>
 #include <kicad_string.h>
 #include <richio.h>
 #include <macros.h>
-#include <wxPcbStruct.h>
+#include <pcb_edit_frame.h>
 #include <msgpanel.h>
 #include <base_units.h>
 #include <bitmaps.h>
-
 #include <class_board.h>
 #include <class_module.h>
-
 #include <view/view.h>
-
 #include <pcbnew.h>
+#include <pgm_base.h>
+#include <settings/color_settings.h>
+#include <settings/settings_manager.h>
 
 
 TEXTE_MODULE::TEXTE_MODULE( MODULE* parent, TEXT_TYPE text_type ) :
@@ -57,9 +50,10 @@ TEXTE_MODULE::TEXTE_MODULE( MODULE* parent, TEXT_TYPE text_type ) :
     MODULE* module = static_cast<MODULE*>( m_Parent );
 
     m_Type = text_type;
+    m_keepUpright = true;
 
     // Set text thickness to a default value
-    SetThickness( Millimeter2iu( 0.15 ) );
+    SetThickness( Millimeter2iu( DEFAULT_TEXT_WIDTH ) );
     SetLayer( F_SilkS );
 
     // Set position and give a default layer if a valid parent footprint exists
@@ -109,19 +103,42 @@ bool TEXTE_MODULE::TextHitTest( const EDA_RECT& aRect, bool aContains, int aAccu
     rect.Inflate( aAccuracy );
 
     if( aContains )
-    {
         return rect.Contains( GetBoundingBox() );
-    }
     else
-    {
         return rect.Intersects( GetTextBox( -1 ), GetDrawRotation() );
+}
+
+
+void TEXTE_MODULE::KeepUpright( double aOldOrientation, double aNewOrientation )
+{
+    if( !IsKeepUpright() )
+        return;
+
+    double currentAngle = GetTextAngle() + aOldOrientation;
+    double newAngle = GetTextAngle() + aNewOrientation;
+
+    NORMALIZE_ANGLE_POS( currentAngle );
+    NORMALIZE_ANGLE_POS( newAngle );
+
+    bool   isFlipped = currentAngle >= 1800.0;
+    bool   needsFlipped = newAngle >= 1800.0;
+
+    if( isFlipped != needsFlipped )
+    {
+        if( GetHorizJustify() == GR_TEXT_HJUSTIFY_LEFT )
+            SetHorizJustify( GR_TEXT_HJUSTIFY_RIGHT );
+        else if( GetHorizJustify() == GR_TEXT_HJUSTIFY_RIGHT )
+            SetHorizJustify(GR_TEXT_HJUSTIFY_LEFT );
+
+        SetTextAngle( GetTextAngle() + 1800.0 );
+        SetDrawCoord();
     }
 }
 
 
 void TEXTE_MODULE::Rotate( const wxPoint& aRotCentre, double aAngle )
 {
-    // Used in footprint edition
+    // Used in footprint editing
     // Note also in module editor, m_Pos0 = m_Pos
 
     wxPoint pt = GetTextPos();
@@ -133,16 +150,37 @@ void TEXTE_MODULE::Rotate( const wxPoint& aRotCentre, double aAngle )
 }
 
 
-void TEXTE_MODULE::Flip( const wxPoint& aCentre )
+void TEXTE_MODULE::Flip( const wxPoint& aCentre, bool aFlipLeftRight )
 {
     // flipping the footprint is relative to the X axis
-    SetTextY( ::Mirror( GetTextPos().y, aCentre.y ) );
+    if( aFlipLeftRight )
+        SetTextX( ::Mirror( GetTextPos().x, aCentre.x ) );
+    else
+        SetTextY( ::Mirror( GetTextPos().y, aCentre.y ) );
 
     SetTextAngle( -GetTextAngle() );
 
     SetLayer( FlipLayer( GetLayer() ) );
     SetMirrored( IsBackLayer( GetLayer() ) );
     SetLocalCoord();
+
+    // adjust justified text for mirroring
+    if( GetHorizJustify() == GR_TEXT_HJUSTIFY_LEFT || GetHorizJustify() == GR_TEXT_HJUSTIFY_RIGHT )
+    {
+        if( ( GetHorizJustify() == GR_TEXT_HJUSTIFY_RIGHT ) == IsMirrored() )
+            SetHorizJustify( (EDA_TEXT_HJUSTIFY_T)-GetHorizJustify() );
+        else
+            SetHorizJustify( (EDA_TEXT_HJUSTIFY_T)-GetHorizJustify() );
+
+        SetDrawCoord();
+    }
+}
+
+bool TEXTE_MODULE::IsParentFlipped() const
+{
+    if( GetParent() &&  GetParent()->GetLayer() == B_Cu )
+        return true;
+    return false;
 }
 
 
@@ -169,7 +207,7 @@ void TEXTE_MODULE::Move( const wxPoint& aMoveVector )
 
 int TEXTE_MODULE::GetLength() const
 {
-    return m_Text.Len();
+    return GetText().Len();
 }
 
 
@@ -222,26 +260,24 @@ const EDA_RECT TEXTE_MODULE::GetBoundingBox() const
 }
 
 
-void TEXTE_MODULE::Draw( EDA_DRAW_PANEL* aPanel, wxDC* aDC, GR_DRAWMODE aDrawMode,
-                         const wxPoint& aOffset )
+void TEXTE_MODULE::Print( PCB_BASE_FRAME* aFrame, wxDC* aDC, const wxPoint& aOffset )
 {
-    if( aPanel == NULL )
-        return;
-
-    /* parent must *not* be NULL (a footprint text without a footprint
-       parent has no sense) */
+    /* parent must *not* be NULL (a footprint text without a footprint parent has no sense) */
     wxASSERT( m_Parent );
 
-    BOARD* brd = GetBoard( );
-
-    auto frame = static_cast<PCB_BASE_FRAME*> ( aPanel->GetParent() );
-    auto color = frame->Settings().Colors().GetLayerColor( GetLayer() );
-
-    PCB_LAYER_ID text_layer = GetLayer();
+    BOARD*         brd = GetBoard( );
+    KIGFX::COLOR4D color = Pgm().GetSettingsManager().GetColorSettings()->GetColor( GetLayer() );
+    PCB_LAYER_ID   text_layer = GetLayer();
 
     if( !brd->IsLayerVisible( m_Layer )
       || ( IsFrontLayer( text_layer ) && !brd->IsElementVisible( LAYER_MOD_TEXT_FR ) )
       || ( IsBackLayer( text_layer ) && !brd->IsElementVisible( LAYER_MOD_TEXT_BK ) ) )
+        return;
+
+    if( !brd->IsElementVisible( LAYER_MOD_REFERENCES ) && GetText() == wxT( "%R" ) )
+        return;
+
+    if( !brd->IsElementVisible( LAYER_MOD_VALUES ) && GetText() == wxT( "%V" ) )
         return;
 
     // Invisible texts are still drawn (not plotted) in LAYER_MOD_TEXT_INVISIBLE
@@ -251,35 +287,16 @@ void TEXTE_MODULE::Draw( EDA_DRAW_PANEL* aPanel, wxDC* aDC, GR_DRAWMODE aDrawMod
         if( !brd->IsElementVisible( LAYER_MOD_TEXT_INVISIBLE ) )
             return;
 
-        color = frame->Settings().Colors().GetItemColor( LAYER_MOD_TEXT_INVISIBLE );
-    }
-
-    DISPLAY_OPTIONS* displ_opts = (DISPLAY_OPTIONS*)aPanel->GetDisplayOptions();
-
-    // shade text if high contrast mode is active
-    if( ( aDrawMode & GR_ALLOW_HIGHCONTRAST ) && displ_opts && displ_opts->m_ContrastModeDisplay )
-    {
-        PCB_LAYER_ID curr_layer = ( (PCB_SCREEN*) aPanel->GetScreen() )->m_Active_Layer;
-
-        if( !IsOnLayer( curr_layer ) )
-            color = COLOR4D( DARKDARKGRAY );
+        color = Pgm().GetSettingsManager().GetColorSettings()->GetColor( LAYER_MOD_TEXT_INVISIBLE );
     }
 
     // Draw mode compensation for the width
     int width = GetThickness();
 
-    if( displ_opts && displ_opts->m_DisplayModTextFill == SKETCH )
+    if( aFrame->GetDisplayOptions().m_DisplayModTextFill == SKETCH )
         width = -width;
 
-    GRSetDrawMode( aDC, aDrawMode );
     wxPoint pos = GetTextPos() - aOffset;
-
-    // Draw the text anchor point
-    if( brd->IsElementVisible( LAYER_ANCHOR ) )
-    {
-        COLOR4D anchor_color = frame->Settings().Colors().GetItemColor( LAYER_ANCHOR );
-        GRDrawAnchor( aPanel->GetClipBox(), aDC, pos.x, pos.y, DIM_ANCRE_TEXTE, anchor_color );
-    }
 
     // Draw the text proper, with the right attributes
     wxSize size   = GetTextSize();
@@ -289,34 +306,8 @@ void TEXTE_MODULE::Draw( EDA_DRAW_PANEL* aPanel, wxDC* aDC, GR_DRAWMODE aDrawMod
     if( IsMirrored() )
         size.x = -size.x;
 
-    DrawGraphicText( aPanel->GetClipBox(), aDC, pos, color, GetShownText(), orient,
-                     size, GetHorizJustify(), GetVertJustify(),
-                     width, IsItalic(), IsBold() );
-
-    // Enable these line to draw the bounding box (debug test purpose only)
-#if 0
-    {
-        EDA_RECT BoundaryBox = GetBoundingBox();
-        GRRect( aPanel->GetClipBox(), aDC, BoundaryBox, 0, BROWN );
-    }
-#endif
-}
-
-
-void TEXTE_MODULE::DrawUmbilical( EDA_DRAW_PANEL* aPanel,
-                                  wxDC*           aDC,
-                                  GR_DRAWMODE     aDrawMode,
-                                  const wxPoint&  aOffset )
-{
-    MODULE* parent = static_cast<MODULE*>( GetParent() );
-
-    if( !parent )
-        return;
-
-    GRSetDrawMode( aDC, GR_XOR );
-    GRLine( aPanel->GetClipBox(), aDC,
-            parent->GetPosition(), GetTextPos() + aOffset,
-            0, UMBILICAL_COLOR);
+    GRText( aDC, pos, color, GetShownText(), orient, size, GetHorizJustify(), GetVertJustify(),
+            width, IsItalic(), IsBold() );
 }
 
 
@@ -328,19 +319,26 @@ double TEXTE_MODULE::GetDrawRotation() const
     if( module )
         rotation += module->GetOrientation();
 
-    // Keep angle between -90 .. 90 deg. Otherwise the text is not easy to read
-    while( rotation > 900 )
-        rotation -= 1800;
+    if( m_keepUpright )
+    {
+        // Keep angle between -90 .. 90 deg. Otherwise the text is not easy to read
+        while( rotation > 900 )
+            rotation -= 1800;
 
-    while( rotation < -900 )
-        rotation += 1800;
+        while( rotation < -900 )
+            rotation += 1800;
+    }
+    else
+    {
+        NORMALIZE_ANGLE_POS( rotation );
+    }
 
     return rotation;
 }
 
 
 // see class_text_mod.h
-void TEXTE_MODULE::GetMsgPanelInfo( std::vector< MSG_PANEL_ITEM >& aList )
+void TEXTE_MODULE::GetMsgPanelInfo( EDA_UNITS aUnits, std::vector<MSG_PANEL_ITEM>& aList )
 {
     MODULE* module = (MODULE*) m_Parent;
 
@@ -355,67 +353,64 @@ void TEXTE_MODULE::GetMsgPanelInfo( std::vector< MSG_PANEL_ITEM >& aList )
     };
 
     Line = module->GetReference();
-    aList.push_back( MSG_PANEL_ITEM( _( "Footprint" ), Line, DARKCYAN ) );
+    aList.emplace_back( _( "Footprint" ), Line, DARKCYAN );
 
     Line = GetShownText();
-    aList.push_back( MSG_PANEL_ITEM( _( "Text" ), Line, BROWN ) );
+    aList.emplace_back( _( "Text" ), Line, BROWN );
 
     wxASSERT( m_Type >= TEXT_is_REFERENCE && m_Type <= TEXT_is_DIVERS );
-    aList.push_back( MSG_PANEL_ITEM( _( "Type" ), text_type_msg[m_Type], DARKGREEN ) );
+    aList.emplace_back( _( "Type" ), text_type_msg[m_Type], DARKGREEN );
 
     if( !IsVisible() )
         msg = _( "No" );
     else
         msg = _( "Yes" );
 
-    aList.push_back( MSG_PANEL_ITEM( _( "Display" ), msg, DARKGREEN ) );
+    aList.emplace_back( _( "Display" ), msg, DARKGREEN );
 
     // Display text layer
-    aList.push_back( MSG_PANEL_ITEM( _( "Layer" ), GetLayerName(), DARKGREEN ) );
+    aList.emplace_back( _( "Layer" ), GetLayerName(), DARKGREEN );
 
     if( IsMirrored() )
-        msg = _( " Yes" );
+        msg = _( "Yes" );
     else
-        msg = _( " No" );
+        msg = _( "No" );
 
-    aList.push_back( MSG_PANEL_ITEM( _( "Mirror" ), msg, DARKGREEN ) );
+    aList.emplace_back( _( "Mirror" ), msg, DARKGREEN );
 
     msg.Printf( wxT( "%.1f" ), GetTextAngleDegrees() );
-    aList.push_back( MSG_PANEL_ITEM( _( "Angle" ), msg, DARKGREEN ) );
+    aList.emplace_back( _( "Angle" ), msg, DARKGREEN );
 
-    msg = ::CoordinateToString( GetThickness() );
-    aList.push_back( MSG_PANEL_ITEM( _( "Thickness" ), msg, DARKGREEN ) );
+    msg = MessageTextFromValue( aUnits, GetThickness(), true );
+    aList.emplace_back( _( "Thickness" ), msg, DARKGREEN );
 
-    msg = ::CoordinateToString( GetTextWidth() );
-    aList.push_back( MSG_PANEL_ITEM( _( "Width" ), msg, RED ) );
+    msg = MessageTextFromValue( aUnits, GetTextWidth(), true );
+    aList.emplace_back( _( "Width" ), msg, RED );
 
-    msg = ::CoordinateToString( GetTextHeight() );
-    aList.push_back( MSG_PANEL_ITEM( _( "Height" ), msg, RED ) );
+    msg = MessageTextFromValue( aUnits, GetTextHeight(), true );
+    aList.emplace_back( _( "Height" ), msg, RED );
 }
 
 
-wxString TEXTE_MODULE::GetSelectMenuText() const
+wxString TEXTE_MODULE::GetSelectMenuText( EDA_UNITS aUnits ) const
 {
-    wxString text;
-    const wxChar *reference = GetChars( static_cast<MODULE*>( GetParent() )->GetReference() );
-
     switch( m_Type )
     {
     case TEXT_is_REFERENCE:
-        text.Printf( _( "Reference %s" ), reference );
-        break;
+        return wxString::Format( _( "Reference %s" ),
+                                 static_cast<MODULE*>( GetParent() )->GetReference() );
 
     case TEXT_is_VALUE:
-        text.Printf( _( "Value %s of %s" ), GetChars( GetShownText() ), reference );
-        break;
+        return wxString::Format( _( "Value %s of %s" ),
+                                 GetShownText(),
+                                 static_cast<MODULE*>( GetParent() )->GetReference() );
 
     default:    // wrap this one in quotes:
-        text.Printf( _( "Text \"%s\" on %s of %s" ), GetChars( ShortenedShownText() ),
-                     GetChars( GetLayerName() ), reference );
-        break;
+        return wxString::Format( _( "Text \"%s\" of %s on %s" ),
+                                 ShortenedShownText(),
+                                 static_cast<MODULE*>( GetParent() )->GetReference(),
+                                 GetLayerName() );
     }
-
-    return text;
 }
 
 
@@ -445,14 +440,10 @@ const BOX2I TEXTE_MODULE::ViewBBox() const
 
 void TEXTE_MODULE::ViewGetLayers( int aLayers[], int& aCount ) const
 {
-    if( !IsVisible() )      // Hidden text
-        aLayers[0] = LAYER_MOD_TEXT_INVISIBLE;
-    //else if( IsFrontLayer( m_Layer ) )
-        //aLayers[0] = LAYER_MOD_TEXT_FR;
-    //else if( IsBackLayer( m_Layer ) )
-        //aLayers[0] = LAYER_MOD_TEXT_BK;
-    else
+    if( IsVisible() )
         aLayers[0] = GetLayer();
+    else
+        aLayers[0] = LAYER_MOD_TEXT_INVISIBLE;
 
     aCount = 1;
 }
@@ -460,25 +451,38 @@ void TEXTE_MODULE::ViewGetLayers( int aLayers[], int& aCount ) const
 
 unsigned int TEXTE_MODULE::ViewGetLOD( int aLayer, KIGFX::VIEW* aView ) const
 {
-    const int MAX = std::numeric_limits<unsigned int>::max();
+    const int HIDE = std::numeric_limits<unsigned int>::max();
 
     if( !aView )
         return 0;
 
-    if( m_Type == TEXT_is_VALUE && !aView->IsLayerVisible( LAYER_MOD_VALUES ) )
-        return MAX;
+    // Hidden text gets put on the LAYER_MOD_TEXT_INVISIBLE for rendering, but
+    // should only render if its native layer is visible.
+    if( !aView->IsLayerVisible( GetLayer() ) )
+        return HIDE;
 
-    if( m_Type == TEXT_is_REFERENCE && !aView->IsLayerVisible( LAYER_MOD_REFERENCES ) )
-        return MAX;
+    // Handle Render tab switches
+    if( ( m_Type == TEXT_is_VALUE || GetText() == wxT( "%V" ) )
+            && !aView->IsLayerVisible( LAYER_MOD_VALUES ) )
+        return HIDE;
 
-    if( IsFrontLayer( m_Layer ) && ( !aView->IsLayerVisible( LAYER_MOD_TEXT_FR ) ||
-                                     !aView->IsLayerVisible( LAYER_MOD_FR ) ) )
-        return MAX;
+    if( ( m_Type == TEXT_is_REFERENCE || GetText() == wxT( "%R" ) )
+            && !aView->IsLayerVisible( LAYER_MOD_REFERENCES ) )
+        return HIDE;
 
-    if( IsBackLayer( m_Layer ) && ( !aView->IsLayerVisible( LAYER_MOD_TEXT_BK ) ||
-                                    !aView->IsLayerVisible( LAYER_MOD_BK ) ) )
-        return MAX;
+    if( !IsParentFlipped() && !aView->IsLayerVisible( LAYER_MOD_FR ) )
+        return HIDE;
 
+    if( IsParentFlipped() && !aView->IsLayerVisible( LAYER_MOD_BK ) )
+        return HIDE;
+
+    if( IsFrontLayer( m_Layer ) && !aView->IsLayerVisible( LAYER_MOD_TEXT_FR ) )
+        return HIDE;
+
+    if( IsBackLayer( m_Layer ) && !aView->IsLayerVisible( LAYER_MOD_TEXT_BK ) )
+        return HIDE;
+
+    // Other layers are shown without any conditions
     return 0;
 }
 
@@ -492,13 +496,13 @@ wxString TEXTE_MODULE::GetShownText() const
      * Also it seems wise to only expand macros in user text (but there
      * is no technical reason, probably) */
 
-    if( (m_Type != TEXT_is_DIVERS) || (wxString::npos == m_Text.find('%')) )
-        return m_Text;
+    if( (m_Type != TEXT_is_DIVERS) || (wxString::npos == GetText().find('%')) )
+        return GetText();
 
     wxString newbuf;
     const MODULE *module = static_cast<MODULE*>( GetParent() );
 
-    for( wxString::const_iterator it = m_Text.begin(); it != m_Text.end(); ++it )
+    for( wxString::const_iterator it = GetText().begin(); it != GetText().end(); ++it )
     {
         // Process '%' and copy everything else
         if( *it != '%' )
@@ -509,7 +513,7 @@ wxString TEXTE_MODULE::GetShownText() const
              * its expansion */
             ++it;
 
-            if( it != m_Text.end() )
+            if( it != GetText().end() )
             {
                 switch( char(*it) )
                 {

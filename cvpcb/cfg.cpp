@@ -26,28 +26,19 @@
  * @file cfg.cpp
  */
 
-#include <fctsys.h>
-#include <kiface_i.h>
-#include <fp_lib_table.h>
-#include <id.h>
-#include <common.h>
-#include <gestfich.h>
 #include <config_params.h>
-#include <wildcards_and_files_ext.h>
-#include <fp_lib_table.h>
-#include <confirm.h>
+#include <kiface_i.h>
+#include <project.h>
 
-#include <cvpcb.h>
 #include <cvpcb_mainframe.h>
-#include <class_DisplayFootprintsFrame.h>
 
 
-PARAM_CFG_ARRAY& CVPCB_MAINFRAME::GetProjectFileParameters()
+std::vector<PARAM_CFG*>& CVPCB_MAINFRAME::GetProjectFileParameters()
 {
     if( !m_projectFileParams.empty() )
         return m_projectFileParams;
 
-    m_projectFileParams.push_back( new PARAM_CFG_BASE( GROUP_PCB_LIBS, PARAM_COMMAND_ERASE ) );
+    m_projectFileParams.push_back( new PARAM_CFG( GROUP_PCB_LIBS, PARAM_COMMAND_ERASE ) );
 
     m_projectFileParams.push_back( new PARAM_CFG_LIBNAME_LIST(
         wxT( "EquName" ), &m_EquFilesNames, GROUP_CVP_EQU ) );
@@ -74,7 +65,7 @@ void CVPCB_MAINFRAME::SaveProjectFile()
 
     if( !IsWritable( fn ) )
     {
-        wxMessageBox( _( "Project file '%s' is not writable" ), fn.GetFullPath() );
+        wxMessageBox( _( "Project file \"%s\" is not writable" ), fn.GetFullPath() );
         return;
     }
 

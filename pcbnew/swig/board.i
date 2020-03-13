@@ -3,7 +3,7 @@
  *
  * Copyright (C) 2012 NBEE Embedded Systems, Miguel Angel Ajo <miguelangel@nbee.es>
  * Copyright (C) 2016 SoftPLC Corporation, Dick Hollenbeck <dick@softplc.com>
- * Copyright (C) 1992-2012 KiCad Developers, see AUTHORS.txt for contributors.
+ * Copyright (C) 1992-2017 KiCad Developers, see AUTHORS.txt for contributors.
  *
  * This program is free software; you can redistribute it and/or
  * modify it under the terms of the GNU General Public License
@@ -42,12 +42,11 @@ file near the top; only class BOARD functions go in board.i.
 HANDLE_EXCEPTIONS(BOARD::TracksInNetBetweenPoints)
 
 
-//%import dlist.h       // comes in from kicad.i which wraps & includes board.i
-
 %include board_item.i
 %include board_item_container.i
 %include board_connected_item.i
 %include board_design_settings.i
+%include connectivity.i
 %include pad.i
 %include track.i
 %include zone.i
@@ -56,11 +55,12 @@ HANDLE_EXCEPTIONS(BOARD::TracksInNetBetweenPoints)
 %include dimension.i
 %include drawsegment.i
 %include marker_pcb.i
-%include mire.i
+%include pcb_target.i
 %include text_mod.i
 %include edge_mod.i
 %include netinfo.i
 %include netclass.i
+%include pcb_plot_params.i
 
 %ignore operator++(SCH_LAYER_ID&);
 
@@ -106,6 +106,21 @@ HANDLE_EXCEPTIONS(BOARD::TracksInNetBetweenPoints)
 #include <class_board.h>
 %}
 
+%extend std::deque<BOARD_ITEM *>
+{
+    %pythoncode
+    %{
+        def __iter__(self):
+            it = self.iterator()
+            try:
+                while True:
+                    item = it.next()  # throws StopIteration when iterator reached the end.
+                    yield item.Cast()
+            except StopIteration:
+                return
+    %}
+}
+
 %extend BOARD
 {
     // BOARD_ITEM_CONTAINER's interface functions will be implemented by SWIG
@@ -114,12 +129,12 @@ HANDLE_EXCEPTIONS(BOARD::TracksInNetBetweenPoints)
     %pythoncode
     %{
 
-    def GetModules(self):             return self.m_Modules
-    def GetDrawings(self):            return self.DrawingsList()
-    def GetTracks(self):              return self.m_Track
+    def GetModules(self):             return self.Modules()
+    def GetDrawings(self):            return self.Drawings()
+    def GetTracks(self):              return self.Tracks()
 
     def Save(self,filename):
-        return SaveBoard(filename,self,IO_MGR.KICAD)
+        return SaveBoard(filename,self)
 
     def GetNetClasses(self):
         return self.GetDesignSettings().m_NetClasses
@@ -158,11 +173,10 @@ HANDLE_EXCEPTIONS(BOARD::TracksInNetBetweenPoints)
         GetNetClasses(BOARD self) -> { wxString net_class_name : NETCLASSPTR }
         Include the "Default" netclass also.
         """
-        netclassmap = self.GetNetClasses().NetClasses()
 
-        # Add the Default one too, but this is probably modifying the NETCLASS_MAP
-        # in the BOARD.  If that causes trouble, could make a deepcopy() here first.
-        # netclassmap = deepcopy(netclassmap)
+        # Copy the NETCLASS_MAP so the one in the BOARD isn't modified
+        # when we add the Default net class.
+        netclassmap = {k:v for k,v in self.GetNetClasses().NetClasses().items()}
         netclassmap['Default'] = self.GetNetClasses().GetDefault()
         return netclassmap
     %}

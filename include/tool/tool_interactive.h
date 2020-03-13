@@ -27,11 +27,11 @@
 #define __TOOL_INTERACTIVE_H
 
 #include <string>
-
+#include <tool/tool_menu.h>
 #include <tool/tool_event.h>
 #include <tool/tool_base.h>
 
-class CONTEXT_MENU;
+class ACTION_MENU;
 
 class TOOL_INTERACTIVE : public TOOL_BASE
 {
@@ -55,6 +55,8 @@ public:
      */
     void Activate();
 
+    TOOL_MENU& GetToolMenu() { return m_menu; }
+    
     /**
      * Function SetContextMenu()
      *
@@ -62,7 +64,7 @@ public:
      * @param aMenu is the menu to be assigned.
      * @param aTrigger determines conditions upon which the context menu is activated.
      */
-    void SetContextMenu( CONTEXT_MENU* aMenu, CONTEXT_MENU_TRIGGER aTrigger = CMENU_BUTTON );
+    void SetContextMenu( ACTION_MENU* aMenu, CONTEXT_MENU_TRIGGER aTrigger = CMENU_BUTTON );
 
     /**
      * Function RunMainStack()
@@ -88,7 +90,7 @@ public:
      * Suspends execution of the tool until an event specified in aEventList arrives.
      * No parameters means waiting for any event.
      */
-    OPT_TOOL_EVENT Wait( const TOOL_EVENT_LIST& aEventList = TOOL_EVENT( TC_ANY, TA_ANY ) );
+    TOOL_EVENT* Wait( const TOOL_EVENT_LIST& aEventList = TOOL_EVENT( TC_ANY, TA_ANY ) );
 
     /** functions below are not yet implemented - their interface may change */
     /*template <class Parameters, class ReturnValue>
@@ -103,15 +105,7 @@ public:
         void Yield( const T& returnValue );*/
 
 protected:
-    /* helper functions for constructing events for Wait() and Go() with less typing */
-    const TOOL_EVENT evActivate( std::string aToolName = "" );
-    const TOOL_EVENT evCommand( int aCommandId = -1 );
-    const TOOL_EVENT evCommand( std::string aCommandStr = "" );
-    const TOOL_EVENT evMotion();
-    const TOOL_EVENT evClick( int aButton = BUT_ANY );
-    const TOOL_EVENT evDrag( int aButton = BUT_ANY );
-    const TOOL_EVENT evButtonUp( int aButton = BUT_ANY );
-    const TOOL_EVENT evButtonDown(int aButton = BUT_ANY );
+    TOOL_MENU m_menu;
 
 private:
     /**

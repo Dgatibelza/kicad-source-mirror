@@ -3,7 +3,7 @@
  *
  * Copyright (C) 2015 CERN
  * @author Maciej Suminski <maciej.suminski@cern.ch>
- * Copyright (C) 2015-2017 KiCad Developers, see AUTHORS.txt for contributors.
+ * Copyright (C) 2015-2018 KiCad Developers, see AUTHORS.txt for contributors.
  *
  * This program is free software; you can redistribute it and/or
  * modify it under the terms of the GNU General Public License
@@ -25,23 +25,25 @@
 
 #include <tool/grid_menu.h>
 #include <id.h>
-#include <draw_frame.h>
-#include <class_base_screen.h>
+#include <eda_draw_frame.h>
+#include <base_screen.h>
 #include <tool/actions.h>
 #include <bitmaps.h>
 
 #include <functional>
 using namespace std::placeholders;
 
-GRID_MENU::GRID_MENU( EDA_DRAW_FRAME* aParent ) : m_parent( aParent )
+GRID_MENU::GRID_MENU( EDA_DRAW_FRAME* aParent ) :
+        ACTION_MENU( true ),
+        m_parent( aParent )
 {
-    BASE_SCREEN* screen = aParent->GetScreen();
+    BASE_SCREEN* screen = m_parent->GetScreen();
 
     SetTitle( _( "Grid" ) );
     SetIcon( grid_select_xpm );
 
     wxArrayString gridsList;
-    screen->BuildGridsChoiceList( gridsList, g_UserUnit != INCHES );
+    screen->BuildGridsChoiceList( gridsList, m_parent->GetUserUnits() != EDA_UNITS::INCHES );
 
     for( unsigned int i = 0; i < gridsList.GetCount(); ++i )
     {
@@ -63,9 +65,19 @@ OPT_TOOL_EVENT GRID_MENU::eventHandler( const wxMenuEvent& aEvent )
 
 void GRID_MENU::update()
 {
-    for( unsigned int i = 0; i < GetMenuItemCount(); ++i )
-        Check( ID_POPUP_GRID_SELECT + 1 + i, false );
+    BASE_SCREEN*  screen = m_parent->GetScreen();
+    int           currentId = screen->GetGridCmdId();
+    wxArrayString gridsList;
 
-    // Check the current grid size
-    Check( m_parent->GetScreen()->GetGridCmdId(), true );
+    screen->BuildGridsChoiceList( gridsList, m_parent->GetUserUnits() != EDA_UNITS::INCHES );
+
+    for( unsigned int i = 0; i < GetMenuItemCount(); ++i )
+    {
+        GRID_TYPE&  grid = screen->GetGrid( i );
+        wxMenuItem* menuItem = FindItemByPosition( i );
+
+        menuItem->SetId( grid.m_CmdId );
+        menuItem->SetItemLabel( gridsList[ i ] );      // Refresh label in case units have changed
+        menuItem->Check( grid.m_CmdId == currentId );  // Refresh checkmark
+    }
 }

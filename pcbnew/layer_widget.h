@@ -44,19 +44,21 @@
 #include <layers_id_colors_and_visibility.h>
 #include <gal/color4d.h>
 #include <widgets/color_swatch.h>
+#include <widgets/indicator_icon.h>
 
-#define LYR_COLUMN_COUNT        4           ///< Layer tab column count
+#define LYR_COLUMN_COUNT        5           ///< Layer tab column count
 #define RND_COLUMN_COUNT        2           ///< Rendering tab column count
 
 #define COLUMN_ICON_ACTIVE 0
 #define COLUMN_COLORBM 1
 #define COLUMN_COLOR_LYR_CB 2
 #define COLUMN_COLOR_LYRNAME 3
+#define COLUMN_ALPHA_INDICATOR 4
 
 using KIGFX::COLOR4D;
 
 /**
- * Class LAYER_WIDGET
+ * LAYER_WIDGET
  * is abstract and is used to manage a list of layers, with the notion of
  * a "current" layer, and layer specific visibility control.  You must derive from
  * it to use it so you can implement the abstract functions which recieve the
@@ -90,9 +92,12 @@ public:
         bool        state;      ///< initial wxCheckBox state
         wxString    tooltip;    ///< if not empty, use this tooltip on row
         bool        changeable; ///< if true, the state can be changed
+        bool        spacer;     ///< if true, this row is a spacer
+        COLOR4D     defaultColor; ///< The default color for the row
 
         ROW( const wxString& aRowName, int aId, COLOR4D aColor = COLOR4D::UNSPECIFIED,
-            const wxString& aTooltip = wxEmptyString, bool aState = true, bool aChangeable = true )
+             const wxString& aTooltip = wxEmptyString, bool aState = true,
+             bool aChangeable = true, COLOR4D aDefaultColor = COLOR4D::UNSPECIFIED )
         {
             rowName = aRowName;
             id      = aId;
@@ -100,6 +105,18 @@ public:
             state   = aState;
             tooltip = aTooltip;
             changeable = aChangeable;
+            spacer = false;
+            defaultColor = aDefaultColor;
+        }
+
+        ROW()
+        {
+            id = 0;
+            color = COLOR4D::UNSPECIFIED;
+            state = true;
+            changeable = true;
+            spacer = true;
+            defaultColor = COLOR4D::UNSPECIFIED;
         }
     };
 
@@ -119,6 +136,8 @@ protected:
     int                 m_CurrentRow;           ///< selected row of layer list
     int                 m_PointSize;
 
+    ROW_ICON_PROVIDER*  m_IconProvider;
+
     /**
      * Virtual Function useAlternateBitmap
      * @return true if bitmaps shown in Render layer list
@@ -130,10 +149,10 @@ protected:
     virtual bool useAlternateBitmap(int aRow) { return false; }
 
     /**
-     * Subclasses can override this to provide logic for allowing
-     * arbitrary color selection via wxColourPicker instead of DisplayColorFrame.
+     * Subclasses can override this to provide accurate representation
+     * of transparent colour swatches.
      */
-    virtual bool AreArbitraryColorsAllowed() { return false; }
+    virtual COLOR4D getBackgroundLayerColor() { return COLOR4D::BLACK; }
 
     /**
      * Function encodeId
@@ -217,6 +236,8 @@ protected:
 
     void insertRenderRow( int aRow, const ROW& aSpec );
 
+    void setLayerCheckbox( LAYER_NUM aLayer, bool isVisible );
+
     /**
      * Function passOnFocus
      * gives away the keyboard focus up to the main parent window.
@@ -236,18 +257,15 @@ public:
     /** Constructor
      * @param aParent is the parent window
      * @param aFocusOwner is the window that should be sent the focus after
-     * @param aPointSize is the font point size to use within the widget.  This
-     *  effectively sets the overal size of the widget via the row height and bitmap
-     *  button sizes.
      * @param id is the wxWindow id ( default = wxID_ANY)
      * @param pos is the window position
      * @param size is the window size
      * @param style is the window style
      * every operation.
      */
-    LAYER_WIDGET( wxWindow* aParent, wxWindow* aFocusOwner, int aPointSize = -1,
-        wxWindowID id = wxID_ANY, const wxPoint& pos = wxDefaultPosition,
-        const wxSize& size = wxDefaultSize, long style = wxTAB_TRAVERSAL );
+    LAYER_WIDGET( wxWindow* aParent, wxWindow* aFocusOwner, wxWindowID id = wxID_ANY,
+                  const wxPoint& pos = wxDefaultPosition, const wxSize& size = wxDefaultSize,
+                  long style = wxTAB_TRAVERSAL );
 
     virtual ~LAYER_WIDGET();
 
@@ -287,6 +305,8 @@ public:
     {
         for( int row=0;  row<aRowCount;  ++row )
             AppendLayerRow( aRowsArray[row] );
+
+        UpdateLayouts();
     }
 
     /**
@@ -311,6 +331,8 @@ public:
     {
         for( int row=0;  row<aRowCount;  ++row )
             AppendRenderRow( aRowsArray[row] );
+
+        UpdateLayouts();
     }
 
     /**
@@ -410,7 +432,7 @@ public:
     /**
      * Function OnLayerColorChange
      * is called to notify client code about a layer color change.  Derived
-     * classes will handle this accordingly.
+     *es will handle this accordingly.
      * @param aLayer is the board layer to change
      * @param aColor is the new color
      */

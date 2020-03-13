@@ -1,13 +1,13 @@
 /**
  * @file gerber_jobfile_writer.h
- * @brief Classes used in drill files, map files and report files generation.
+ * @brief Classes used to generate a Gerber job file in JSON
  */
 
 /*
  * This program source code file is part of KiCad, a free EDA CAD application.
  *
- * Copyright (C) 1992-2017 Jean_Pierre Charras <jp.charras at wanadoo.fr>
- * Copyright (C) 1992-2017 KiCad Developers, see change_log.txt for contributors.
+ * Copyright (C) 1992-2018 Jean_Pierre Charras <jp.charras at wanadoo.fr>
+ * Copyright (C) 1992-2018 KiCad Developers, see AUTHORS.txt for contributors.
  *
  * This program is free software; you can redistribute it and/or
  * modify it under the terms of the GNU General Public License
@@ -30,6 +30,10 @@
 #ifndef GERBER_JOBFILE_WRITER_H
 #define GERBER_JOBFILE_WRITER_H
 
+#include <kicad_json.h>
+
+using json = kicad::json;
+
 
 // A helper enum to handle sides of some layers (silk, mask)
 enum ONSIDE
@@ -43,7 +47,7 @@ enum ONSIDE
 class BOARD;
 
 /**
- * class JOBFILE_PARAMS store the list of parameters written in Gerber job file
+ * JOBFILE_PARAMS store the list of parameters written in Gerber job file
  * especialy list of .gbr filenames and the corresponding layer id belonging the job
  */
 class JOBFILE_PARAMS
@@ -87,12 +91,19 @@ public:
     }
 
     /**
-     * Creates an Excellon drill file
+     * Creates a Gerber job file
+     * @param aFullFilename = the full filename
+     * @return true, or false if the file cannot be created
+     */
+    bool  CreateJobFile( const wxString& aFullFilename );
+
+    /**
+     * Creates an Gerber job file in JSON format
      * @param aFullFilename = the full filename
      * @param aParams = true for a NPTH file, false for a PTH file
      * @return true, or false if the file cannot be created
      */
-    bool  CreateJobFile( const wxString& aFullFilename );
+    bool  WriteJSONJobFile( const wxString& aFullFilename );
 
 private:
     /** @return SIDE_NONE if no silk screen layer is in list
@@ -114,12 +125,44 @@ private:
      */
     const char* sideKeyValue( enum ONSIDE aValue );
 
+    /**
+     * Add the job file header in JSON format to m_JSONbuffer
+     */
+    void addJSONHeader();
+
+    /**
+     * Add the General Specs in JSON format to m_JSONbuffer
+     */
+    void addJSONGeneralSpecs();
+
+    /**
+     * Add the Files Attributes section in JSON format to m_JSONbuffer
+     */
+    void addJSONFilesAttributes();
+
+    /**
+     * Add the Material Stackup section in JSON format to m_JSONbuffer
+     * This is the ordered list of stackup layers (mask, paste, silk, copper, dielectric)
+     * used to make the physical board. Therefore not all layers are listed here
+     */
+    void addJSONMaterialStackup();
+
+    /**
+     * Add the Design Rules section in JSON format to m_JSONbuffer
+     */
+    void addJSONDesignRules();
+
+    /** A helper function to convert a wxString ( therefore a Unicode text ) to
+     * a JSON compatible string (a escaped unicode sequence of 4 hexa).
+     */
+    std::string formatStringFromUTF32( const wxString& aText );
 
 private:
     BOARD* m_pcb;               // The board
     REPORTER* m_reporter;       // a reporter for messages (can be null)
     JOBFILE_PARAMS m_params;    // the list of various prms and data to write in a job file
     double m_conversionUnits;   // scaling factor to convert brd units to gerber units (mm)
+    json m_json;                // json document built by this class
 };
 
 #endif  //  #ifndef GERBER_JOBFILE_WRITER_H

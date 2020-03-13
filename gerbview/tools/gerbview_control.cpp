@@ -2,7 +2,7 @@
  * This program source code file is part of KiCad, a free EDA CAD application.
  *
  * Copyright (C) 2017 Jon Evans <jon@craftyjon.com>
- * Copyright (C) 2017 KiCad Developers, see AUTHORS.txt for contributors.
+ * Copyright (C) 2017-2019 KiCad Developers, see AUTHORS.txt for contributors.
  *
  * This program is free software: you can redistribute it and/or modify it
  * under the terms of the GNU General Public License as published by the
@@ -23,42 +23,14 @@
 #include <gerbview_frame.h>
 #include <tool/tool_manager.h>
 #include <menus_helpers.h>
-
 #include "gerbview_actions.h"
 #include "gerbview_control.h"
-#include "selection_tool.h"
+#include "gerbview_selection_tool.h"
 
-TOOL_ACTION GERBVIEW_ACTIONS::selectionTool( "gerbview.Control.selectionTool",
-        AS_GLOBAL, 0,
-        "", "", NULL, AF_ACTIVATE );
-
-TOOL_ACTION GERBVIEW_ACTIONS::layerChanged( "gerbview.Control.layerChanged",
-        AS_GLOBAL, 0,
-        "", "", NULL, AF_NOTIFY );
-
-TOOL_ACTION GERBVIEW_ACTIONS::highlightClear( "gerbview.Control.highlightClear",
-        AS_GLOBAL, 0,
-        _( "Clear Highlight" ), "", highlight_remove_xpm );
-
-TOOL_ACTION GERBVIEW_ACTIONS::highlightNet( "gerbview.Control.highlightNet",
-        AS_GLOBAL, 0,
-        _( "Highlight Net" ), "", general_ratsnest_xpm );
-
-TOOL_ACTION GERBVIEW_ACTIONS::highlightComponent( "gerbview.Control.highlightComponent",
-        AS_GLOBAL, 0,
-        _( "Highlight Component" ), "", file_footprint_xpm );
-
-TOOL_ACTION GERBVIEW_ACTIONS::highlightAttribute( "gerbview.Control.highlightAttribute",
-        AS_GLOBAL, 0,
-        _( "Highlight Attribute" ), "", flag_xpm );
 
 GERBVIEW_CONTROL::GERBVIEW_CONTROL() :
-    TOOL_INTERACTIVE( "gerbview.Control" ), m_frame( NULL )
-{
-}
-
-
-GERBVIEW_CONTROL::~GERBVIEW_CONTROL()
+    TOOL_INTERACTIVE( "gerbview.Control" ), 
+    m_frame( nullptr )
 {
 }
 
@@ -73,7 +45,7 @@ int GERBVIEW_CONTROL::HighlightControl( const TOOL_EVENT& aEvent )
 {
     auto settings = static_cast<KIGFX::GERBVIEW_PAINTER*>( getView()->GetPainter() )->GetSettings();
     const auto& selection = m_toolMgr->GetTool<GERBVIEW_SELECTION_TOOL>()->GetSelection();
-    GERBER_DRAW_ITEM* item = NULL;
+    GERBER_DRAW_ITEM* item = nullptr;
 
     if( selection.Size() == 1 )
     {
@@ -94,7 +66,7 @@ int GERBVIEW_CONTROL::HighlightControl( const TOOL_EVENT& aEvent )
     {
         auto string = item->GetNetAttributes().m_Netname;
         settings->m_netHighlightString = string;
-        m_frame->m_SelNetnameBox->SetStringSelection( string );
+        m_frame->m_SelNetnameBox->SetStringSelection( UnescapeString( string ) );
     }
     else if( item && aEvent.IsAction( &GERBVIEW_ACTIONS::highlightComponent ) )
     {
@@ -113,8 +85,101 @@ int GERBVIEW_CONTROL::HighlightControl( const TOOL_EVENT& aEvent )
         }
     }
 
-    m_frame->GetGalCanvas()->GetView()->RecacheAllItems();
-    m_frame->GetGalCanvas()->Refresh();
+    m_frame->GetCanvas()->GetView()->UpdateAllItems( KIGFX::COLOR );
+    m_frame->GetCanvas()->Refresh();
+
+    return 0;
+}
+
+
+int GERBVIEW_CONTROL::DisplayControl( const TOOL_EVENT& aEvent )
+{
+    bool state;
+    bool needs_refresh = false;
+    auto options = m_frame->GetDisplayOptions();
+
+    if( aEvent.IsAction( &GERBVIEW_ACTIONS::linesDisplayOutlines ) )
+    {
+        options.m_DisplayLinesFill = !options.m_DisplayLinesFill;
+        needs_refresh = true;
+    }
+    else if( aEvent.IsAction( &GERBVIEW_ACTIONS::flashedDisplayOutlines ) )
+    {
+        options.m_DisplayFlashedItemsFill = !options.m_DisplayFlashedItemsFill;
+        needs_refresh = true;
+    }
+    else if( aEvent.IsAction( &GERBVIEW_ACTIONS::polygonsDisplayOutlines ) )
+    {
+        options.m_DisplayPolygonsFill = !options.m_DisplayPolygonsFill;
+        needs_refresh = true;
+    }
+    else if( aEvent.IsAction( &GERBVIEW_ACTIONS::negativeObjectDisplay ) )
+    {
+        state = !m_frame->IsElementVisible( LAYER_NEGATIVE_OBJECTS );
+        m_frame->SetElementVisibility( LAYER_NEGATIVE_OBJECTS, state );
+    }
+    else if( aEvent.IsAction( &GERBVIEW_ACTIONS::dcodeDisplay ) )
+    {
+        state = !m_frame->IsElementVisible( LAYER_DCODES );
+        m_frame->SetElementVisibility( LAYER_DCODES, state );
+    }
+    else if( aEvent.IsAction( &ACTIONS::highContrastMode ) )
+    {
+        options.m_HighContrastMode = !options.m_HighContrastMode;
+        needs_refresh = true;
+    }
+    else if( aEvent.IsAction( &GERBVIEW_ACTIONS::toggleDiffMode ) )
+    {
+        options.m_DiffMode = !options.m_DiffMode;
+        needs_refresh = true;
+    }
+
+    if( needs_refresh )
+        m_frame->UpdateDisplayOptions( options );
+
+    return 0;
+}
+
+
+int GERBVIEW_CONTROL::LayerNext( const TOOL_EVENT& aEvent )
+{
+    int layer = m_frame->GetActiveLayer();
+
+    if( layer < GERBER_DRAWLAYERS_COUNT - 1 )
+        m_frame->SetActiveLayer( layer + 1, true );
+
+    return 0;
+}
+
+
+int GERBVIEW_CONTROL::LayerPrev( const TOOL_EVENT& aEvent )
+{
+    int layer = m_frame->GetActiveLayer();
+
+    if( layer > 0 )
+        m_frame->SetActiveLayer( layer - 1, true );
+
+    return 0;
+}
+
+
+int GERBVIEW_CONTROL::UpdateMessagePanel( const TOOL_EVENT& aEvent )
+{
+    GERBVIEW_SELECTION_TOOL* selTool = m_toolMgr->GetTool<GERBVIEW_SELECTION_TOOL>();
+    GERBVIEW_SELECTION&      selection = selTool->GetSelection();
+
+    if( selection.GetSize() == 1 )
+    {
+        EDA_ITEM* item = (EDA_ITEM*) selection.Front();
+
+        MSG_PANEL_ITEMS msgItems;
+        item->GetMsgPanelInfo( m_frame->GetUserUnits(), msgItems );
+        m_frame->SetMsgPanel( msgItems );
+    }
+    else
+    {
+        m_frame->EraseMsgBox();
+    }
 
     return 0;
 }
@@ -122,8 +187,25 @@ int GERBVIEW_CONTROL::HighlightControl( const TOOL_EVENT& aEvent )
 
 void GERBVIEW_CONTROL::setTransitions()
 {
+    Go( &GERBVIEW_CONTROL::Print,              ACTIONS::print.MakeEvent() );
+
     Go( &GERBVIEW_CONTROL::HighlightControl,   GERBVIEW_ACTIONS::highlightClear.MakeEvent() );
     Go( &GERBVIEW_CONTROL::HighlightControl,   GERBVIEW_ACTIONS::highlightNet.MakeEvent() );
     Go( &GERBVIEW_CONTROL::HighlightControl,   GERBVIEW_ACTIONS::highlightComponent.MakeEvent() );
     Go( &GERBVIEW_CONTROL::HighlightControl,   GERBVIEW_ACTIONS::highlightAttribute.MakeEvent() );
+
+    Go( &GERBVIEW_CONTROL::LayerNext,          GERBVIEW_ACTIONS::layerNext.MakeEvent() );
+    Go( &GERBVIEW_CONTROL::LayerPrev,          GERBVIEW_ACTIONS::layerPrev.MakeEvent() );
+
+    Go( &GERBVIEW_CONTROL::DisplayControl,     GERBVIEW_ACTIONS::linesDisplayOutlines.MakeEvent() );
+    Go( &GERBVIEW_CONTROL::DisplayControl,     GERBVIEW_ACTIONS::flashedDisplayOutlines.MakeEvent() );
+    Go( &GERBVIEW_CONTROL::DisplayControl,     GERBVIEW_ACTIONS::polygonsDisplayOutlines.MakeEvent() );
+    Go( &GERBVIEW_CONTROL::DisplayControl,     GERBVIEW_ACTIONS::negativeObjectDisplay.MakeEvent() );
+    Go( &GERBVIEW_CONTROL::DisplayControl,     GERBVIEW_ACTIONS::dcodeDisplay.MakeEvent() );
+    Go( &GERBVIEW_CONTROL::DisplayControl,     ACTIONS::highContrastMode.MakeEvent() );
+    Go( &GERBVIEW_CONTROL::DisplayControl,     GERBVIEW_ACTIONS::toggleDiffMode.MakeEvent() );
+
+    Go( &GERBVIEW_CONTROL::UpdateMessagePanel, EVENTS::SelectedEvent );
+    Go( &GERBVIEW_CONTROL::UpdateMessagePanel, EVENTS::UnselectedEvent );
+    Go( &GERBVIEW_CONTROL::UpdateMessagePanel, EVENTS::ClearedEvent );
 }

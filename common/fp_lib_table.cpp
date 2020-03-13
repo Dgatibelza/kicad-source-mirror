@@ -2,8 +2,8 @@
  * This program source code file is part of KiCad, a free EDA CAD application.
  *
  * Copyright (C) 2010-2012 SoftPLC Corporation, Dick Hollenbeck <dick@softplc.com>
- * Copyright (C) 2012-2016 Wayne Stambaugh <stambaughw@gmail.com>
- * Copyright (C) 2012-2017 KiCad Developers, see AUTHORS.txt for contributors.
+ * Copyright (C) 2012 Wayne Stambaugh <stambaughw@gmail.com>
+ * Copyright (C) 2012-2019 KiCad Developers, see AUTHORS.txt for contributors.
  *
  * This program is free software; you can redistribute it and/or
  * modify it under the terms of the GNU General Public License
@@ -25,11 +25,14 @@
 
 
 #include <fctsys.h>
-#include <common.h>
 #include <kiface_i.h>
 #include <footprint_info.h>
 #include <lib_id.h>
 #include <lib_table_lexer.h>
+#include <pgm_base.h>
+#include <search_stack.h>
+#include <settings/settings_manager.h>
+#include <systemdirsappend.h>
 #include <fp_lib_table.h>
 #include <class_module.h>
 
@@ -109,10 +112,11 @@ void FP_LIB_TABLE::Parse( LIB_TABLE_LEXER* in )
 
         // After (name), remaining (lib) elements are order independent, and in
         // some cases optional.
-        bool    sawType = false;
-        bool    sawOpts = false;
-        bool    sawDesc = false;
-        bool    sawUri  = false;
+        bool    sawType     = false;
+        bool    sawOpts     = false;
+        bool    sawDesc     = false;
+        bool    sawUri      = false;
+        bool    sawDisabled = false;
 
         while( ( tok = in->NextTok() ) != T_RIGHT )
         {
@@ -158,6 +162,13 @@ void FP_LIB_TABLE::Parse( LIB_TABLE_LEXER* in )
                 row->SetDescr( in->FromUTF8() );
                 break;
 
+            case T_disabled:
+                if( sawDisabled )
+                    in->Duplicate( tok );
+                sawDisabled = true;
+                row->SetEnabled( false );
+                break;
+
             default:
                 in->Unexpected( tok );
             }
@@ -184,7 +195,7 @@ void FP_LIB_TABLE::Parse( LIB_TABLE_LEXER* in )
             delete tmp;     // The table did not take ownership of the row.
 
             wxString msg = wxString::Format(
-                                _( "Duplicate library nickname '%s' found in footprint library "
+                                _( "Duplicate library nickname \"%s\" found in footprint library "
                                    "table file line %d" ), GetChars( nickname ), lineNum );
 
             if( !errMsg.IsEmpty() )
@@ -227,11 +238,33 @@ void FP_LIB_TABLE::Format( OUTPUTFORMATTER* aOutput, int aIndentLevel ) const
 }
 
 
-void FP_LIB_TABLE::FootprintEnumerate( wxArrayString& aFootprintNames, const wxString& aNickname )
+long long FP_LIB_TABLE::GenerateTimestamp( const wxString* aNickname )
+{
+    if( aNickname )
+    {
+        const FP_LIB_TABLE_ROW* row = FindRow( *aNickname );
+        wxASSERT( (PLUGIN*) row->plugin );
+        return row->plugin->GetLibraryTimestamp( row->GetFullURI( true ) ) + wxHashTable::MakeKey( *aNickname );
+    }
+
+    long long hash = 0;
+    for( wxString const& nickname : GetLogicalLibs() )
+    {
+        const FP_LIB_TABLE_ROW* row = FindRow( nickname );
+        wxASSERT( (PLUGIN*) row->plugin );
+        hash += row->plugin->GetLibraryTimestamp( row->GetFullURI( true ) ) + wxHashTable::MakeKey( nickname );
+    }
+
+    return hash;
+}
+
+
+void FP_LIB_TABLE::FootprintEnumerate( wxArrayString& aFootprintNames, const wxString& aNickname,
+                                       bool aBestEfforts )
 {
     const FP_LIB_TABLE_ROW* row = FindRow( aNickname );
     wxASSERT( (PLUGIN*) row->plugin );
-    row->plugin->FootprintEnumerate( aFootprintNames, row->GetFullURI( true ),
+    row->plugin->FootprintEnumerate( aFootprintNames, row->GetFullURI( true ), aBestEfforts,
                                      row->GetProperties() );
 }
 
@@ -246,12 +279,15 @@ void FP_LIB_TABLE::PrefetchLib( const wxString& aNickname )
 
 const FP_LIB_TABLE_ROW* FP_LIB_TABLE::FindRow( const wxString& aNickname )
 {
-    FP_LIB_TABLE_ROW* row = dynamic_cast< FP_LIB_TABLE_ROW* >( findRow( aNickname ) );
+    // Do not optimize this code.  Is done this way specifically to fix a runtime
+    // error with clang 4.0.1.
+    LIB_TABLE_ROW* ltrow = findRow( aNickname );
+    FP_LIB_TABLE_ROW* row = dynamic_cast< FP_LIB_TABLE_ROW* >( ltrow );
 
     if( !row )
     {
         wxString msg = wxString::Format(
-            _( "fp-lib-table files contain no library with nickname '%s'" ),
+            _( "fp-lib-table files contain no library with nickname \"%s\"" ),
             GetChars( aNickname ) );
 
         THROW_IO_ERROR( msg );
@@ -267,6 +303,58 @@ const FP_LIB_TABLE_ROW* FP_LIB_TABLE::FindRow( const wxString& aNickname )
 }
 
 
+static void setLibNickname( MODULE* aModule,
+                            const wxString& aNickname, const wxString& aFootprintName )
+{
+    // The library cannot know its own name, because it might have been renamed or moved.
+    // Therefore footprints cannot know their own library nickname when residing in
+    // a footprint library.
+    // Only at this API layer can we tell the footprint about its actual library nickname.
+    if( aModule )
+    {
+        // remove "const"-ness, I really do want to set nickname without
+        // having to copy the LIB_ID and its two strings, twice each.
+        LIB_ID& fpid = (LIB_ID&) aModule->GetFPID();
+
+        // Catch any misbehaving plugin, which should be setting internal footprint name properly:
+        wxASSERT( aFootprintName == fpid.GetLibItemName().wx_str() );
+
+        // and clearing nickname
+        wxASSERT( !fpid.GetLibNickname().size() );
+
+        fpid.SetLibNickname( aNickname );
+    }
+}
+
+
+const MODULE* FP_LIB_TABLE::GetEnumeratedFootprint( const wxString& aNickname,
+                                                    const wxString& aFootprintName )
+{
+    const FP_LIB_TABLE_ROW* row = FindRow( aNickname );
+    wxASSERT( (PLUGIN*) row->plugin );
+
+    return row->plugin->GetEnumeratedFootprint( row->GetFullURI( true ), aFootprintName,
+                                                row->GetProperties() );
+}
+
+
+bool FP_LIB_TABLE::FootprintExists( const wxString& aNickname, const wxString& aFootprintName )
+{
+    try
+    {
+        const FP_LIB_TABLE_ROW* row = FindRow( aNickname );
+        wxASSERT( (PLUGIN*) row->plugin );
+
+        return row->plugin->FootprintExists( row->GetFullURI( true ), aFootprintName,
+                                             row->GetProperties() );
+    }
+    catch( ... )
+    {
+        return false;
+    }
+}
+
+
 MODULE* FP_LIB_TABLE::FootprintLoad( const wxString& aNickname, const wxString& aFootprintName )
 {
     const FP_LIB_TABLE_ROW* row = FindRow( aNickname );
@@ -275,24 +363,7 @@ MODULE* FP_LIB_TABLE::FootprintLoad( const wxString& aNickname, const wxString& 
     MODULE* ret = row->plugin->FootprintLoad( row->GetFullURI( true ), aFootprintName,
                                               row->GetProperties() );
 
-    // The library cannot know its own name, because it might have been renamed or moved.
-    // Therefore footprints cannot know their own library nickname when residing in
-    // a footprint library.
-    // Only at this API layer can we tell the footprint about its actual library nickname.
-    if( ret )
-    {
-        // remove "const"-ness, I really do want to set nickname without
-        // having to copy the LIB_ID and its two strings, twice each.
-        LIB_ID& fpid = (LIB_ID&) ret->GetFPID();
-
-        // Catch any misbehaving plugin, which should be setting internal footprint name properly:
-        wxASSERT( aFootprintName == fpid.GetLibItemName().wx_str() );
-
-        // and clearing nickname
-        wxASSERT( !fpid.GetLibNickname().size() );
-
-        fpid.SetLibNickname( row->GetNickName() );
-    }
+    setLibNickname( ret, row->GetNickName(), aFootprintName );
 
     return ret;
 }
@@ -405,13 +476,23 @@ bool FP_LIB_TABLE::LoadGlobalTable( FP_LIB_TABLE& aTable )
 
         if( !fn.DirExists() && !fn.Mkdir( 0x777, wxPATH_MKDIR_FULL ) )
         {
-            THROW_IO_ERROR( wxString::Format( _( "Cannot create global library table path '%s'." ),
+            THROW_IO_ERROR( wxString::Format( _( "Cannot create global library table path \"%s\"." ),
                                               GetChars( fn.GetPath() ) ) );
         }
 
         // Attempt to copy the default global file table from the KiCad
         // template folder to the user's home configuration path.
-        wxString fileName = Kiface().KifaceSearch().FindValidPath( global_tbl_name );
+        SEARCH_STACK ss;
+
+        SystemDirsAppend( &ss );
+
+        wxString templatePath =
+            Pgm().GetLocalEnvVariables().at( wxT( "KICAD_TEMPLATE_DIR" ) ).GetValue();
+
+        if( !templatePath.IsEmpty() )
+            ss.AddPaths( templatePath, 0 );
+
+        wxString fileName = ss.FindValidPath( global_tbl_name );
 
         // The fallback is to create an empty global footprint table for the user to populate.
         if( fileName.IsEmpty() || !::wxCopyFile( fileName, fn.GetFullPath(), false ) )
@@ -432,7 +513,7 @@ wxString FP_LIB_TABLE::GetGlobalTableFileName()
 {
     wxFileName fn;
 
-    fn.SetPath( GetKicadConfigPath() );
+    fn.SetPath( SETTINGS_MANAGER::GetUserSettingsPath() );
     fn.SetName( global_tbl_name );
 
     return fn.GetFullPath();

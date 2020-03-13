@@ -30,7 +30,7 @@ Some examples of tools in the Pcbnew GAL are:
 * The drawing tool - this tool controls the process of drawing graphics
   elements such as line segments and circles.
   (pcbnew/tools/drawing_tool.cpp,pcbnew/tools/drawing_tool.h)
-* The zoom tool - allows the user to zoom in and out
+* The zoom tool - allows the user to zoom in and out.
 
 # Major parts of a tool # {#major-parts}
 
@@ -60,7 +60,10 @@ or not, has a `TOOL_ACTION` instance. This provides:
   tooltip and provides a more detailed description if needed.
 * An "icon", which is shown in menus and on buttons for the action
 * "Flags" which include:
-    * `AF_ACTIVATE` which indicates that the tool enters an active state
+    * `AF_ACTIVATE` which indicates that the tool enters an active state. When
+      a tool is active it will keep receiving UI events, such as mouse clicks
+      or key presses, which are normally handled in an event loop (see
+      TOOL_INTERACTIVE::Wait()).
 * A parameter, which allows different actions to call the same function
   with different effects, for example "step left" and "step right".
 
@@ -68,8 +71,7 @@ or not, has a `TOOL_ACTION` instance. This provides:
 
 GAL tools inherit the `TOOL_BASE` class. A Pcbnew tool will generally
 inherit from `PCB_TOOL`, which is a `TOOL_INTERACTIVE`, which is
-a `TOOL_BASE`. In the future, Eeschema tools will be developed in a similar
-manner.
+a `TOOL_BASE`. Eeschema tools inherit directly from `TOOL_INTERACTIVE`.
 
 The tool class for a tool can be fairly lightweight - much of the
 functionality is inherited from the tool's base classes. These base
@@ -102,18 +104,18 @@ The major parts of tool's implementation are the functions used by the
   when the GAL canvas is switched, and also just after tool registration.
   Any resource claimed from the GAL view or the model must be released
   in this function, as they could become invalid.
-* `SetTransitions()` function, which maps tool actions to functions
+* `setTransitions()` function, which maps tool actions to functions
   within the tool class.
 * One or more functions to call when actions are invoked. Many actions
   can invoke the same function if desired. The functions have the
   following signature:
     * int TOOL_CLASS::FunctionName( const TOOL_EVENT& aEvent )
-        * Returning 0 means success.
+    * Returning 0 means success.
     * These functions are called by the `TOOL_MANAGER` in case an associated
       event arrives (association is created with TOOL_INTERACTIVE::Go() function).
     * These can generally be private, as they are not called directly
       by any other code, but are invoked by the tool manager's coroutine
-      framework according to the `SetTransitions()` map.
+      framework according to the `setTransitions()` map.
 
 ### Interactive actions {#interactive-actions}
 
@@ -129,7 +131,7 @@ a cursor change and by setting a status string.
         auto& frame = *getEditFrame<PCB_EDIT_FRAME>();
 
         // set tool hint and cursor (actually looks like a crosshair)
-        frame.SetToolID( ID_PCB_SHOW_1_RATSNEST_BUTT,
+        frame.SetToolID( ID_LOCAL_RATSNEST_BUTT,
                 wxCURSOR_PENCIL, _( "Select item to move left" ) );
         getViewControls()->ShowCursor( true );
 
@@ -168,7 +170,7 @@ provide their own context menu. Tools that are called only from other
 tools' interactive modes add their menu items to those tools' menus.
 
 To use a `TOOL_MENU` in a top level tool, simply add one as a member
-and initialise it with a reference to the tools at construction time:
+and initialize it with a reference to the tools at construction time:
 
     TOOL_NAME: public PCB_TOOL
     {
@@ -212,7 +214,7 @@ The procedure of a commit is:
   unless you are going to abort the commit.
 * When removing an item, call `Remove( item )`. You should not delete the
   removed item, it will be stored in the undo buffer.
-* Finalise the commit with `Push( "Description" )`. If you performed
+* Finalize the commit with `Push( "Description" )`. If you performed
   no modifications, additions or removals, this is a no-op, so you
   don't need to check if you made any changes before pushing.
 
@@ -281,7 +283,7 @@ In `pcbnew/tools/pcb_actions.h`, we add the following to the
     static TOOL_ACTION uselessFixedCircle;
 
 Definitions of actions generally happen in the .cpp of the relevant tool.
-It doesn't actually matter where the defintion occurs (the declaration
+It doesn't actually matter where the definition occurs (the declaration
 is enough to use the action), as long as it's linked in the end.
 Similar tools should always be defined together.
 
@@ -334,11 +336,11 @@ the following class:
         ///> React to model/view changes
         void Reset( RESET_REASON aReason ) override;
 
-        ///> Basic initalization
+        ///> Basic initialization
         bool Init() override;
 
         ///> Bind handlers to corresponding TOOL_ACTIONs
-        void SetTransitions() override;
+        void setTransitions() override;
 
     private:
         ///> 'Move selected left' interactive tool
@@ -389,7 +391,7 @@ Below you will find the contents of useless_tool.cpp:
 
 
     /*
-     * Tool-specific action defintions
+     * Tool-specific action definitions
      */
     TOOL_ACTION PCB_ACTIONS::uselessMoveItemLeft(
             "pcbnew.UselessTool.MoveItemLeft",
@@ -440,7 +442,7 @@ Below you will find the contents of useless_tool.cpp:
     void USELESS_TOOL::moveLeftInt()
     {
         // we will call actions on the selection tool to get the current
-        // selection. The selection tools will handle item deisambiguation
+        // selection. The selection tools will handle item disambiguation
         SELECTION_TOOL* selectionTool = m_toolMgr->GetTool<SELECTION_TOOL>();
         assert( selectionTool );
 
@@ -532,7 +534,7 @@ Below you will find the contents of useless_tool.cpp:
     }
 
 
-    void USELESS_TOOL::SetTransitions()
+    void USELESS_TOOL::setTransitions()
     {
         Go( &USELESS_TOOL::fixedCircle, PCB_ACTIONS::uselessFixedCircle.MakeEvent() );
         Go( &USELESS_TOOL::moveLeft,    PCB_ACTIONS::uselessMoveItemLeft.MakeEvent() );
@@ -543,22 +545,8 @@ Below you will find the contents of useless_tool.cpp:
 
 The last step is to register the tool in the tool manager.
 
-This is done by adding a new instance of the tool to the
-`registerAllTools()` function in `pcbnew/tools/tools_common.cpp`.
-
-    // add your tool header
-    #include <tools/useless_tool.h>
-
-    void registerAllTools( TOOL_MANAGER *aToolManager )
-    {
-        ....
-        aToolManager->RegisterTool( new USELESS_TOOL );
-        ....
-    }
-
-If your new tool applies in the module editor, you also need to do this
-in `FOOTPRINT_EDIT_FRAME::setupTools()`. Generally, each kind of
-`EDA_DRAW_FRAME` that can use GAL will have a place to do this.
+This is done in the frame's  `setupTools()` function for whichever 
+`EDA_DRAW_FRAME` support that tool.
 
 ## Build and run {#tutorial-summary}
 

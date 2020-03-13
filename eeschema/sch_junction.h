@@ -2,7 +2,7 @@
  * This program source code file is part of KiCad, a free EDA CAD application.
  *
  * Copyright (C) 2009 Jean-Pierre Charras, jaen-pierre.charras@gipsa-lab.inpg.com
- * Copyright (C) 1992-2011 KiCad Developers, see AUTHORS.txt for contributors.
+ * Copyright (C) 1992-2019 KiCad Developers, see AUTHORS.txt for contributors.
  *
  * This program is free software; you can redistribute it and/or
  * modify it under the terms of the GNU General Public License
@@ -22,15 +22,11 @@
  * 51 Franklin Street, Fifth Floor, Boston, MA  02110-1301, USA
  */
 
-/**
- * @file sch_junction.h
- */
-
 #ifndef _SCH_JUNCTION_H_
 #define _SCH_JUNCTION_H_
 
 
-#include <sch_item_struct.h>
+#include <sch_item.h>
 class NETLIST_OBJECT_LIST;
 
 class SCH_JUNCTION : public SCH_ITEM
@@ -45,6 +41,11 @@ public:
 
     ~SCH_JUNCTION() { }
 
+    static inline bool ClassOf( const EDA_ITEM* aItem )
+    {
+        return aItem && SCH_JUNCTION_T == aItem->Type();
+    }
+
     wxString GetClass() const override
     {
         return wxT( "SCH_JUNCTION" );
@@ -53,16 +54,17 @@ public:
     static int GetSymbolSize() { return m_symbolSize; }
     static void SetSymbolSize( int aSize ) { m_symbolSize = aSize; }
 
+    // Return the size the symbol should be drawn at.  This is GetSymbolSize() clamped to be
+    // no less than the current wire width.
+    static int GetEffectiveSymbolSize();
+
     void SwapData( SCH_ITEM* aItem ) override;
+
+    void ViewGetLayers( int aLayers[], int& aCount ) const override;
 
     const EDA_RECT GetBoundingBox() const override;
 
-    void Draw( EDA_DRAW_PANEL* aPanel, wxDC* aDC, const wxPoint& aOffset,
-               GR_DRAWMODE aDrawMode, COLOR4D aColor = COLOR4D::UNSPECIFIED ) override;
-
-    bool Save( FILE* aFile ) const override;
-
-    bool Load( LINE_READER& aLine, wxString& aErrorMsg ) override;
+    void Print( wxDC* aDC, const wxPoint& aOffset ) override;
 
     void Move( const wxPoint& aMoveVector ) override
     {
@@ -70,33 +72,37 @@ public:
     }
 
     void MirrorY( int aYaxis_position ) override;
-
     void MirrorX( int aXaxis_position ) override;
-
     void Rotate( wxPoint aPosition ) override;
 
     void GetEndPoints( std::vector <DANGLING_END_ITEM>& aItemList ) override;
-
-    bool IsSelectStateChanged( const wxRect& aRect ) override;
 
     bool IsConnectable() const override { return true; }
 
     void GetConnectionPoints( std::vector< wxPoint >& aPoints ) const override;
 
-    wxString GetSelectMenuText() const override { return wxString( _( "Junction" ) ); }
+    bool CanConnect( const SCH_ITEM* aItem ) const override
+    {
+        return ( aItem->Type() == SCH_LINE_T &&
+                ( aItem->GetLayer() == LAYER_WIRE || aItem->GetLayer() == LAYER_BUS ) ) ||
+                aItem->Type() == SCH_COMPONENT_T;
+    }
+
+    wxString GetSelectMenuText( EDA_UNITS aUnits ) const override
+    {
+        return wxString( _( "Junction" ) );
+    }
 
     BITMAP_DEF GetMenuImage() const override;
 
     void GetNetListItem( NETLIST_OBJECT_LIST& aNetListItems, SCH_SHEET_PATH* aSheetPath ) override;
 
     wxPoint GetPosition() const override { return m_pos; }
-
     void SetPosition( const wxPoint& aPosition ) override { m_pos = aPosition; }
 
-    bool HitTest( const wxPoint& aPosition, int aAccuracy ) const override;
+    bool HitTest( const wxPoint& aPosition, int aAccuracy = 0 ) const override;
+    bool HitTest( const EDA_RECT& aRect, bool aContained, int aAccuracy = 0 ) const override;
 
-    bool HitTest( const EDA_RECT& aRect, bool aContained = false,
-                          int aAccuracy = 0 ) const override;
     void Plot( PLOTTER* aPlotter ) override;
 
     EDA_ITEM* Clone() const override;

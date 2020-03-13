@@ -30,8 +30,10 @@
 #include <string>
 #include <vector>
 #include <complex>
+#include <memory>
 
 class SPICE_REPORTER;
+class SPICE_SIMULATOR;
 
 typedef std::complex<double> COMPLEX;
 
@@ -42,9 +44,9 @@ public:
     virtual ~SPICE_SIMULATOR() {}
 
     ///> Creates a simulator instance of particular type (currently only ngspice is handled)
-    static SPICE_SIMULATOR* CreateInstance( const std::string& aName );
+    static std::shared_ptr<SPICE_SIMULATOR> CreateInstance( const std::string& aName );
 
-    ///> Intializes the simulator
+    ///> Initializes the simulator
     virtual void Init() = 0;
 
     /*
@@ -133,6 +135,12 @@ public:
      * @return Requested vector. It might be empty if there is no vector with requested name.
      */
     virtual std::vector<double> GetPhasePlot( const std::string& aName, int aMaxLen = -1 ) = 0;
+
+    /**
+     * @brief Returns current SPICE netlist used by the simulator.
+     * @return The netlist.
+     */
+    virtual const std::string GetNetlist() const = 0;
 
 protected:
     ///> Reporter object to receive simulation log

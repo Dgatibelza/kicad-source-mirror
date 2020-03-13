@@ -29,14 +29,14 @@
 
 #include <fctsys.h>
 #include <pgm_base.h>
-#include <class_drawpanel.h>
-#include <class_sch_screen.h>
-#include <schframe.h>
+#include <sch_draw_panel.h>
+#include <sch_edit_frame.h>
 #include <base_units.h>
-#include <libeditframe.h>
+#include <lib_edit_frame.h>
 #include <sch_sheet_path.h>
 #include <project.h>
 #include <reporter.h>
+#include <settings/settings_manager.h>
 
 #include <dialog_plot_schematic.h>
 #include <wx_html_report_panel.h>
@@ -47,6 +47,9 @@ void DIALOG_PLOT_SCHEMATIC::createSVGFile( bool aPrintAll, bool aPrintFrameRef )
     REPORTER&       reporter = m_MessagesBox->Reporter();
     SCH_SHEET_PATH  oldsheetpath = m_parent->GetCurrentSheet();
     SCH_SHEET_LIST  sheetList;
+
+    auto colors = static_cast<COLOR_SETTINGS*>(
+            m_colorTheme->GetClientData( m_colorTheme->GetSelection() ) );
 
     if( aPrintAll )
         sheetList.BuildSheetList( g_RootSheet );
@@ -70,26 +73,25 @@ void DIALOG_PLOT_SCHEMATIC::createSVGFile( bool aPrintAll, bool aPrintFrameRef )
 
             bool success = plotOneSheetSVG( m_parent, plotFileName.GetFullPath(), screen,
                                             getModeColor() ? false : true,
-                                            aPrintFrameRef );
+                                            aPrintFrameRef, m_plotBackgroundColor->GetValue(),
+                                            colors );
 
             if( !success )
             {
-                msg.Printf( _( "Cannot create file '%s'.\n" ),
-                            GetChars( plotFileName.GetFullPath() ) );
-                reporter.Report( msg, REPORTER::RPT_ERROR );
+                msg.Printf( _( "Cannot create file \"%s\".\n" ), plotFileName.GetFullPath() );
+                reporter.Report( msg, RPT_SEVERITY_ERROR );
             }
             else
             {
-                msg.Printf( _( "Plot: '%s' OK.\n" ),
-                            GetChars( plotFileName.GetFullPath() ) );
-                reporter.Report( msg, REPORTER::RPT_ACTION );
+                msg.Printf( _( "Plot: \"%s\" OK.\n" ), plotFileName.GetFullPath() );
+                reporter.Report( msg, RPT_SEVERITY_ACTION );
             }
         }
         catch( const IO_ERROR& e )
         {
             // Cannot plot SVG file
-            msg.Printf( wxT( "SVG Plotter exception: %s" ), GetChars( e.What() ) );
-            reporter.Report( msg, REPORTER::RPT_ERROR );
+            msg.Printf( wxT( "SVG Plotter exception: %s" ), e.What() );
+            reporter.Report( msg, RPT_SEVERITY_ERROR );
             break;
         }
     }
@@ -104,14 +106,20 @@ bool DIALOG_PLOT_SCHEMATIC::plotOneSheetSVG( EDA_DRAW_FRAME*    aFrame,
                                              const wxString&    aFileName,
                                              SCH_SCREEN*        aScreen,
                                              bool               aPlotBlackAndWhite,
-                                             bool               aPlotFrameRef )
+                                             bool               aPlotFrameRef,
+                                             bool               aPlotBackgroundColor,
+                                             COLOR_SETTINGS*    aColors )
 {
     SVG_PLOTTER* plotter = new SVG_PLOTTER();
+
+    if( !aColors )
+        aColors = aFrame->GetColorSettings();
 
     const PAGE_INFO&   pageInfo = aScreen->GetPageSettings();
     plotter->SetPageSettings( pageInfo );
     plotter->SetDefaultLineWidth( GetDefaultLineThickness() );
     plotter->SetColorMode( aPlotBlackAndWhite ? false : true );
+    plotter->SetColorSettings( aColors );
     wxPoint plot_offset;
     double scale = 1.0;
     // Currently, plot units are in decimil
@@ -130,14 +138,26 @@ bool DIALOG_PLOT_SCHEMATIC::plotOneSheetSVG( EDA_DRAW_FRAME*    aFrame,
 
     plotter->StartPlot();
 
+    if( aPlotBackgroundColor )
+    {
+        plotter->SetColor( plotter->ColorSettings()->GetColor( LAYER_SCHEMATIC_BACKGROUND ) );
+        wxPoint end( plotter->PageSettings().GetWidthIU(),
+                     plotter->PageSettings().GetHeightIU() );
+        plotter->Rect( wxPoint( 0, 0 ), end, FILLED_SHAPE, 1.0 );
+    }
+
     if( aPlotFrameRef )
     {
-        plotter->SetColor( BLACK );
+        COLOR4D color = plotter->GetColorMode() ?
+                        plotter->ColorSettings()->GetColor( LAYER_SCHEMATIC_WORKSHEET ) :
+                        COLOR4D::BLACK;
+
         PlotWorkSheet( plotter, aFrame->GetTitleBlock(),
                        aFrame->GetPageSettings(),
                        aScreen->m_ScreenNumber, aScreen->m_NumberOfScreens,
                        aFrame->GetScreenDesc(),
-                       aScreen->GetFileName() );
+                       aScreen->GetFileName(),
+                       color );
     }
 
     aScreen->Plot( plotter );

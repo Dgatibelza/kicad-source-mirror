@@ -3,7 +3,7 @@
  *
  * Copyright (C) 2013 CERN
  * @author Tomasz Wlostowski <tomasz.wlostowski@cern.ch>
- * Copyright (C) 2016 KiCad Developers, see AUTHORS.txt for contributors.
+ * Copyright (C) 2016-2019 KiCad Developers, see AUTHORS.txt for contributors.
  *
  * This program is free software; you can redistribute it and/or
  * modify it under the terms of the GNU General Public License
@@ -26,12 +26,17 @@
 #ifndef __COROUTINE_H
 #define __COROUTINE_H
 
+#include <cassert>
 #include <cstdlib>
-
 #include <type_traits>
 
-#include <system/libcontext.h>
+#ifdef KICAD_USE_VALGRIND
+#include <valgrind/valgrind.h>
+#endif
+
+#include <libcontext.h>
 #include <memory>
+#include <advanced_config.h>
 
 /**
  *  Class COROUNTINE.
@@ -64,8 +69,8 @@ private:
     {
         enum
         {
-            FROM_ROOT,      // a stub was called/a corutine was resumed from the main-stack context
-            FROM_ROUTINE,   // a stub was called/a coroutine was resumed fron a coroutine context
+            FROM_ROOT,      // a stub was called/a coroutine was resumed from the main-stack context
+            FROM_ROUTINE,   // a stub was called/a coroutine was resumed from a coroutine context
             CONTINUE_AFTER_ROOT // a function sent a request to invoke a function on the main
                                 // stack context
         } type; // invocation type
@@ -82,6 +87,11 @@ private:
     class CALL_CONTEXT
     {
     public:
+        CALL_CONTEXT() :
+            m_mainStackContext( nullptr )
+        {
+        }
+
         void SetMainStack( CONTEXT_T* aStack )
         {
             m_mainStackContext = aStack;
@@ -135,13 +145,22 @@ public:
         m_func( std::move( aEntry ) ),
         m_running( false ),
         m_args( 0 ),
+        m_caller( nullptr ),
+        m_callContext( nullptr ),
         m_callee( nullptr ),
         m_retVal( 0 )
+#ifdef KICAD_USE_VALGRIND
+        ,valgrind_stack( 0 )
+#endif
     {
+        m_stacksize = ADVANCED_CFG::GetCfg().m_coroutineStackSize;
     }
 
     ~COROUTINE()
     {
+#ifdef KICAD_USE_VALGRIND
+        VALGRIND_STACK_DEREGISTER( valgrind_stack );
+#endif
     }
 
 public:
@@ -167,16 +186,6 @@ public:
     {
         m_retVal = aRetVal;
         jumpOut();
-    }
-
-    /**
-     * Function SetEntry()
-     *
-     * Defines the entry point for the coroutine, if not set in the constructor.
-     */
-    void SetEntry( std::function<ReturnType(ArgType)> aEntry )
-    {
-        m_func = std::move( aEntry );
     }
 
     /**
@@ -291,15 +300,23 @@ private:
 
         assert( m_stack == nullptr );
 
+        size_t stackSize = m_stacksize;
+        void* sp = nullptr;
+
+        #ifndef LIBCONTEXT_HAS_OWN_STACK
         // fixme: Clean up stack stuff. Add a guard
-        size_t stackSize = c_defaultStackSize;
         m_stack.reset( new char[stackSize] );
 
         // align to 16 bytes
-        void* sp = (void*)((((ptrdiff_t) m_stack.get()) + stackSize - 0xf) & (~0x0f));
+        sp = (void*)((((ptrdiff_t) m_stack.get()) + stackSize - 0xf) & (~0x0f));
 
         // correct the stack size
         stackSize -= size_t( ( (ptrdiff_t) m_stack.get() + stackSize ) - (ptrdiff_t) sp );
+
+#ifdef KICAD_USE_VALGRIND
+        valgrind_stack = VALGRIND_STACK_REGISTER( sp, m_stack.get() );
+#endif
+        #endif
 
         m_callee = libcontext::make_fcontext( sp, stackSize, callerStub );
         m_running = true;
@@ -359,10 +376,10 @@ private:
         }
     }
 
-    static constexpr int c_defaultStackSize = 2000000;    // fixme: make configurable
-
     ///< coroutine stack
     std::unique_ptr<char[]> m_stack;
+
+    int m_stacksize;
 
     std::function<ReturnType( ArgType )> m_func;
 
@@ -382,6 +399,10 @@ private:
     CALLEE_STORAGE m_callee;
 
     ReturnType m_retVal;
+
+#ifdef KICAD_USE_VALGRIND
+    uint32_t valgrind_stack;
+#endif
 };
 
 #endif

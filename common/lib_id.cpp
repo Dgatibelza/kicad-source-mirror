@@ -2,8 +2,8 @@
  * This program source code file is part of KiCad, a free EDA CAD application.
  *
  * Copyright (C) 2010 SoftPLC Corporation, Dick Hollenbeck <dick@softplc.com>
- * Copyright (C) 2012-2016 Wayne Stambaugh <stambaughw@verizon.net>
- * Copyright (C) 2010-2016 KiCad Developers, see change_log.txt for contributors.
+ * Copyright (C) 2012 Wayne Stambaugh <stambaughw@gmail.com>
+ * Copyright (C) 2010-2020 KiCad Developers, see change_log.txt for contributors.
  *
  * This program is free software; you can redistribute it and/or
  * modify it under the terms of the GNU General Public License
@@ -93,11 +93,11 @@ static inline int okLogical( const UTF8& aField )
 
 static int okRevision( const UTF8& aField )
 {
-    char  rev[32];  // C string for speed
+    char rev[32];  // C string for speed
 
     if( aField.size() >= 4 )
     {
-        strcpy( rev, "x/" );
+        strncpy( rev, "x/", sizeof( rev ) );
         strncat( rev, aField.c_str(), sizeof(rev)-strlen(rev)-1 );
 
         if( EndsWithRev( rev, rev + strlen(rev), '/' ) == rev+2 )
@@ -119,7 +119,7 @@ void LIB_ID::clear()
 }
 
 
-int LIB_ID::Parse( const UTF8& aId )
+int LIB_ID::Parse( const UTF8& aId, LIB_ID_TYPE aType, bool aFix )
 {
     clear();
 
@@ -127,7 +127,7 @@ int LIB_ID::Parse( const UTF8& aId )
     const char* rev = EndsWithRev( buffer, buffer+aId.length(), '/' );
     size_t      revNdx;
     size_t      partNdx;
-    int         offset;
+    int         offset = -1;
 
     //=====<revision>=========================================
     // in a LIB_ID like discret:R3/rev4
@@ -150,9 +150,7 @@ int LIB_ID::Parse( const UTF8& aId )
         offset = SetLibNickname( aId.substr( 0, partNdx ) );
 
         if( offset > -1 )
-        {
             return offset;
-        }
 
         ++partNdx;  // skip ':'
     }
@@ -165,45 +163,21 @@ int LIB_ID::Parse( const UTF8& aId )
     if( partNdx >= revNdx )
         return partNdx;     // Error: no library item name.
 
+    UTF8 fpname = aId.substr( partNdx, revNdx-partNdx );
+
     // Be sure the item name is valid.
-    // Some chars can be found in legacy files converted files from an other EDA tools.
-    std::string fpname = aId.substr( partNdx, revNdx-partNdx );
-    ReplaceIllegalFileNameChars( &fpname, '_' );
-    SetLibItemName( UTF8( fpname ) );
+    // Some chars can be found in legacy files converted files from other EDA tools.
+    if( aFix )
+        fpname = FixIllegalChars( fpname, aType, false );
+    else
+        offset = HasIllegalChars( fpname, aType );
+
+    if( offset > -1 )
+        return offset;
+
+    SetLibItemName( fpname );
 
     return -1;
-}
-
-
-LIB_ID::LIB_ID( const UTF8& aId )
-{
-    int offset = Parse( aId );
-
-    if( offset != -1 )
-    {
-        THROW_PARSE_ERROR( _( "Illegal character found in LIB_ID string" ),
-                           wxString::FromUTF8( aId.c_str() ),
-                           aId.c_str(),
-                           0,
-                           offset );
-    }
-}
-
-
-LIB_ID::LIB_ID( const wxString& aId )
-{
-    UTF8 id = aId;
-
-    int offset = Parse( id );
-
-    if( offset != -1 )
-    {
-        THROW_PARSE_ERROR( _( "Illegal character found in LIB_ID string" ),
-                           aId,
-                           id.c_str(),
-                           0,
-                           offset );
-    }
 }
 
 
@@ -359,9 +333,111 @@ int LIB_ID::compare( const LIB_ID& aLibId ) const
 }
 
 
-#if 0 && defined(DEBUG)
+int LIB_ID::HasIllegalChars( const UTF8& aLibItemName, LIB_ID_TYPE aType )
+{
+    int offset = 0;
 
-// build this with Debug CMAKE_BUILD_TYPE
+    for( auto ch : aLibItemName )
+    {
+        if( !isLegalChar( ch, aType ) )
+            return offset;
+        else
+            ++offset;
+    }
+
+    return -1;
+}
+
+
+UTF8 LIB_ID::FixIllegalChars( const UTF8& aLibItemName, LIB_ID_TYPE aType, bool aLib )
+{
+    UTF8 fixedName;
+
+    for( UTF8::uni_iter chIt = aLibItemName.ubegin(); chIt < aLibItemName.uend(); ++chIt )
+    {
+        auto ch = *chIt;
+        if( aLib )
+            fixedName += isLegalLibNicknameChar( ch, aType ) ? ch : '_';
+        else
+            fixedName += isLegalChar( ch, aType ) ? ch : '_';
+    }
+
+    return fixedName;
+}
+
+
+bool LIB_ID::isLegalChar( unsigned aUniChar, LIB_ID_TYPE aType )
+{
+    bool const space_allowed = ( aType == ID_PCB );
+    bool const illegal_filename_chars_allowed = ( aType == ID_SCH );
+
+    if( aUniChar < ' ' )
+        return false;
+
+    // This list of characters is also duplicated in validators.cpp and
+    // class_module.cpp
+    // TODO: Unify forbidden character lists
+    switch( aUniChar )
+    {
+    case ':':
+    case '/':
+    case '\t':
+    case '\n':
+    case '\r':
+        return false;
+
+    case '\\':
+    case '<':
+    case '>':
+    case '"':
+        return illegal_filename_chars_allowed;
+
+    case ' ':
+        return space_allowed;
+
+    default:
+        return true;
+    }
+}
+
+
+unsigned LIB_ID::FindIllegalLibNicknameChar( const UTF8& aNickname, LIB_ID_TYPE aType )
+{
+    for( unsigned ch : aNickname )
+    {
+        if( !isLegalLibNicknameChar( ch, aType ) )
+            return ch;
+    }
+
+    return 0;
+}
+
+
+bool LIB_ID::isLegalLibNicknameChar( unsigned aUniChar, LIB_ID_TYPE aType )
+{
+    bool const space_allowed = ( aType != ID_SCH );
+
+    if( aUniChar < ' ' )
+        return false;
+
+    switch( aUniChar )
+    {
+    case '\\':
+    case ':':
+        return false;
+
+    case ' ':
+        return space_allowed;
+
+    default:
+        return true;
+    }
+}
+
+
+#if 0
+
+// @todo Move this test into the unit test framework.
 
 void LIB_ID::Test()
 {
@@ -385,14 +461,6 @@ void LIB_ID::Test()
                 lpid.GetLibItemName().c_str(),
                 lpid.GetRevision().c_str() );
     }
-}
-
-
-int main( int argc, char** argv )
-{
-    LIB_ID::Test();
-
-    return 0;
 }
 
 #endif

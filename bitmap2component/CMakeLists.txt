@@ -3,21 +3,22 @@ if( COMPILER_SUPPORTS_WSHADOW )
     set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} ${WSHADOW_FLAGS}")
 endif()
 
+add_definitions( -DBITMAP_2_CMP )
+
 include_directories( BEFORE ${INC_BEFORE} )
-include_directories(
-    ../potrace
-    ../polygon
-    ${INC_AFTER}
-    )
+include_directories( ${INC_AFTER} )
 
 set( BITMAP2COMPONENT_SRCS
-    ../common/single_top.cpp
+    ${CMAKE_SOURCE_DIR}/common/single_top.cpp
+
+    bitmap2cmp_main.cpp
+    bitmap2cmp_settings.cpp
     bitmap2component.cpp
-    bitmap2cmp_gui_base
-    bitmap2cmp_gui
+    bitmap2cmp_gui_base.cpp
+    bitmap2cmp_gui.cpp
     )
 
-set_source_files_properties( ../common/single_top.cpp PROPERTIES
+set_source_files_properties( ${CMAKE_SOURCE_DIR}/common/single_top.cpp PROPERTIES
     COMPILE_DEFINITIONS     "TOP_FRAME=FRAME_BM2CMP"
     )
 set_source_files_properties( bitmap2cmp_gui.cpp PROPERTIES
@@ -49,8 +50,6 @@ add_executable( bitmap2component WIN32 MACOSX_BUNDLE
 
 target_link_libraries( bitmap2component
     common
-    polygon
-    bitmaps
     gal
     ${wxWidgets_LIBRARIES}
     potrace
@@ -58,7 +57,7 @@ target_link_libraries( bitmap2component
 
 if( APPLE )
     set_target_properties( bitmap2component PROPERTIES
-        MACOSX_BUNDLE_INFO_PLIST ${CMAKE_CURRENT_SOURCE_DIR}/Info.plist
+        MACOSX_BUNDLE_INFO_PLIST ${PROJECT_BINARY_DIR}/bitmap2component/Info.plist
         )
 
     # put individual bundle outside of main bundle as a first step
@@ -89,6 +88,6 @@ endif()
 
 if( false )     # linker map with cross reference
     set_target_properties( bitmap2component PROPERTIES
-        LINK_FLAGS "${TO_LINKER},-cref ${TO_LINKER},-Map=bitmap2component.map"
+        LINK_FLAGS "-Wl,-cref,-Map=bitmap2component.map"
         )
 endif()

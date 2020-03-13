@@ -23,29 +23,35 @@
  */
 
 #include "pcb_draw_panel_gal.h"
-#include <view/view.h>
+#include <pcb_view.h>
 #include <view/wx_view_controls.h>
 #include <pcb_painter.h>
-#include <worksheet_viewitem.h>
+#include <ws_proxy_view_item.h>
 #include <ratsnest_viewitem.h>
 #include <ratsnest_data.h>
-#include <connectivity.h>
+#include <connectivity/connectivity_data.h>
 
-#include <class_colors_design_settings.h>
 #include <class_board.h>
 #include <class_module.h>
 #include <class_track.h>
-#include <wxBasePcbFrame.h>
+#include <class_marker_pcb.h>
+#include <pcb_base_frame.h>
+#include <pgm_base.h>
+#include <settings/settings_manager.h>
+#include <confirm.h>
 
 #include <gal/graphics_abstraction_layer.h>
 
 #include <functional>
+#include <memory>
+#include <thread>
 using namespace std::placeholders;
 
 const LAYER_NUM GAL_LAYER_ORDER[] =
 {
     LAYER_GP_OVERLAY,
-    LAYER_DRC,
+    LAYER_SELECT_OVERLAY,
+    LAYER_DRC_ERROR, LAYER_DRC_WARNING,
     LAYER_PADS_NETNAMES, LAYER_VIAS_NETNAMES,
     Dwgs_User, Cmts_User, Eco1_User, Eco2_User, Edge_Cuts,
 
@@ -53,12 +59,12 @@ const LAYER_NUM GAL_LAYER_ORDER[] =
     LAYER_MOD_REFERENCES, LAYER_MOD_VALUES,
 
     LAYER_RATSNEST, LAYER_ANCHOR,
-    LAYER_VIAS_HOLES, LAYER_PADS_HOLES, LAYER_NON_PLATED,
+    LAYER_VIAS_HOLES, LAYER_PADS_PLATEDHOLES, LAYER_NON_PLATEDHOLES,
     LAYER_VIA_THROUGH, LAYER_VIA_BBLIND,
-    LAYER_VIA_MICROVIA, LAYER_PADS,
+    LAYER_VIA_MICROVIA, LAYER_PADS_TH,
 
     LAYER_PAD_FR_NETNAMES, LAYER_PAD_FR,
-    NETNAMES_LAYER_INDEX( F_Cu ), F_Cu, F_Mask, F_SilkS, F_Paste, F_Adhes,
+    NETNAMES_LAYER_INDEX( F_Cu ), F_Cu, F_Mask, F_SilkS, F_Paste, F_Adhes, F_CrtYd, F_Fab,
 
     NETNAMES_LAYER_INDEX( In1_Cu ),   In1_Cu,
     NETNAMES_LAYER_INDEX( In2_Cu ),   In2_Cu,
@@ -92,7 +98,7 @@ const LAYER_NUM GAL_LAYER_ORDER[] =
     NETNAMES_LAYER_INDEX( In30_Cu ),  In30_Cu,
 
     LAYER_PAD_BK_NETNAMES, LAYER_PAD_BK,
-    NETNAMES_LAYER_INDEX( B_Cu ), B_Cu, B_Mask, B_Adhes, B_Paste, B_SilkS,
+    NETNAMES_LAYER_INDEX( B_Cu ), B_Cu, B_Mask, B_Adhes, B_Paste, B_SilkS, B_CrtYd, B_Fab,
 
     LAYER_MOD_TEXT_BK,
     LAYER_WORKSHEET
@@ -102,81 +108,117 @@ const LAYER_NUM GAL_LAYER_ORDER[] =
 PCB_DRAW_PANEL_GAL::PCB_DRAW_PANEL_GAL( wxWindow* aParentWindow, wxWindowID aWindowId,
                                         const wxPoint& aPosition, const wxSize& aSize,
                                         KIGFX::GAL_DISPLAY_OPTIONS& aOptions, GAL_TYPE aGalType ) :
-EDA_DRAW_PANEL_GAL( aParentWindow, aWindowId, aPosition, aSize, aOptions, aGalType )
+        EDA_DRAW_PANEL_GAL( aParentWindow, aWindowId, aPosition, aSize, aOptions, aGalType )
 {
+    m_view = new KIGFX::PCB_VIEW( true );
+    m_view->SetGAL( m_gal );
+
+    m_painter = std::make_unique<KIGFX::PCB_PAINTER>( m_gal );
+    m_view->SetPainter( m_painter.get() );
+
     setDefaultLayerOrder();
     setDefaultLayerDeps();
 
-    m_painter = new KIGFX::PCB_PAINTER( m_gal );
-    m_view->SetPainter( m_painter );
+    // View controls is the first in the event handler chain, so the Tool Framework operates
+    // on updated viewport data.
+    m_viewControls = new KIGFX::WX_VIEW_CONTROLS( m_view, this );
 
     // Load display options (such as filled/outline display of items).
     // Can be made only if the parent window is an EDA_DRAW_FRAME (or a derived class)
     // which is not always the case (namely when it is used from a wxDialog like the pad editor)
-    EDA_DRAW_FRAME* frame = GetParentEDAFrame();
+    PCB_BASE_FRAME* frame = dynamic_cast<PCB_BASE_FRAME*>( GetParentEDAFrame() );
 
     if( frame )
-    {
-        DISPLAY_OPTIONS* displ_opts = (DISPLAY_OPTIONS*) frame->GetDisplayOptions();
-        static_cast<KIGFX::PCB_RENDER_SETTINGS*>( m_view->GetPainter()->GetSettings() )->LoadDisplayOptions( displ_opts );
-    }
+        static_cast<KIGFX::PCB_VIEW*>( m_view )->UpdateDisplayOptions(
+                frame->GetDisplayOptions() );
 }
 
 
 PCB_DRAW_PANEL_GAL::~PCB_DRAW_PANEL_GAL()
 {
-    delete m_painter;
 }
 
 
-void PCB_DRAW_PANEL_GAL::DisplayBoard( const BOARD* aBoard )
+void PCB_DRAW_PANEL_GAL::DisplayBoard( BOARD* aBoard )
 {
+
     m_view->Clear();
 
-    // Load zones
-    for( int i = 0; i < aBoard->GetAreaCount(); ++i )
-        m_view->Add( (KIGFX::VIEW_ITEM*) ( aBoard->GetArea( i ) ) );
+    auto zones = aBoard->Zones();
+    std::atomic<size_t> next( 0 );
+    std::atomic<size_t> count_done( 0 );
+    size_t parallelThreadCount = std::max<size_t>( std::thread::hardware_concurrency(), 2 );
+
+    for( size_t ii = 0; ii < parallelThreadCount; ++ii )
+    {
+        std::thread t = std::thread( [ &count_done, &next, &zones ]( )
+        {
+            for( size_t i = next.fetch_add( 1 ); i < zones.size(); i = next.fetch_add( 1 ) )
+                zones[i]->CacheTriangulation();
+
+            count_done++;
+        } );
+
+        t.detach();
+    }
+
+    if( m_worksheet )
+        m_worksheet->SetFileName( TO_UTF8( aBoard->GetFileName() ) );
 
     // Load drawings
     for( auto drawing : const_cast<BOARD*>(aBoard)->Drawings() )
         m_view->Add( drawing );
 
     // Load tracks
-    for( TRACK* track = aBoard->m_Track; track; track = track->Next() )
+    for( auto track : aBoard->Tracks() )
         m_view->Add( track );
 
     // Load modules and its additional elements
-    for( MODULE* module = aBoard->m_Modules; module; module = module->Next() )
-    {
-        module->RunOnChildren( std::bind( &KIGFX::VIEW::Add, m_view, _1, -1 ) );
+    for( auto module : aBoard->Modules() )
         m_view->Add( module );
-    }
 
-    // Segzones (equivalent of ZONE_CONTAINER for legacy boards)
-    for( SEGZONE* zone = aBoard->m_Zone; zone; zone = zone->Next() )
+    // DRC markers
+    for( auto marker : aBoard->Markers() )
+        m_view->Add( marker );
+
+    // Finalize the triangulation threads
+    while( count_done < parallelThreadCount )
+        std::this_thread::sleep_for( std::chrono::milliseconds( 10 ) );
+
+    // Load zones
+    for( auto zone : aBoard->Zones() )
         m_view->Add( zone );
 
     // Ratsnest
-    m_ratsnest.reset( new KIGFX::RATSNEST_VIEWITEM( aBoard->GetConnectivity() ) );
+    m_ratsnest = std::make_unique<KIGFX::RATSNEST_VIEWITEM>( aBoard->GetConnectivity() );
     m_view->Add( m_ratsnest.get() );
 }
 
 
-void PCB_DRAW_PANEL_GAL::SetWorksheet( KIGFX::WORKSHEET_VIEWITEM* aWorksheet )
+void PCB_DRAW_PANEL_GAL::SetWorksheet( KIGFX::WS_PROXY_VIEW_ITEM* aWorksheet )
 {
     m_worksheet.reset( aWorksheet );
     m_view->Add( m_worksheet.get() );
 }
 
 
-void PCB_DRAW_PANEL_GAL::UseColorScheme( const COLORS_DESIGN_SETTINGS* aSettings )
+void PCB_DRAW_PANEL_GAL::UpdateColors()
 {
-    KIGFX::PCB_RENDER_SETTINGS* rs;
-    rs = static_cast<KIGFX::PCB_RENDER_SETTINGS*>( m_view->GetPainter()->GetSettings() );
-    rs->ImportLegacyColors( aSettings );
-    m_gal->SetCursorColor( aSettings->GetItemColor( LAYER_CURSOR ) );
-}
+    COLOR_SETTINGS* cs = Pgm().GetSettingsManager().GetColorSettings();
 
+    auto frame = dynamic_cast<PCB_BASE_FRAME*>( GetParentEDAFrame() );
+
+    if( frame && frame->IsType( FRAME_FOOTPRINT_EDITOR ) )
+        cs->SetColorContext( COLOR_CONTEXT::FOOTPRINT );
+    else
+        cs->SetColorContext( COLOR_CONTEXT::PCB );
+
+    auto rs = static_cast<KIGFX::PCB_RENDER_SETTINGS*>( m_view->GetPainter()->GetSettings() );
+    rs->LoadColors( cs );
+
+    m_gal->SetGridColor( cs->GetColor( LAYER_GRID ) );
+    m_gal->SetCursorColor( cs->GetColor( LAYER_CURSOR ) );
+}
 
 void PCB_DRAW_PANEL_GAL::SetHighContrastLayer( PCB_LAYER_ID aLayer )
 {
@@ -196,12 +238,13 @@ void PCB_DRAW_PANEL_GAL::SetHighContrastLayer( PCB_LAYER_ID aLayer )
         LAYER_NUM layers[] = {
                 GetNetnameLayer( aLayer ),
                 LAYER_VIA_THROUGH, LAYER_VIAS_HOLES, LAYER_VIAS_NETNAMES,
-                LAYER_PADS, LAYER_PADS_HOLES, LAYER_PADS_NETNAMES,
-                LAYER_NON_PLATED, LAYER_GP_OVERLAY, LAYER_RATSNEST
+                LAYER_PADS_TH, LAYER_PADS_PLATEDHOLES, LAYER_PADS_NETNAMES,
+                LAYER_NON_PLATEDHOLES, LAYER_SELECT_OVERLAY, LAYER_GP_OVERLAY,
+                LAYER_RATSNEST, LAYER_CURSOR
         };
 
-        for( unsigned int i = 0; i < sizeof( layers ) / sizeof( LAYER_NUM ); ++i )
-            rSettings->SetActiveLayer( layers[i] );
+        for( unsigned int i : layers )
+            rSettings->SetActiveLayer( i );
 
         // Pads should be shown too
         if( aLayer == B_Cu )
@@ -229,41 +272,39 @@ void PCB_DRAW_PANEL_GAL::SetTopLayer( PCB_LAYER_ID aLayer )
     m_view->SetTopLayer( aLayer );
 
     // Layers that should always have on-top attribute enabled
-    const LAYER_NUM layers[] = {
+    const std::vector<LAYER_NUM> layers = {
             LAYER_VIA_THROUGH, LAYER_VIAS_HOLES, LAYER_VIAS_NETNAMES,
-            LAYER_PADS, LAYER_PADS_HOLES, LAYER_PADS_NETNAMES,
-            LAYER_NON_PLATED, LAYER_GP_OVERLAY, LAYER_RATSNEST,
-            LAYER_DRC
+            LAYER_PADS_TH, LAYER_PADS_PLATEDHOLES, LAYER_PADS_NETNAMES,
+            LAYER_NON_PLATEDHOLES, LAYER_SELECT_OVERLAY, LAYER_GP_OVERLAY,
+            LAYER_RATSNEST, LAYER_DRC_ERROR, LAYER_DRC_WARNING
     };
 
-    for( unsigned int i = 0; i < sizeof( layers ) / sizeof( LAYER_NUM ); ++i )
-        m_view->SetTopLayer( layers[i] );
+    for( auto layer : layers )
+        m_view->SetTopLayer( layer );
 
     // Extra layers that are brought to the top if a F.* or B.* is selected
-    const LAYER_NUM frontLayers[] = {
-        F_Cu, F_Adhes, F_Paste, F_SilkS, F_Mask, F_CrtYd, F_Fab, LAYER_PAD_FR,
-        LAYER_PAD_FR_NETNAMES, NETNAMES_LAYER_INDEX( F_Cu ), -1
+    const std::vector<LAYER_NUM> frontLayers = {
+        F_Cu, F_Adhes, F_Paste, F_SilkS, F_Mask, F_Fab, F_CrtYd, LAYER_PAD_FR,
+        LAYER_PAD_FR_NETNAMES, NETNAMES_LAYER_INDEX( F_Cu )
     };
 
-    const LAYER_NUM backLayers[] = {
-        B_Cu, B_Adhes, B_Paste, B_SilkS, B_Mask, B_CrtYd, B_Fab, LAYER_PAD_BK,
-        LAYER_PAD_BK_NETNAMES, NETNAMES_LAYER_INDEX( B_Cu ), -1
+    const std::vector<LAYER_NUM> backLayers = {
+        B_Cu, B_Adhes, B_Paste, B_SilkS, B_Mask, B_Fab, B_CrtYd, LAYER_PAD_BK,
+        LAYER_PAD_BK_NETNAMES, NETNAMES_LAYER_INDEX( B_Cu )
     };
 
-    const LAYER_NUM* extraLayers = NULL;
+    const std::vector<LAYER_NUM>* extraLayers = NULL;
 
     // Bring a few more extra layers to the top depending on the selected board side
     if( IsFrontLayer( aLayer ) )
-        extraLayers = frontLayers;
+        extraLayers = &frontLayers;
     else if( IsBackLayer( aLayer ) )
-        extraLayers = backLayers;
+        extraLayers = &backLayers;
 
     if( extraLayers )
     {
-        const LAYER_NUM* l = extraLayers;
-
-        while( *l >= 0 )
-            m_view->SetTopLayer( *l++ );
+        for( auto layer : *extraLayers )
+            m_view->SetTopLayer( layer );
 
         // Move the active layer to the top
         if( !IsCopperLayer( aLayer ) )
@@ -275,6 +316,7 @@ void PCB_DRAW_PANEL_GAL::SetTopLayer( PCB_LAYER_ID aLayer )
         m_view->SetTopLayer( GetNetnameLayer( aLayer ) );
     }
 
+    m_view->EnableTopLayer( true );
     m_view->UpdateAllLayersOrder();
 }
 
@@ -283,35 +325,32 @@ void PCB_DRAW_PANEL_GAL::SyncLayersVisibility( const BOARD* aBoard )
 {
     // Load layer & elements visibility settings
     for( LAYER_NUM i = 0; i < PCB_LAYER_ID_COUNT; ++i )
-    {
         m_view->SetLayerVisible( i, aBoard->IsLayerVisible( PCB_LAYER_ID( i ) ) );
 
-        // Synchronize netname layers as well
-        if( IsCopperLayer( i ) )
-            m_view->SetLayerVisible( GetNetnameLayer( i ), aBoard->IsLayerVisible( PCB_LAYER_ID( i ) ) );
-    }
-
     for( GAL_LAYER_ID i = GAL_LAYER_ID_START; i < GAL_LAYER_ID_END; ++i )
-    {
         m_view->SetLayerVisible( i, aBoard->IsElementVisible( i ) );
-    }
+
+    // Always enable netname layers, as their visibility is controlled by layer dependencies
+    for( LAYER_NUM i = NETNAMES_LAYER_ID_START; i < NETNAMES_LAYER_ID_END; ++i )
+        m_view->SetLayerVisible( i, true );
 
     // Enable some layers that are GAL specific
-    m_view->SetLayerVisible( LAYER_PADS_HOLES, true );
+    m_view->SetLayerVisible( LAYER_PADS_PLATEDHOLES, true );
     m_view->SetLayerVisible( LAYER_VIAS_HOLES, true );
-    m_view->SetLayerVisible( LAYER_WORKSHEET, true );
     m_view->SetLayerVisible( LAYER_GP_OVERLAY, true );
+    m_view->SetLayerVisible( LAYER_SELECT_OVERLAY, true );
+    m_view->SetLayerVisible( LAYER_RATSNEST, true );
 }
 
 
-void PCB_DRAW_PANEL_GAL::GetMsgPanelInfo( std::vector<MSG_PANEL_ITEM>& aList )
+void PCB_DRAW_PANEL_GAL::GetMsgPanelInfo( EDA_UNITS aUnits, std::vector<MSG_PANEL_ITEM>& aList )
 {
     BOARD* board = static_cast<PCB_BASE_FRAME*>( m_parent )->GetBoard();
     wxString txt;
     int viasCount = 0;
     int trackSegmentsCount = 0;
 
-    for( const BOARD_ITEM* item = board->m_Track; item; item = item->Next() )
+    for( auto item : board->Tracks() )
     {
         if( item->Type() == PCB_VIA_T )
             viasCount++;
@@ -320,22 +359,22 @@ void PCB_DRAW_PANEL_GAL::GetMsgPanelInfo( std::vector<MSG_PANEL_ITEM>& aList )
     }
 
     txt.Printf( wxT( "%d" ), board->GetPadCount() );
-    aList.push_back( MSG_PANEL_ITEM( _( "Pads" ), txt, DARKGREEN ) );
+    aList.emplace_back( _( "Pads" ), txt, DARKGREEN );
 
     txt.Printf( wxT( "%d" ), viasCount );
-    aList.push_back( MSG_PANEL_ITEM( _( "Vias" ), txt, DARKGREEN ) );
+    aList.emplace_back( _( "Vias" ), txt, DARKGREEN );
 
     txt.Printf( wxT( "%d" ), trackSegmentsCount );
-    aList.push_back( MSG_PANEL_ITEM( _( "Track Segments" ), txt, DARKGREEN ) );
+    aList.emplace_back( _( "Track Segments" ), txt, DARKGREEN );
 
     txt.Printf( wxT( "%d" ), board->GetNodesCount() );
-    aList.push_back( MSG_PANEL_ITEM( _( "Nodes" ), txt, DARKCYAN ) );
+    aList.emplace_back( _( "Nodes" ), txt, DARKCYAN );
 
-    txt.Printf( wxT( "%d" ), board->GetNetCount() );
-    aList.push_back( MSG_PANEL_ITEM( _( "Nets" ), txt, RED ) );
+    txt.Printf( wxT( "%d" ), board->GetNetCount() - 1 /* don't include "No Net" in count */ );
+    aList.emplace_back( _( "Nets" ), txt, RED );
 
     txt.Printf( wxT( "%d" ), board->GetConnectivity()->GetUnconnectedCount() );
-    aList.push_back( MSG_PANEL_ITEM( _( "Unconnected" ), txt, BLUE ) );
+    aList.emplace_back( _( "Unrouted" ), txt, BLUE );
 }
 
 
@@ -343,15 +382,28 @@ void PCB_DRAW_PANEL_GAL::OnShow()
 {
     PCB_BASE_FRAME* frame = dynamic_cast<PCB_BASE_FRAME*>( GetParent() );
 
+    try
+    {
+        // Check if the current rendering backend can be properly initialized
+        m_view->UpdateItems();
+    }
+    catch( const std::runtime_error& e )
+    {
+        // Fallback to software renderer
+        DisplayError( frame, e.what() );
+        SwitchBackend( GAL_TYPE_CAIRO );
+
+        if( frame )
+            frame->ActivateGalCanvas();
+    }
+
     if( frame )
     {
         SetTopLayer( frame->GetActiveLayer() );
-        DISPLAY_OPTIONS* displ_opts = (DISPLAY_OPTIONS*) frame->GetDisplayOptions();
-        static_cast<KIGFX::PCB_RENDER_SETTINGS*>(
-            m_view->GetPainter()->GetSettings() )->LoadDisplayOptions( displ_opts );
+        KIGFX::PAINTER* painter = m_view->GetPainter();
+        auto settings = static_cast<KIGFX::PCB_RENDER_SETTINGS*>( painter->GetSettings() );
+        settings->LoadDisplayOptions( frame->GetDisplayOptions(), frame->ShowPageLimits() );
     }
-
-    m_view->RecacheAllItems();
 }
 
 
@@ -371,6 +423,7 @@ bool PCB_DRAW_PANEL_GAL::SwitchBackend( GAL_TYPE aGalType )
 {
     bool rv = EDA_DRAW_PANEL_GAL::SwitchBackend( aGalType );
     setDefaultLayerDeps();
+    m_gal->SetWorldUnitLength( 1e-9 /* 1 nm */ / 0.0254 /* 1 inch in meters */ );
     return rv;
 }
 
@@ -379,6 +432,15 @@ void PCB_DRAW_PANEL_GAL::RedrawRatsnest()
 {
     if( m_ratsnest )
         m_view->Update( m_ratsnest.get() );
+}
+
+
+BOX2I PCB_DRAW_PANEL_GAL::GetDefaultViewBBox() const
+{
+    if( m_worksheet && m_view->IsLayerVisible( LAYER_WORKSHEET ) )
+        return m_worksheet->ViewBBox();
+
+    return BOX2I();
 }
 
 
@@ -408,38 +470,34 @@ void PCB_DRAW_PANEL_GAL::setDefaultLayerDeps()
     // Some more required layers settings
     m_view->SetRequired( LAYER_VIAS_HOLES, LAYER_VIA_THROUGH );
     m_view->SetRequired( LAYER_VIAS_NETNAMES, LAYER_VIA_THROUGH );
-    m_view->SetRequired( LAYER_PADS_HOLES, LAYER_PADS );
-    m_view->SetRequired( LAYER_NON_PLATED, LAYER_PADS );
-    m_view->SetRequired( LAYER_PADS_NETNAMES, LAYER_PADS );
+    m_view->SetRequired( LAYER_PADS_PLATEDHOLES, LAYER_PADS_TH );
+    m_view->SetRequired( LAYER_NON_PLATEDHOLES, LAYER_PADS_TH );
+    m_view->SetRequired( LAYER_PADS_NETNAMES, LAYER_PADS_TH );
 
     // Front modules
-    m_view->SetRequired( LAYER_PAD_FR, LAYER_MOD_FR );
+    m_view->SetRequired( LAYER_PAD_FR, F_Cu );
     m_view->SetRequired( LAYER_MOD_TEXT_FR, LAYER_MOD_FR );
     m_view->SetRequired( LAYER_PAD_FR_NETNAMES, LAYER_PAD_FR );
-    m_view->SetRequired( F_Adhes, LAYER_PAD_FR );
-    m_view->SetRequired( F_Paste, LAYER_PAD_FR );
-    m_view->SetRequired( F_Mask, LAYER_PAD_FR );
-    m_view->SetRequired( F_CrtYd, LAYER_MOD_FR );
-    m_view->SetRequired( F_Fab, LAYER_MOD_FR );
-    m_view->SetRequired( F_SilkS, LAYER_MOD_FR );
 
     // Back modules
-    m_view->SetRequired( LAYER_PAD_BK, LAYER_MOD_BK );
+    m_view->SetRequired( LAYER_PAD_BK, B_Cu );
     m_view->SetRequired( LAYER_MOD_TEXT_BK, LAYER_MOD_BK );
     m_view->SetRequired( LAYER_PAD_BK_NETNAMES, LAYER_PAD_BK );
-    m_view->SetRequired( B_Adhes, LAYER_PAD_BK );
-    m_view->SetRequired( B_Paste, LAYER_PAD_BK );
-    m_view->SetRequired( B_Mask, LAYER_PAD_BK );
-    m_view->SetRequired( B_CrtYd, LAYER_MOD_BK );
-    m_view->SetRequired( B_Fab, LAYER_MOD_BK );
-    m_view->SetRequired( B_SilkS, LAYER_MOD_BK );
 
+    m_view->SetLayerTarget( LAYER_SELECT_OVERLAY , KIGFX::TARGET_OVERLAY );
+    m_view->SetLayerDisplayOnly( LAYER_SELECT_OVERLAY ) ;
     m_view->SetLayerTarget( LAYER_GP_OVERLAY , KIGFX::TARGET_OVERLAY );
     m_view->SetLayerDisplayOnly( LAYER_GP_OVERLAY ) ;
     m_view->SetLayerTarget( LAYER_RATSNEST, KIGFX::TARGET_OVERLAY );
     m_view->SetLayerDisplayOnly( LAYER_RATSNEST );
 
+    m_view->SetLayerTarget( LAYER_WORKSHEET, KIGFX::TARGET_NONCACHED );
     m_view->SetLayerDisplayOnly( LAYER_WORKSHEET ) ;
     m_view->SetLayerDisplayOnly( LAYER_GRID );
-    m_view->SetLayerDisplayOnly( LAYER_DRC );
+}
+
+
+KIGFX::PCB_VIEW* PCB_DRAW_PANEL_GAL::GetView() const
+{
+    return static_cast<KIGFX::PCB_VIEW*>( m_view );
 }

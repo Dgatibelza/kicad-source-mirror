@@ -62,7 +62,7 @@ static bool VDegenerate( glm::vec3* pts )
         return true;
 
     return false;
-};
+}
 
 
 static WRLVEC3F VCalcTriNorm( const WRLVEC3F& p1, const WRLVEC3F& p2, const WRLVEC3F& p3 )
@@ -818,7 +818,7 @@ SGNODE* SHAPE::CalcShape( SGNODE* aParent, SGNODE* aColor, WRL1_ORDER aVertexOrd
         pt.y = vertices[i].y;
         pt.z = vertices[i].z;
         lCPts.push_back( pt );
-        lCNorm.push_back( SGVECTOR( normals[i].x, normals[i].y, normals[i].z ) );
+        lCNorm.emplace_back( normals[i].x, normals[i].y, normals[i].z );
     }
 
     vertices.clear();

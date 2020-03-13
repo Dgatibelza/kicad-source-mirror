@@ -3,7 +3,7 @@
  *
  * Copyright (C) 1992-2013 jp.charras at wanadoo.fr
  * Copyright (C) 2013 SoftPLC Corporation, Dick Hollenbeck <dick@softplc.com>
- * Copyright (C) 1992-2016 KiCad Developers, see AUTHORS.TXT for contributors.
+ * Copyright (C) 1992-2019 KiCad Developers, see AUTHORS.TXT for contributors.
  *
  * This program is free software; you can redistribute it and/or
  * modify it under the terms of the GNU General Public License
@@ -31,13 +31,31 @@
 #include <map>
 #include <search_stack.h>
 
-#include <schframe.h>
+#include <sch_edit_frame.h>
 #include <netlist.h>
 #include <sch_reference_list.h>
-#include <class_netlist_object.h>
+#include <env_paths.h>
 
 #include <wx/tokenzr.h>
 #include <wx/regex.h>
+
+
+wxString NETLIST_EXPORTER_PSPICE::GetSpiceDevice( const wxString& aComponent ) const
+{
+    const auto& spiceItems = GetSpiceItems();
+
+    auto it = std::find_if( spiceItems.begin(), spiceItems.end(), [&]( const SPICE_ITEM& item ) {
+        return item.m_refName == aComponent;
+    } );
+
+    if( it == spiceItems.end() )
+        return wxEmptyString;
+
+    // Prefix the device type if plain reference would result in a different device type
+    return it->m_primitive != it->m_refName[0] ?
+        wxString( it->m_primitive + it->m_refName ) : it->m_refName;
+}
+
 
 bool NETLIST_EXPORTER_PSPICE::WriteNetlist( const wxString& aOutFileName, unsigned aNetlistOptions )
 {
@@ -54,6 +72,7 @@ void  NETLIST_EXPORTER_PSPICE::ReplaceForbiddenChars( wxString &aNetName )
 
     aNetName.Replace( "(", "_" );
     aNetName.Replace( ")", "_" );
+    aNetName.Replace( " ", "_" );
 }
 
 
@@ -62,20 +81,23 @@ bool NETLIST_EXPORTER_PSPICE::Format( OUTPUTFORMATTER* aFormatter, unsigned aCtl
     // Netlist options
     const bool useNetcodeAsNetName = false;//aCtl & NET_USE_NETCODES_AS_NETNAMES;
 
+    // default title
+    m_title = "KiCad schematic";
+
     if( !ProcessNetlist( aCtl ) )
         return false;
 
-    aFormatter->Print( 0, ".title KiCad schematic\n" );
+    aFormatter->Print( 0, ".title %s\n", (const char*) m_title.c_str() );
 
     // Write .include directives
-    for( auto lib : m_libraries )
+    for( const auto& lib : m_libraries )
     {
         wxString full_path;
 
-        if( ( aCtl & NET_ADJUST_INCLUDE_PATHS ) && m_paths )
+        if( ( aCtl & NET_ADJUST_INCLUDE_PATHS ) )
         {
             // Look for the library in known search locations
-            full_path = m_paths->FindValidPath( lib );
+            full_path = ResolveFile( lib, &Pgm().GetLocalEnvVariables(), m_project );
 
             if( full_path.IsEmpty() )
             {
@@ -89,13 +111,15 @@ bool NETLIST_EXPORTER_PSPICE::Format( OUTPUTFORMATTER* aFormatter, unsigned aCtl
         aFormatter->Print( 0, ".include \"%s\"\n", (const char*) full_path.c_str() );
     }
 
+    unsigned int NC_counter = 1;
+
     for( const auto& item : m_spiceItems )
     {
         if( !item.m_enabled )
             continue;
 
-        // Save the node order
-        aFormatter->Print( 0, "%c%s ", item.m_primitive, (const char*) item.m_refName.c_str() );
+        wxString device = GetSpiceDevice( item.m_refName );
+        aFormatter->Print( 0, "%s ", (const char*) device.c_str() );
 
         size_t pspiceNodes = item.m_pinSequence.empty() ? item.m_pins.size() : item.m_pinSequence.size();
 
@@ -127,8 +151,12 @@ bool NETLIST_EXPORTER_PSPICE::Format( OUTPUTFORMATTER* aFormatter, unsigned aCtl
                 // Replace parenthesis with underscore to prevent parse issues with simulators
                 ReplaceForbiddenChars( netName );
 
+                // unescape net names that contain a escaped sequence ("{slash}"):
+                netName = UnescapeString( netName );
+
+                // Borrow LTSpice's nomenclature for unconnected nets
                 if( netName.IsEmpty() )
-                    netName = wxT( "?" );
+                    netName = wxString::Format( wxT( "NC_%.2u" ), NC_counter++ );
 
                 aFormatter->Print( 0, "%s ", TO_UTF8( netName ) );
             }
@@ -161,7 +189,7 @@ wxString NETLIST_EXPORTER_PSPICE::GetSpiceFieldDefVal( SPICE_FIELD aField,
     {
     case SF_PRIMITIVE:
     {
-        const wxString& refName = aComponent->GetField( REFERENCE )->GetText();
+        const wxString refName = aComponent->GetField( REFERENCE )->GetText();
         return refName.GetChar( 0 );
         break;
     }
@@ -209,7 +237,8 @@ wxString NETLIST_EXPORTER_PSPICE::GetSpiceFieldDefVal( SPICE_FIELD aField,
         wxString nodeSeq;
         std::vector<LIB_PIN*> pins;
 
-        aComponent->GetPins( pins );
+        wxCHECK( aComponent->GetPartRef(), wxString() );
+        aComponent->GetPartRef()->GetPins( pins );
 
         for( auto pin : pins )
             nodeSeq += pin->GetNumber() + " ";
@@ -258,31 +287,30 @@ bool NETLIST_EXPORTER_PSPICE::ProcessNetlist( unsigned aCtl )
     for( unsigned sheet_idx = 0; sheet_idx < sheetList.size(); sheet_idx++ )
     {
         // Process component attributes to find Spice directives
-        for( EDA_ITEM* item = sheetList[sheet_idx].LastDrawList(); item; item = item->Next() )
+        for( auto item : sheetList[sheet_idx].LastScreen()->Items().OfType( SCH_COMPONENT_T ) )
         {
-            SCH_COMPONENT* comp = findNextComponentAndCreatePinList( item, &sheetList[sheet_idx] );
+            SCH_COMPONENT* comp = findNextComponent( item, &sheetList[sheet_idx] );
 
             if( !comp )
-                break;
+                continue;
 
-            item = comp;
-
+            CreatePinList( comp, &sheetList[sheet_idx] );
             SPICE_ITEM spiceItem;
             spiceItem.m_parent = comp;
 
             // Obtain Spice fields
             SCH_FIELD* fieldLibFile = comp->FindField( GetSpiceFieldName( SF_LIB_FILE ) );
-            SCH_FIELD* fieldSeq = comp->FindField( GetSpiceFieldName( SF_NODE_SEQUENCE ) );
+            SCH_FIELD* fieldSeq     = comp->FindField( GetSpiceFieldName( SF_NODE_SEQUENCE ) );
 
             spiceItem.m_primitive = GetSpiceField( SF_PRIMITIVE, comp, aCtl )[0];
-            spiceItem.m_model = GetSpiceField( SF_MODEL, comp, aCtl );
-            spiceItem.m_refName = comp->GetRef( &sheetList[sheet_idx] );
+            spiceItem.m_model     = GetSpiceField( SF_MODEL, comp, aCtl );
+            spiceItem.m_refName   = comp->GetRef( &sheetList[sheet_idx] );
 
             // Duplicate references will result in simulation errors
             if( refNames.count( spiceItem.m_refName ) )
             {
                 DisplayError( NULL, wxT( "There are duplicate components. "
-                            "You need to annotate schematics first." ) );
+                                         "You need to annotate schematics first." ) );
                 return false;
             }
 
@@ -318,7 +346,7 @@ bool NETLIST_EXPORTER_PSPICE::ProcessNetlist( unsigned aCtl )
             if( fieldSeq )
             {
                 // Get the string containing the sequence of nodes:
-                wxString nodeSeqIndexLineStr = fieldSeq->GetText();
+                const wxString& nodeSeqIndexLineStr = fieldSeq->GetText();
 
                 // Verify field exists and is not empty:
                 if( !nodeSeqIndexLineStr.IsEmpty() )
@@ -328,8 +356,8 @@ bool NETLIST_EXPORTER_PSPICE::ProcessNetlist( unsigned aCtl )
 
                     while( tkz.HasMoreTokens() )
                     {
-                        wxString    pinIndex = tkz.GetNextToken();
-                        int         seq;
+                        wxString pinIndex = tkz.GetNextToken();
+                        int      seq;
 
                         // Find PinName In Standard List assign Standard List Index to Name:
                         seq = pinNames.Index( pinIndex );
@@ -351,41 +379,93 @@ bool NETLIST_EXPORTER_PSPICE::ProcessNetlist( unsigned aCtl )
 void NETLIST_EXPORTER_PSPICE::UpdateDirectives( unsigned aCtl )
 {
     const SCH_SHEET_LIST& sheetList = g_RootSheet;
+    wxRegEx couplingK( "^[kK][[:digit:]]*[[:space:]]+[[:alnum:]]+[[:space:]]+[[:alnum:]]+",
+            wxRE_ADVANCED );
 
     m_directives.clear();
+    bool controlBlock = false;
+    bool circuitBlock = false;
 
     for( unsigned i = 0; i < sheetList.size(); i++ )
     {
-        for( EDA_ITEM* item = sheetList[i].LastDrawList(); item; item = item->Next() )
+        for( auto item : sheetList[i].LastScreen()->Items().OfType( SCH_TEXT_T ) )
         {
-            if( item->Type() != SCH_TEXT_T )
-                continue;
-
             wxString text = static_cast<SCH_TEXT*>( item )->GetText();
 
             if( text.IsEmpty() )
                 continue;
 
-            if( text.GetChar( 0 ) == '.' )
+            // Analyze each line of a text field
+            wxStringTokenizer tokenizer( text, "\r\n" );
+
+            // Flag to follow multiline directives
+            bool directiveStarted = false;
+
+            while( tokenizer.HasMoreTokens() )
             {
-                wxStringTokenizer tokenizer( text, "\r\n" );
+                wxString line( tokenizer.GetNextToken() );
 
-                while( tokenizer.HasMoreTokens() )
+                // Cleanup: remove preceding and trailing white-space characters
+                line.Trim( true ).Trim( false );
+                // Convert to lower-case for parsing purposes only
+                wxString lowercaseline = line;
+                lowercaseline.MakeLower();
+
+                // 'Include' directive stores the library file name, so it
+                // can be later resolved using a list of paths
+                if( lowercaseline.StartsWith( ".inc" ) )
                 {
-                    wxString directive( tokenizer.GetNextToken() );
+                    wxString lib = line.AfterFirst( ' ' );
 
-                    if( directive.StartsWith( ".inc" ) )
-                    {
-                        wxString lib = directive.AfterFirst( ' ' );
+                    if( lib.IsEmpty() )
+                        continue;
 
-                        if( !lib.IsEmpty() )
-                            m_libraries.insert( lib );
-                    }
-                    else
+                    // Strip quotes if present
+                    if( ( lib.StartsWith( "\"" ) && lib.EndsWith( "\"" ) )
+                        || ( lib.StartsWith( "'" ) && lib.EndsWith( "'" ) ) )
                     {
-                        m_directives.push_back( directive );
+                        lib = lib.Mid( 1, lib.Length() - 2 );
                     }
+
+                    m_libraries.insert( lib );
                 }
+
+                // Store the title to be sure it appears
+                // in the first line of output
+                else if( lowercaseline.StartsWith( ".title " ) )
+                {
+                    m_title = line.AfterFirst( ' ' );
+                }
+
+                else if( line.StartsWith( '.' )                           // one-line directives
+                        || controlBlock                                   // .control .. .endc block
+                        || circuitBlock                                   // .subckt  .. .ends block
+                        || couplingK.Matches( line )                      // K## L## L## coupling constant
+                        || ( directiveStarted && line.StartsWith( '+' ) ) ) // multiline directives
+                {
+                    // Pad the directive to ensure we distinguish between short directives
+                    // and the start of a longer directive
+                    m_directives.emplace_back( line + " " );
+                }
+
+
+                // Handle .control .. .endc blocks
+                if( lowercaseline.IsSameAs( ".control" ) && ( !controlBlock ) )
+                    controlBlock = true;
+
+                if( lowercaseline.IsSameAs( ".endc" ) && controlBlock )
+                    controlBlock = false;
+
+                // Handle .subckt .. .ends blocks
+                if( lowercaseline.StartsWith( ".subckt" ) && ( !circuitBlock ) )
+                    circuitBlock = true;
+
+                if( lowercaseline.IsSameAs( ".ends" ) && circuitBlock )
+                    circuitBlock = false;
+
+                // Mark directive as started or continued in case it is a multi-line one
+                directiveStarted = line.StartsWith( '.' )
+                    || ( directiveStarted && line.StartsWith( '+' ) );
             }
         }
     }

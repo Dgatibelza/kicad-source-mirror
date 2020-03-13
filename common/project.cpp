@@ -1,7 +1,7 @@
 /*
  * This program source code file is part of KiCad, a free EDA CAD application.
  *
- * Copyright (C) 2014-2017 KiCad Developers, see AUTHORS.txt for contributors.
+ * Copyright (C) 2014-2018 KiCad Developers, see AUTHORS.txt for contributors.
  *
  * This program is free software; you can redistribute it and/or
  * modify it under the terms of the GNU General Public License
@@ -35,6 +35,7 @@
 #include <fp_lib_table.h>
 #include <kiway.h>
 #include <kiface_ids.h>
+#include <trace_helpers.h>
 
 
 PROJECT::PROJECT()
@@ -45,11 +46,9 @@ PROJECT::PROJECT()
 
 void PROJECT::ElemsClear()
 {
-    DBG( printf( "%s: clearing all _ELEMS for project %s\n", __func__, TO_UTF8( GetProjectFullName() ) );)
-
     // careful here, this should work, but the virtual destructor may not
     // be in the same link image as PROJECT.
-    for( unsigned i = 0;  i < DIM( m_elems );  ++i )
+    for( unsigned i = 0;  i < arrayDim( m_elems );  ++i )
     {
         SetElem( ELEM_T( i ), NULL );
     }
@@ -74,7 +73,8 @@ void PROJECT::SetProjectFullName( const wxString& aFullPathAndName )
     {
         Clear();            // clear the data when the project changes.
 
-        DBG(printf( "%s: old:'%s' new:'%s'\n", __func__, TO_UTF8( GetProjectFullName() ), TO_UTF8( aFullPathAndName ) );)
+        wxLogTrace( tracePathsAndFiles, "%s: old:'%s' new:'%s'", __func__,
+                    TO_UTF8( GetProjectFullName() ), TO_UTF8( aFullPathAndName ) );
 
         m_project_name = aFullPathAndName;
 
@@ -111,12 +111,22 @@ const wxString PROJECT::GetProjectName() const
 }
 
 
+const wxString PROJECT::SymbolLibTableName() const
+{
+    return libTableName( "sym-lib-table" );
+}
+
+
 const wxString PROJECT::FootprintLibTblName() const
+{
+    return libTableName( "fp-lib-table" );
+}
+
+
+const wxString PROJECT::libTableName( const wxString& aLibTableName ) const
 {
     wxFileName  fn = GetProjectFullName();
     wxString    path = fn.GetPath();
-
-    // DBG(printf( "path:'%s'  fn:'%s'\n", TO_UTF8(path), TO_UTF8(fn.GetFullPath()) );)
 
     // if there's no path to the project name, or the name as a whole is bogus or its not
     // write-able then use a template file.
@@ -140,17 +150,16 @@ const wxString PROJECT::FootprintLibTblName() const
 #endif
 
         /*
-            The footprint library table name used when no project file is passed
-            to Pcbnew or CvPcb. This is used temporarily to store the project
-            specific library table until the project file being edited is saved.
-            It is then moved to the file fp-lib-table in the folder where the
-            project file is saved.
-        */
-        fn.SetName( wxT( "prj-fp-lib-table" ) );
+         * The library table name used when no project file is passed to the appropriate
+         * code.  This is used temporarily to store the project specific library table
+         * until the project file being edited is saved.  It is then moved to the correct
+         * file in the folder where the project file is saved.
+         */
+        fn.SetName( "prj-" + aLibTableName );
     }
     else    // normal path.
     {
-        fn.SetName( wxT( "fp-lib-table" ) );
+        fn.SetName( aLibTableName );
     }
 
     fn.ClearExt();
@@ -159,11 +168,38 @@ const wxString PROJECT::FootprintLibTblName() const
 }
 
 
+const wxString PROJECT::GetSheetName( const KIID& aSheetID )
+{
+    if( m_sheetNames.empty() )
+    {
+        std::unique_ptr<wxConfigBase> config( configCreate( SEARCH_STACK(), GROUP_SHEET_NAMES ) );
+
+        config->SetPath( GROUP_SHEET_NAMES );
+
+        int index = 1;
+        wxString entry;
+
+        while( config->Read( wxString::Format( "%d", index++ ), &entry ) )
+        {
+            wxArrayString tokens = wxSplit( entry, ':' );
+
+            if( tokens.size() == 2 )
+                m_sheetNames[ KIID( tokens[0] ) ] = tokens[1];
+        }
+    }
+
+    if( m_sheetNames.count( aSheetID ) )
+        return m_sheetNames.at( aSheetID );
+    else
+        return aSheetID.AsString();
+}
+
+
 void PROJECT::SetRString( RSTRING_T aIndex, const wxString& aString )
 {
     unsigned ndx = unsigned( aIndex );
 
-    if( ndx < DIM( m_rstrings ) )
+    if( ndx < arrayDim( m_rstrings ) )
     {
         m_rstrings[ndx] = aString;
     }
@@ -178,7 +214,7 @@ const wxString& PROJECT::GetRString( RSTRING_T aIndex )
 {
     unsigned ndx = unsigned( aIndex );
 
-    if( ndx < DIM( m_rstrings ) )
+    if( ndx < arrayDim( m_rstrings ) )
     {
         return m_rstrings[ndx];
     }
@@ -197,7 +233,7 @@ PROJECT::_ELEM* PROJECT::GetElem( ELEM_T aIndex )
 {
     // This is virtual, so implement it out of line
 
-    if( unsigned( aIndex ) < DIM( m_elems ) )
+    if( unsigned( aIndex ) < arrayDim( m_elems ) )
     {
         return m_elems[aIndex];
     }
@@ -209,7 +245,7 @@ void PROJECT::SetElem( ELEM_T aIndex, _ELEM* aElem )
 {
     // This is virtual, so implement it out of line
 
-    if( unsigned( aIndex ) < DIM( m_elems ) )
+    if( unsigned( aIndex ) < arrayDim( m_elems ) )
     {
 #if defined(DEBUG) && 0
         if( aIndex == ELEM_SCH_PART_LIBS )
@@ -227,7 +263,7 @@ static bool copy_pro_file_template( const SEARCH_STACK& aSearchS, const wxString
 {
     if( aDestination.IsEmpty() )
     {
-        DBG( printf( "%s: destination is empty.\n", __func__ );)
+        wxLogTrace( tracePathsAndFiles, "%s: destination is empty.", __func__ );
         return false;
     }
 
@@ -237,7 +273,8 @@ static bool copy_pro_file_template( const SEARCH_STACK& aSearchS, const wxString
 
     if( !kicad_pro_template )
     {
-        DBG( printf( "%s: template file '%s' not found using search paths.\n", __func__, TO_UTF8( templateFile ) );)
+        wxLogTrace( tracePathsAndFiles, "%s: template file '%s' not found using search paths.",
+                    __func__, TO_UTF8( templateFile ) );
 
         wxFileName  templ( wxStandardPaths::Get().GetDocumentsDir(),
                             wxT( "kicad" ), ProjectFileExtension );
@@ -245,7 +282,7 @@ static bool copy_pro_file_template( const SEARCH_STACK& aSearchS, const wxString
         if( !templ.IsFileReadable() )
         {
             wxString msg = wxString::Format( _(
-                    "Unable to find '%s' template config file." ),
+                    "Unable to find \"%s\" template config file." ),
                     GetChars( templateFile ) );
 
             DisplayErrorMessage( nullptr, _( "Error copying project file template" ), msg );
@@ -256,7 +293,8 @@ static bool copy_pro_file_template( const SEARCH_STACK& aSearchS, const wxString
         kicad_pro_template = templ.GetFullPath();
     }
 
-    DBG( printf( "%s: using template file '%s' as project file.\n", __func__, TO_UTF8( kicad_pro_template ) );)
+    wxLogTrace( tracePathsAndFiles, "%s: using template file '%s' as project file.",
+                __func__, TO_UTF8( kicad_pro_template ) );
 
     // Verify aDestination can be created. if this is not the case, wxCopyFile
     // will generate a crappy log error message, and we *do not want* this kind
@@ -268,7 +306,7 @@ static bool copy_pro_file_template( const SEARCH_STACK& aSearchS, const wxString
         success = wxCopyFile( kicad_pro_template, aDestination );
     else
     {
-        wxLogMessage( _( "Cannot create prj file '%s' (Directory not writable)" ),
+        wxLogMessage( _( "Cannot create prj file \"%s\" (Directory not writable)" ),
                       GetChars( aDestination) );
         success = false;
     }
@@ -282,6 +320,11 @@ wxConfigBase* PROJECT::configCreate( const SEARCH_STACK& aSList,
 {
     wxConfigBase*   cfg = 0;
     wxString        cur_pro_fn = !aProjectFileName ? GetProjectFullName() : aProjectFileName;
+
+    // If we do not have a project name or specified name, choose an empty file to store the
+    // temporary configuration data in.
+    if( cur_pro_fn.IsEmpty() )
+        cur_pro_fn = wxFileName::CreateTempFileName( GetProjectPath() );
 
     if( wxFileName( cur_pro_fn ).IsFileReadable() )
     {
@@ -305,7 +348,7 @@ wxConfigBase* PROJECT::configCreate( const SEARCH_STACK& aSList,
 
 
 void PROJECT::ConfigSave( const SEARCH_STACK& aSList, const wxString& aGroupName,
-        const PARAM_CFG_ARRAY& aParams, const wxString& aFileName )
+                          const std::vector<PARAM_CFG*>& aParams, const wxString& aFileName )
 {
     std::unique_ptr<wxConfigBase> cfg( configCreate( aSList, aGroupName, aFileName ) );
 
@@ -340,9 +383,11 @@ void PROJECT::ConfigSave( const SEARCH_STACK& aSList, const wxString& aGroupName
 
 
 bool PROJECT::ConfigLoad( const SEARCH_STACK& aSList, const wxString&  aGroupName,
-        const PARAM_CFG_ARRAY& aParams, const wxString& aForeignProjectFileName )
+                          const std::vector<PARAM_CFG*>& aParams,
+                          const wxString& aForeignProjectFileName )
 {
-    std::unique_ptr<wxConfigBase> cfg( configCreate( aSList, aGroupName, aForeignProjectFileName ) );
+    std::unique_ptr<wxConfigBase> cfg( configCreate( aSList, aGroupName,
+                                                     aForeignProjectFileName ) );
 
     if( !cfg.get() )
     {
@@ -350,19 +395,16 @@ bool PROJECT::ConfigLoad( const SEARCH_STACK& aSList, const wxString&  aGroupNam
         return false;
     }
 
+    // We do not want expansion of env var values when reading our project config file
+    cfg.get()->SetExpandEnvVars( false );
+
     cfg->SetPath( wxCONFIG_PATH_SEPARATOR );
 
     wxString timestamp = cfg->Read( wxT( "update" ) );
 
     m_pro_date_and_time = timestamp;
 
-    // We do not want expansion of env var values when reading our project config file
-    bool state = cfg.get()->IsExpandingEnvVars();
-    cfg.get()->SetExpandEnvVars( false );
-
     wxConfigLoadParams( cfg.get(), aParams, aGroupName );
-
-    cfg.get()->SetExpandEnvVars( state );
 
     return true;
 }
@@ -390,16 +432,17 @@ FP_LIB_TABLE* PROJECT::PcbFootprintLibs( KIWAY& aKiway )
     FP_LIB_TABLE*   tbl = (FP_LIB_TABLE*) GetElem( ELEM_FPTBL );
 
     // its gotta be NULL or a FP_LIB_TABLE, or a bug.
-    wxASSERT( !tbl || dynamic_cast<FP_LIB_TABLE*>( tbl ) );
+    wxASSERT( !tbl || tbl->Type() == FP_LIB_TABLE_T );
 
     if( !tbl )
     {
-        // Stack the project specific FP_LIB_TABLE overlay on top of the global table.
+        // Build a new project specific FP_LIB_TABLE with the global table as a fallback.
         // ~FP_LIB_TABLE() will not touch the fallback table, so multiple projects may
         // stack this way, all using the same global fallback table.
         KIFACE* kiface = aKiway.KiFACE( KIWAY::FACE_PCB );
+
         if( kiface )
-            tbl = (FP_LIB_TABLE*) kiface->IfaceOrAddress( KIFACE_G_FOOTPRINT_TABLE );
+            tbl = (FP_LIB_TABLE*) kiface->IfaceOrAddress( KIFACE_NEW_FOOTPRINT_TABLE );
 
         wxASSERT( tbl );
         SetElem( ELEM_FPTBL, tbl );
@@ -412,7 +455,12 @@ FP_LIB_TABLE* PROJECT::PcbFootprintLibs( KIWAY& aKiway )
         }
         catch( const IO_ERROR& ioe )
         {
-            DisplayErrorMessage( NULL, _( "Error loading project footprint library table" ), ioe.What() );
+            DisplayErrorMessage( NULL, _( "Error loading project footprint library table" ),
+                                 ioe.What() );
+        }
+        catch( ... )
+        {
+            DisplayErrorMessage( NULL, _( "Error loading project footprint library table" ) );
         }
     }
 

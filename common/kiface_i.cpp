@@ -24,7 +24,6 @@
  */
 
 #include <macros.h>             // FROM_UTF8()
-#include <wx/config.h>
 #include <wx/stdpaths.h>
 
 #include <kiface_i.h>
@@ -83,10 +82,6 @@ static void setSearchPaths( SEARCH_STACK* aDst, KIWAY::FACE_T aId )
 
 #ifndef __WXMAC__
     aDst->AddPaths( wxT( "/usr/local/share" ) );
-#endif
-
-#if 1 && defined(DEBUG)
-    aDst->Show( "kiface" );
 #endif
 }
 

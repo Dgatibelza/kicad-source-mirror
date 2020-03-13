@@ -50,7 +50,7 @@ enum MEANDER_STYLE {
 };
 
 /**
- * Class MEANDER_SETTINGS
+ * MEANDER_SETTINGS
  *
  * Holds dimensions for the meandering algorithm.
  */
@@ -63,6 +63,7 @@ public:
         m_minAmplitude = 100000;
         m_maxAmplitude = 1000000;
         m_step = 50000;
+        m_lenPadToDie = 0;
         m_spacing = 600000;
         m_targetLength = 100000000;
         m_targetSkew = 0;
@@ -80,8 +81,10 @@ public:
     int m_spacing;
     ///> amplitude/spacing adjustment step
     int m_step;
-    ///> desired length of the tuned line/diff pair
-    int m_targetLength;
+    ///> length PadToDie
+    int m_lenPadToDie;
+    ///> desired length of the tuned line/diff pair (this is in nm, so allow more than board width)
+    long long int m_targetLength;
     ///> type of corners for the meandered line
     MEANDER_STYLE m_cornerStyle;
     ///> rounding percentage (0 - 100)
@@ -97,7 +100,7 @@ public:
 class MEANDERED_LINE;
 
 /**
- * Class MEANDER_SETTINGS
+ * MEANDER_SETTINGS
  *
  * Holds the geometry of a single meander.
  */
@@ -388,7 +391,7 @@ private:
 
 
 /**
- * Class MEANDERED_LINE
+ * MEANDERED_LINE
  *
  * Represents a set of meanders fitted over a single or two lines.
  */

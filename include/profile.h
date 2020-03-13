@@ -3,7 +3,7 @@
  *
  * Copyright (C) 2013 CERN
  * @author Tomasz Wlostowski <tomasz.wlostowski@cern.ch>
- * 2017 KiCad Developers, see AUTHORS.txt for contributors.
+ * 2019 KiCad Developers, see AUTHORS.txt for contributors.
  *
  * This program is free software; you can redistribute it and/or
  * modify it under the terms of the GNU General Public License
@@ -28,18 +28,17 @@
  * @brief Simple profiling functions for measuring code execution time.
  */
 
-#ifndef __TPROFILE_H
-#define __TPROFILE_H
+#ifndef TPROFILE_H
+#define TPROFILE_H
 
 #include <chrono>
 #include <string>
 #include <iostream>
 #include <iomanip>
-#include <wx/log.h>
 
 /**
  * The class PROF_COUNTER is a small class to help profiling.
- * It allows the calculation of the elapsed time (in millisecondes) between
+ * It allows the calculation of the elapsed time (in milliseconds) between
  * its creation (or the last call to Start() ) and the last call to Stop()
  */
 class PROF_COUNTER
@@ -72,7 +71,8 @@ public:
     void Start()
     {
         m_running = true;
-        m_starttime = std::chrono::high_resolution_clock::now();
+        m_starttime = CLOCK::now();
+        m_lasttime = m_starttime;
     }
 
 
@@ -84,61 +84,117 @@ public:
         if( !m_running )
             return;
 
-        m_stoptime = std::chrono::high_resolution_clock::now();
+        m_stoptime = CLOCK::now();
+        m_running = false;
     }
 
     /**
-     * Print the elapsed time (in ms) to STDERR.
+     * Print the elapsed time (in a suitable unit) to a stream.
+     *
+     * The unit is automatically chosen from ns, us, ms and s, depending on the
+     * size of the current count.
+     *
+     * @param the stream to print to.
      */
-    void Show()
+    void Show( std::ostream& aStream = std::cerr )
     {
-        TIME_POINT display_stoptime = m_running ?
-                    std::chrono::high_resolution_clock::now() :
-                    m_stoptime;
+        using DURATION = std::chrono::duration<double, std::nano>;
 
-        std::chrono::duration<double, std::milli> elapsed = display_stoptime - m_starttime;
-        std::cerr << m_name << " took " << elapsed.count() << " milliseconds." << std::endl;
-    }
+        const auto   duration = SinceStart<DURATION>();
+        const double cnt = duration.count();
 
-    /**
-     * Show the elapsed time (in ms) in a wxLogMessage window.
-     */
-    void ShowDlg()
-    {
-        TIME_POINT display_stoptime = m_running ?
-                    std::chrono::high_resolution_clock::now() :
-                    m_stoptime;
+        if( m_name.size() )
+        {
+            aStream << m_name << " took ";
+        }
 
-        std::chrono::duration<double, std::milli> elapsed = display_stoptime - m_starttime;
-        wxString msg;
-        if( elapsed.count() < 1000.0 )
-            msg << m_name << " took " << elapsed.count() << " ms.";
+        if( cnt < 1e3 )
+            aStream << cnt << "ns";
+        else if( cnt < 1e6 )
+            aStream << cnt / 1e3 << "µs";
+        else if( cnt < 1e9 )
+            aStream << cnt / 1e6 << "ms";
         else
-            msg << m_name << " took " << elapsed.count()/1000.0 << " sec.";
-        wxLogMessage( msg );
+            aStream << cnt / 1e9 << "s";
+
+        aStream << std::endl;
     }
 
     /**
-     * @return the elapsed time in ms
+     * @return the time since the timer was started. If the timer is stopped,
+     * the duration is from the start time to the time it was stopped, else it
+     * is to the current time.
      */
-    double msecs() const
+    template <typename DURATION>
+    DURATION SinceStart( bool aSinceLast = false )
     {
-        TIME_POINT stoptime = m_running ?
-                    std::chrono::high_resolution_clock::now() :
-                    m_stoptime;
+        const TIME_POINT stoptime = m_running ? CLOCK::now() : m_stoptime;
+        const TIME_POINT starttime = aSinceLast ? m_lasttime : m_starttime;
 
-        std::chrono::duration<double, std::milli> elapsed = stoptime - m_starttime;
+        m_lasttime = stoptime;
 
-        return elapsed.count();
+        return std::chrono::duration_cast<DURATION>( stoptime - starttime );
+    }
+
+    /**
+     * @param aSinceLast: only get the time since the last time the time was read
+     * @return the elapsed time in ms since the timer was started.
+     */
+    double msecs( bool aSinceLast = false )
+    {
+        using DUR_MS = std::chrono::duration<double, std::milli>;
+        return SinceStart<DUR_MS>( aSinceLast ).count();
     }
 
 private:
     std::string m_name;     // a string printed in message
     bool m_running;
 
-    typedef std::chrono::time_point<std::chrono::high_resolution_clock> TIME_POINT;
+    using CLOCK = std::chrono::high_resolution_clock;
+    using TIME_POINT = std::chrono::time_point<CLOCK>;
 
-    TIME_POINT m_starttime, m_stoptime;
+    TIME_POINT m_starttime, m_lasttime, m_stoptime;
+};
+
+
+/**
+ * A simple RAII class to measure the time of an operation.
+ *
+ * On construction, a timer is started, and on destruction, the timer is
+ * ended, and the time difference is written into the given duration.
+ *
+ * For example:
+ *
+ * DURATION duration; // select a duration type as needed
+ * {
+ *     SCOPED_PROF_COUNTER<DURATION> timer( duration );
+ *     timed_activity();
+ * }
+ * // duration is now the time timed activity took
+ *
+ * From C++17, with class template argument deduction, you should be able to
+ * omit the <DURATION>.
+ */
+template <typename DURATION>
+class SCOPED_PROF_COUNTER
+{
+public:
+    SCOPED_PROF_COUNTER( DURATION& aDuration ) : m_counter(), m_duration( aDuration )
+    {
+    }
+
+    ~SCOPED_PROF_COUNTER()
+    {
+        // update the output
+        m_duration = m_counter.SinceStart<DURATION>();
+    }
+
+private:
+    ///< The counter to use to do the profiling
+    PROF_COUNTER m_counter;
+
+    ///< The duration to update at the end of the scope
+    DURATION& m_duration;
 };
 
 
@@ -151,4 +207,4 @@ private:
  */
 unsigned GetRunningMicroSecs();
 
-#endif
+#endif  // TPROFILE_H

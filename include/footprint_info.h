@@ -2,7 +2,7 @@
  * This program source code file is part of KiCad, a free EDA CAD application.
  *
  * Copyright (C) 2011 Jean-Pierre Charras, <jp.charras@wanadoo.fr>
- * Copyright (C) 1992-2017 KiCad Developers, see AUTHORS.txt for contributors.
+ * Copyright (C) 1992-2019 KiCad Developers, see AUTHORS.txt for contributors.
  *
  * This program is free software; you can redistribute it and/or
  * modify it under the terms of the GNU General Public License
@@ -31,25 +31,21 @@
 
 
 #include <boost/ptr_container/ptr_vector.hpp>
-
 #include <import_export.h>
 #include <ki_exception.h>
-#include <ki_mutex.h>
 #include <kicad_string.h>
 #include <sync_queue.h>
-
+#include <lib_tree_item.h>
 #include <atomic>
 #include <functional>
 #include <memory>
-
-
-#define USE_FPI_LAZY 0 // 1:yes lazy,  0:no early
 
 
 class FP_LIB_TABLE;
 class FOOTPRINT_LIST;
 class FOOTPRINT_LIST_IMPL;
 class FOOTPRINT_ASYNC_LOADER;
+class PROGRESS_REPORTER;
 class wxTopLevelWindow;
 class KIWAY;
 
@@ -61,7 +57,7 @@ class KIWAY;
  * This is a virtual class; its implementation lives in pcbnew/footprint_info_impl.cpp.
  * To get instances of these classes, see FOOTPRINT_LIST::GetInstance().
  */
-class APIEXPORT FOOTPRINT_INFO
+class APIEXPORT FOOTPRINT_INFO : public LIB_TREE_ITEM
 {
     friend bool operator<( const FOOTPRINT_INFO& item1, const FOOTPRINT_INFO& item2 );
 
@@ -78,21 +74,40 @@ public:
         return m_fpname;
     }
 
-    const wxString& GetNickname() const
+    wxString GetLibNickname() const override
     {
         return m_nickname;
     }
 
-    const wxString& GetDoc()
+    wxString GetName() const override
+    {
+        return m_fpname;
+    }
+
+    LIB_ID GetLibId() const override
+    {
+        return LIB_ID( m_nickname, m_fpname );
+    }
+
+    wxString GetDescription() override
     {
         ensure_loaded();
         return m_doc;
     }
 
-    const wxString& GetKeywords()
+    wxString GetKeywords()
     {
         ensure_loaded();
         return m_keywords;
+    }
+
+    wxString GetSearchText() override
+    {
+        // Matches are scored by offset from front of string, so inclusion of this spacer
+        // discounts matches found after it.
+        static const wxString discount( wxT( "        " ) );
+
+        return GetKeywords() + discount + GetDescription();
     }
 
     unsigned GetPadCount()
@@ -131,7 +146,7 @@ protected:
     }
 
     /// lazily load stuff not filled in by constructor.  This may throw IO_ERRORS.
-    virtual void load() = 0;
+    virtual void load() { };
 
     FOOTPRINT_LIST* m_owner; ///< provides access to FP_LIB_TABLE
 
@@ -140,8 +155,8 @@ protected:
     wxString m_nickname;         ///< library as known in FP_LIB_TABLE
     wxString m_fpname;           ///< Module name.
     int      m_num;              ///< Order number in the display list.
-    int      m_pad_count;        ///< Number of pads
-    int      m_unique_pad_count; ///< Number of unique pads
+    unsigned m_pad_count;        ///< Number of pads
+    unsigned m_unique_pad_count; ///< Number of unique pads
     wxString m_doc;              ///< Footprint description.
     wxString m_keywords;         ///< Footprint keywords.
 };
@@ -150,12 +165,16 @@ protected:
 /// FOOTPRINT object list sort function.
 inline bool operator<( const FOOTPRINT_INFO& item1, const FOOTPRINT_INFO& item2 )
 {
-    int retv = StrNumCmp( item1.m_nickname, item2.m_nickname, INT_MAX, true );
+    int retv = StrNumCmp( item1.m_nickname, item2.m_nickname, false );
 
     if( retv != 0 )
         return retv < 0;
 
-    return StrNumCmp( item1.m_fpname, item2.m_fpname, INT_MAX, true ) < 0;
+    // Technically footprint names are not case sensitive because the file name is used
+    // as the footprint name.  On windows this would be problematic because windows does
+    // not support case sensitive file names by default.  This should not cause any issues
+    // and allow for a future change to use the name defined in the footprint file.
+    return StrNumCmp( item1.m_fpname, item2.m_fpname, false ) < 0;
 }
 
 
@@ -179,9 +198,6 @@ protected:
     FPILIST m_list;
     ERRLIST m_errors; ///< some can be PARSE_ERRORs also
 
-    MUTEX m_list_lock;
-
-
 public:
     FOOTPRINT_LIST() : m_lib_table( 0 )
     {
@@ -190,6 +206,9 @@ public:
     virtual ~FOOTPRINT_LIST()
     {
     }
+
+    virtual void WriteCacheToFile( wxTextFile* aFile ) { };
+    virtual void ReadCacheFromFile( wxTextFile* aFile ) { };
 
     /**
      * @return the number of items stored in list
@@ -206,11 +225,14 @@ public:
     }
 
     /**
-     * Get info for a module by name.
-     * @param aFootprintName = the footprint name inside the FOOTPRINT_INFO of interest.
-     * @return FOOTPRINT_INF* - the item stored in list if found
+     * Get info for a module by id.
      */
-    FOOTPRINT_INFO* GetModuleInfo( const wxString& aFootprintName );
+    FOOTPRINT_INFO* GetModuleInfo( const wxString& aFootprintId );
+
+    /**
+     * Get info for a module by libNickname/footprintName
+     */
+    FOOTPRINT_INFO* GetModuleInfo( const wxString& aLibNickname, const wxString& aFootprintName );
 
     /**
      * Get info for a module by index.
@@ -221,12 +243,6 @@ public:
     {
         return *m_list[aIdx];
     }
-
-    /**
-     * Add aItem to list
-     * @param aItem = item to add
-     */
-    void AddItem( FOOTPRINT_INFO* aItem );
 
     unsigned GetErrorCount() const
     {
@@ -247,11 +263,14 @@ public:
      * @param aTable defines all the libraries.
      * @param aNickname is the library to read from, or if NULL means read all
      *         footprints from all known libraries in aTable.
+     * @param aProgressReporter is an optional progress reporter.  ReadFootprintFiles()
+     *         will use 2 phases within the reporter.
      * @return bool - true if it ran to completion, else false if it aborted after
      *  some number of errors.  If true, it does not mean there were no errors, check
      *  GetErrorCount() for that, should be zero to indicate success.
      */
-    virtual bool ReadFootprintFiles( FP_LIB_TABLE* aTable, const wxString* aNickname = NULL ) = 0;
+    virtual bool ReadFootprintFiles( FP_LIB_TABLE* aTable, const wxString* aNickname = nullptr,
+                                     PROGRESS_REPORTER* aProgressReporter = nullptr ) = 0;
 
     void DisplayErrors( wxTopLevelWindow* aCaller = NULL );
 
@@ -261,12 +280,12 @@ public:
     }
 
     /**
-     * Factory function to return a new FOOTPRINT_LIST via Kiway. NOT guaranteed
+     * Factory function to return a FOOTPRINT_LIST via Kiway. NOT guaranteed
      * to succeed; will return null if the kiface is not available.
      *
      * @param aKiway - active kiway instance
      */
-    static std::unique_ptr<FOOTPRINT_LIST> GetInstance( KIWAY& aKiway );
+    static FOOTPRINT_LIST* GetInstance( KIWAY& aKiway );
 
 protected:
     /**
@@ -281,11 +300,10 @@ protected:
      */
     virtual bool JoinWorkers() = 0;
 
-
     /**
-     * Return the number of libraries finished (successfully or otherwise).
+     * Stop worker threads. Part of the FOOTPRINT_ASYNC_LOADER implementation.
      */
-    virtual size_t CountFinished() = 0;
+    virtual void StopWorkers() = 0;
 };
 
 
@@ -300,10 +318,8 @@ class APIEXPORT FOOTPRINT_ASYNC_LOADER
     friend class FOOTPRINT_LIST_IMPL;
 
     FOOTPRINT_LIST*       m_list;
-    std::function<void()> m_completion_cb;
     std::string           m_last_table;
 
-    bool m_started; ///< True if Start() has been called - does not reset
     int  m_total_libs;
 
 public:
@@ -311,6 +327,8 @@ public:
      * Construct an asynchronous loader.
      */
     FOOTPRINT_ASYNC_LOADER();
+
+    ~FOOTPRINT_ASYNC_LOADER();
 
     /**
      * Assign a FOOTPRINT_LIST to the loader. This does not take ownership of
@@ -345,32 +363,9 @@ public:
     bool Join();
 
     /**
-     * Get the current completion percentage. 0 and 100 are reserved values:
-     * 0 will only be returned if Start() has not yet been called, and 100
-     * will only be returned if totally complete (i.e. rounding errors will
-     * never cause a 100% progress despite not being complete).
-     *
-     * If there are no libraries at all, returns 100 (as loading zero libraries
-     * is always complete).
-     *
-     * Threadsafe.
+     * Safely stop the current process.
      */
-    int GetProgress() const;
-
-    /**
-     * Set a callback to receive notice when loading is complete.
-     *
-     * Callback MUST be threadsafe, and must be set before calling Start
-     * if you want to use it (it is safe not to set it at all).
-     */
-    void SetCompletionCallback( std::function<void()> aCallback );
-
-    /**
-     * Return true if the given table is the same as the last table loaded.
-     * Useful for checking if the table has been modified and needs to be
-     * reloaded.
-     */
-    bool IsSameTable( FP_LIB_TABLE* aOther );
+    void Abort();
 
     /**
      * Default number of worker threads. Determined empirically (by dickelbeck):

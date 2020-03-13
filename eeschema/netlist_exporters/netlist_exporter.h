@@ -3,7 +3,7 @@
  *
  * Copyright (C) 1992-2013 jp.charras at wanadoo.fr
  * Copyright (C) 2013 SoftPLC Corporation, Dick Hollenbeck <dick@softplc.com>
- * Copyright (C) 1992-2015 KiCad Developers
+ * Copyright (C) 1992-2019 KiCad Developers
  *
  * This program is free software; you can redistribute it and/or
  * modify it under the terms of the GNU General Public License
@@ -29,14 +29,14 @@
 #include <kicad_string.h>
 
 #include <class_libentry.h>
-#include <class_netlist_object.h>
+#include <netlist_object.h>
 #include <lib_pin.h>
 #include <sch_component.h>
 #include <sch_text.h>
 #include <sch_sheet.h>
 
 /**
- * Class UNIQUE_STRINGS
+ * UNIQUE_STRINGS
  * tracks unique wxStrings and is useful in telling if a string
  * has been seen before.
  */
@@ -76,35 +76,31 @@ struct LIB_PART_LESS_THAN
     bool operator()( LIB_PART* const& libpart1, LIB_PART* const& libpart2 ) const
     {
         // Use case specific GetName() wxString compare
-        return libpart1->GetName().Cmp( libpart2->GetName() ) < 0;
+        return libpart1->GetLibId() < libpart2->GetLibId();
     }
 };
 
 /**
- * Class NETLIST_EXPORTER
+ * NETLIST_EXPORTER
  * is a abstract class used for the netlist exporters that eeschema supports.
  */
 class NETLIST_EXPORTER
 {
 protected:
-    NETLIST_OBJECT_LIST*    m_masterList;       /// yes ownership, connected items flat list
-
-    PART_LIBS*              m_libs;             /// no ownership
+    NETLIST_OBJECT_LIST*  m_masterList;       /// yes ownership, connected items flat list
 
     /// Used to temporarily store and filter the list of pins of a schematic component
     /// when generating schematic component data in netlist (comp section). No ownership
     /// of members.
-    NETLIST_OBJECTS         m_SortedComponentPinList;
+    /// TODO(snh): Descope this object
+    NETLIST_OBJECTS       m_SortedComponentPinList;
 
     /// Used for "multi parts per package" components,
     /// avoids processing a lib component more than once.
-    UNIQUE_STRINGS      m_ReferencesAlreadyFound;
+    UNIQUE_STRINGS        m_ReferencesAlreadyFound;
 
     /// unique library parts used. LIB_PART items are sorted by names
     std::set<LIB_PART*, LIB_PART_LESS_THAN> m_LibParts;
-
-    // share a code generated std::set<void*> to reduce code volume
-    std::set<void*>     m_Libraries;    ///< unique libraries used
 
     /**
      * Function sprintPinNetName
@@ -128,7 +124,7 @@ protected:
      * the component is the next actual component after aItem
      * (power symbols and virtual components that have their reference starting by '#'are skipped).
      */
-    SCH_COMPONENT* findNextComponentAndCreatePinList( EDA_ITEM* aItem, SCH_SHEET_PATH* aSheetPath );
+    void CreatePinList( SCH_COMPONENT* aItem, SCH_SHEET_PATH* aSheetPath );
 
     SCH_COMPONENT* findNextComponent( EDA_ITEM* aItem, SCH_SHEET_PATH* aSheetPath );
 
@@ -164,21 +160,21 @@ protected:
      * matching reference designator, and for each unit, add all its pins
      * to the temporary sorted pin list, m_SortedComponentPinList.
      */
-    void findAllUnitsOfComponent( SCH_COMPONENT*      aComponent,
-                                      LIB_PART*       aEntry,
-                                      SCH_SHEET_PATH* aSheetPath );
+    void findAllUnitsOfComponent( SCH_COMPONENT*  aComponent,
+                                  LIB_PART*       aEntry,
+                                  SCH_SHEET_PATH* aSheetPath );
 
 public:
 
     /**
      * Constructor
      * @param aMasterList we take ownership of this here.
-     * @param aLibs is the library list of the project.
+     * @param aLibTable is the symbol library table of the project.
      */
-    NETLIST_EXPORTER( NETLIST_OBJECT_LIST* aMasterList, PART_LIBS* aLibs ) :
-        m_masterList( aMasterList ),
-        m_libs( aLibs )
+    NETLIST_EXPORTER( NETLIST_OBJECT_LIST* aMasterList ) :
+        m_masterList( aMasterList )
     {
+        wxASSERT( aMasterList );
     }
 
     virtual ~NETLIST_EXPORTER()

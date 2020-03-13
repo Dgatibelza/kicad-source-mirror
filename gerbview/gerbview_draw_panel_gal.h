@@ -21,8 +21,12 @@
 #define GERBVIEW_DRAW_PANEL_GAL_H_
 
 #include <class_draw_panel_gal.h>
+#include <ws_proxy_view_item.h>
 
-class COLORS_DESIGN_SETTINGS;
+namespace KIGFX
+{
+    class WS_PROXY_VIEW_ITEM;
+}
 
 
 class GERBVIEW_DRAW_PANEL_GAL : public EDA_DRAW_PANEL_GAL
@@ -34,18 +38,11 @@ public:
 
     virtual ~GERBVIEW_DRAW_PANEL_GAL();
 
-    /**
-     * Function UseColorScheme
-     * Applies layer color settings.
-     * @param aSettings are the new settings.
-     */
-    void UseColorScheme( const COLORS_DESIGN_SETTINGS* aSettings );
-
     ///> @copydoc EDA_DRAW_PANEL_GAL::SetHighContrastLayer()
     virtual void SetHighContrastLayer( int aLayer ) override;
 
     ///> @copydoc EDA_DRAW_PANEL_GAL::GetMsgPanelInfo()
-    void GetMsgPanelInfo( std::vector<MSG_PANEL_ITEM>& aList ) override;
+    void GetMsgPanelInfo( EDA_UNITS aUnits, std::vector<MSG_PANEL_ITEM>& aList ) override;
 
     ///> @copydoc EDA_DRAW_PANEL_GAL::OnShow()
     void OnShow() override;
@@ -55,9 +52,22 @@ public:
     ///> @copydoc EDA_DRAW_PANEL_GAL::SetTopLayer
     virtual void SetTopLayer( int aLayer ) override;
 
+    ///> @copydoc EDA_DRAW_PANEL_GAL::GetDefaultViewBBox()
+    BOX2I GetDefaultViewBBox() const override;
+
+    /**
+     * Sets (or updates) worksheet used by the draw panel.
+     * @param aWorksheet is the worksheet to be used.
+     *        The object is then owned by GERBVIEW_DRAW_PANEL_GAL.
+     */
+    void SetWorksheet( KIGFX::WS_PROXY_VIEW_ITEM* aWorksheet );
+
 protected:
     ///> Sets rendering targets & dependencies for layers.
     void setDefaultLayerDeps();
+
+    ///> Currently used worksheet
+    std::unique_ptr<KIGFX::WS_PROXY_VIEW_ITEM> m_worksheet;
 };
 
 

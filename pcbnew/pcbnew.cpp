@@ -3,7 +3,7 @@
  *
  * Copyright (C) 2016 Jean-Pierre Charras, jp.charras at wanadoo.fr
  * Copyright (C) 2012 SoftPLC Corporation, Dick Hollenbeck <dick@softplc.com>
- * Copyright (C) 1992-2017 KiCad Developers, see AUTHORS.txt for contributors.
+ * Copyright (C) 1992-2019 KiCad Developers, see AUTHORS.txt for contributors.
  *
  * This program is free software; you can redistribute it and/or
  * modify it under the terms of the GNU General Public License
@@ -38,55 +38,27 @@
 #include <kiface_ids.h>
 #include <confirm.h>
 #include <macros.h>
-#include <make_unique.h>
-#include <class_drawpanel.h>
-#include <wxPcbStruct.h>
+#include <pcb_edit_frame.h>
 #include <eda_dde.h>
-#include <wx/stdpaths.h>
-
 #include <wx/file.h>
 #include <wx/snglinst.h>
-#include <wx/dir.h>
 #include <gestfich.h>
-
 #include <pcbnew.h>
-#include <hotkeys.h>
-#include <wildcards_and_files_ext.h>
+#include <pcbnew_settings.h>
+#include <settings/settings_manager.h>
 #include <class_board.h>
 #include <class_draw_panel_gal.h>
 #include <fp_lib_table.h>
-#include <module_editor_frame.h>
-#include <modview_frame.h>
+#include <footprint_edit_frame.h>
+#include <footprint_viewer_frame.h>
 #include <footprint_wizard_frame.h>
 #include <footprint_preview_panel.h>
 #include <footprint_info_impl.h>
-#include <gl_context_mgr.h>
+#include <dialog_configure_paths.h>
+#include "invoke_pcb_dialog.h"
+#include "dialog_global_fp_lib_table_config.h"
+
 extern bool IsWxPythonLoaded();
-
-// Colors for layers and items
-
-PCB_LAYER_ID g_Route_Layer_TOP;
-PCB_LAYER_ID g_Route_Layer_BOTTOM;
-bool g_Alternate_Track_Posture = false;
-bool g_Raccord_45_Auto = true;
-
-wxPoint     g_Offset_Module;     // module offset used when moving a footprint
-
-/* Name of the document footprint list
- * usually located in share/modules/footprints_doc
- * this is of the responsibility to users to create this file
- * if they want to have a list of footprints
- */
-wxString    g_DocModulesFileName = wxT( "footprints_doc/footprints.pdf" );
-
-/*
- * Used in track creation, a list of track segments currently being created,
- * with the newest track at the end of the list, sorted by new-ness.  e.g. use
- * TRACK->Back() to get the next older track, TRACK->Next() to get the next
- * newer track.
- */
-DLIST<TRACK> g_CurrentTrackList;
-
 
 namespace PCB {
 
@@ -104,77 +76,99 @@ static struct IFACE : public KIFACE_I
 
     wxWindow* CreateWindow( wxWindow* aParent, int aClassId, KIWAY* aKiway, int aCtlBits = 0 ) override
     {
-        wxWindow* frame = NULL;
-
         switch( aClassId )
         {
-        case FRAME_PCB:
-            frame = dynamic_cast< wxWindow* >( new PCB_EDIT_FRAME( aKiway, aParent ) );
+        case FRAME_PCB_EDITOR:
+        {
+            auto frame = new PCB_EDIT_FRAME( aKiway, aParent );
 
 #if defined( KICAD_SCRIPTING )
             // give the scripting helpers access to our frame
-            ScriptingSetPcbEditFrame( (PCB_EDIT_FRAME*) frame );
+            ScriptingSetPcbEditFrame( frame );
 #endif
 
             if( Kiface().IsSingle() )
             {
                 // only run this under single_top, not under a project manager.
-                CreateServer( frame, KICAD_PCB_PORT_SERVICE_NUMBER );
+                frame->CreateServer( KICAD_PCB_PORT_SERVICE_NUMBER );
             }
 
-            break;
-
-        case FRAME_PCB_MODULE_EDITOR:
-            frame = dynamic_cast< wxWindow* >( new FOOTPRINT_EDIT_FRAME( aKiway, aParent ) );
-            break;
-
-        case FRAME_PCB_MODULE_VIEWER:
-        case FRAME_PCB_MODULE_VIEWER_MODAL:
-            frame = dynamic_cast< wxWindow* >( new FOOTPRINT_VIEWER_FRAME( aKiway, aParent,
-                                                                           FRAME_T( aClassId ) ) );
-            break;
-
-        case FRAME_PCB_FOOTPRINT_WIZARD_MODAL:
-            frame = dynamic_cast< wxWindow* >( new FOOTPRINT_WIZARD_FRAME( aKiway, aParent,
-                                                                           FRAME_T( aClassId ) ) );
-            break;
-
-        case FRAME_PCB_FOOTPRINT_PREVIEW:
-            frame = dynamic_cast< wxWindow* >( FOOTPRINT_PREVIEW_PANEL::New( aKiway, aParent ) );
-            break;
-
-        default:
-            break;
+            return frame;
         }
 
-        return frame;
+        case FRAME_FOOTPRINT_EDITOR:
+            return new FOOTPRINT_EDIT_FRAME( aKiway, aParent,
+                                             EDA_DRAW_PANEL_GAL::GAL_TYPE_UNKNOWN );
+
+        case FRAME_FOOTPRINT_VIEWER:
+        case FRAME_FOOTPRINT_VIEWER_MODAL:
+            return new FOOTPRINT_VIEWER_FRAME( aKiway, aParent, FRAME_T( aClassId ) );
+
+        case FRAME_FOOTPRINT_WIZARD:
+            return new FOOTPRINT_WIZARD_FRAME( aKiway, aParent, FRAME_T( aClassId ) );
+
+        case FRAME_FOOTPRINT_PREVIEW:
+            return dynamic_cast< wxWindow* >( FOOTPRINT_PREVIEW_PANEL::New( aKiway, aParent ) );
+
+        case DIALOG_CONFIGUREPATHS:
+        {
+            DIALOG_CONFIGURE_PATHS dlg( aParent, aKiway->Prj().Get3DFilenameResolver() );
+
+            if( dlg.ShowModal() == wxID_OK )
+                aKiway->CommonSettingsChanged( true );
+
+            // Dialog has completed; nothing to return.
+            return nullptr;
+        }
+
+        case DIALOG_PCB_LIBRARY_TABLE:
+            InvokePcbLibTableEditor( aKiway, aParent );
+            // Dialog has completed; nothing to return.
+            return nullptr;
+
+        default:
+            return nullptr;
+        }
     }
 
     /**
      * Function IfaceOrAddress
-     * return a pointer to the requested object.  The safest way to use this
-     * is to retrieve a pointer to a static instance of an interface, similar to
-     * how the KIFACE interface is exported.  But if you know what you are doing
-     * use it to retrieve anything you want.
-     *
+     * return a pointer to the requested object.  The safest way to use this is to retrieve
+     * a pointer to a static instance of an interface, similar to how the KIFACE interface
+     * is exported.  But if you know what you are doing use it to retrieve anything you want.
      * @param aDataId identifies which object you want the address of.
-     *
      * @return void* - and must be cast into the know type.
      */
     void* IfaceOrAddress( int aDataId ) override
     {
         switch( aDataId )
         {
-        case KIFACE_NEW_FOOTPRINT_LIST:
-            return (void*) static_cast<FOOTPRINT_LIST*>( new FOOTPRINT_LIST_IMPL() );
+        // Return a pointer to the global instance of the footprint list.
+        case KIFACE_FOOTPRINT_LIST:
+            return (void*) &GFootprintList;
 
-        case KIFACE_G_FOOTPRINT_TABLE:
+        // Return a new FP_LIB_TABLE with the global table installed as a fallback.
+        case KIFACE_NEW_FOOTPRINT_TABLE:
             return (void*) new FP_LIB_TABLE( &GFootprintTable );
+
+        // Return a pointer to the global instance of the global footprint table.
+        case KIFACE_GLOBAL_FOOTPRINT_TABLE:
+            return (void*) &GFootprintTable;
 
         default:
             return nullptr;
         }
     }
+
+    /**
+     * Function SaveFileAs
+     * Saving a file under a different name is delegated to the various KIFACEs because
+     * the project doesn't know the internal format of the various files (which may have
+     * paths in them that need updating).
+     */
+    void SaveFileAs( const wxString& aProjectBasePath, const wxString& aSrcProjectName,
+                     const wxString& aNewProjectBasePath, const wxString& aNewProjectName,
+                     const wxString& aSrcFilePath, wxString& aErrors ) override;
 
 } kiface( "pcbnew", KIWAY::FACE_PCB );
 
@@ -203,6 +197,13 @@ PGM_BASE& Pgm()
     wxASSERT( process );    // KIFACE_GETTER has already been called.
     return *process;
 }
+
+// Similar to PGM_BASE& Pgm(), but return nullptr when a *.ki_face is run from a python script.
+PGM_BASE* PgmOrNull()
+{
+    return process;
+}
+
 #endif
 
 
@@ -219,7 +220,7 @@ static bool scriptingSetup()
     kipython = fn.GetPath();
 
     // If our python install is existing inside kicad, use it
-    // Note: this is usefull only when an other python version is installed
+    // Note: this is useful only when another python version is installed
     if( wxDirExists( kipython ) )
     {
         // clear any PYTHONPATH and PYTHONHOME env var definition: the default
@@ -263,10 +264,10 @@ static bool scriptingSetup()
     wxSetEnv( "PYTHONPATH", pypath );
 
 #else
-    // Linux-specific setup
     wxString pypath;
 
-    pypath = Pgm().GetExecutablePath() + wxT( "../lib/python2.7/dist-packages" );
+    // PYTHON_DEST is the scripts install dir as determined by the build system.
+    pypath = Pgm().GetExecutablePath() + wxT( "../" PYTHON_DEST );
 
     if( !wxIsEmpty( wxGetenv( wxT( "PYTHONPATH" ) ) ) )
         pypath = wxString( wxGetenv( wxT( "PYTHONPATH" ) ) ) + wxT( ":" ) + pypath;
@@ -288,19 +289,20 @@ static bool scriptingSetup()
 
 void PythonPluginsReloadBase()
 {
-#if defined(KICAD_SCRIPTING)
-    //Reload plugin list: reload Python plugins if they are newer than
-    // the already loaded, and load new plugins
+#if defined( KICAD_SCRIPTING )
+    // Reload plugin list: reload Python plugins if they are newer than the already loaded,
+    // and load new plugins
     char cmd[1024];
 
-    snprintf( cmd, sizeof(cmd),
-            "pcbnew.LoadPlugins(\"%s\")", TO_UTF8( PyScriptingPath() ) );
+    snprintf( cmd, sizeof( cmd ), "pcbnew.LoadPlugins(\"%s\")", TO_UTF8( PyScriptingPath() ) );
 
     PyLOCK lock;
 
-    // ReRun the Python method pcbnew.LoadPlugins
-    // (already called when starting Pcbnew)
-    PyRun_SimpleString( cmd );
+    // ReRun the Python method pcbnew.LoadPlugins (already called when starting Pcbnew)
+    int retv = PyRun_SimpleString( cmd );
+
+    if( retv != 0 )
+        wxLogError( "Python error %d occurred running command:\n\n`%s`", retv, cmd );
 #endif
 }
 
@@ -308,55 +310,57 @@ void PythonPluginsReloadBase()
 /// The global footprint library table.  This is not dynamically allocated because
 /// in a multiple project environment we must keep its address constant (since it is
 /// the fallback table for multiple projects).
-FP_LIB_TABLE    GFootprintTable;
+FP_LIB_TABLE          GFootprintTable;
+
+/// The global footprint info table.  This is performance-intensive to build so we
+/// keep a hash-stamped global version.  Any deviation from the request vs. stored
+/// hash will result in it being rebuilt.
+FOOTPRINT_LIST_IMPL   GFootprintList;
+
 
 
 bool IFACE::OnKifaceStart( PGM_BASE* aProgram, int aCtlBits )
 {
-    // This is process level, not project level, initialization of the DSO.
-
+    // This is process-level-initialization, not project-level-initialization of the DSO.
     // Do nothing in here pertinent to a project!
+    InitSettings( new PCBNEW_SETTINGS );
+    aProgram->GetSettingsManager().RegisterSettings( KifaceSettings() );
 
     start_common( aCtlBits );
 
-    // Must be called before creating the main frame in order to
-    // display the real hotkeys in menus or tool tips
-    ReadHotkeyConfig( PCB_EDIT_FRAME_NAME, g_Board_Editor_Hokeys_Descr );
+    wxFileName fn = FP_LIB_TABLE::GetGlobalTableFileName();
 
-    try
+    if( !fn.FileExists() )
     {
-        // The global table is not related to a specific project.  All projects
-        // will use the same global table.  So the KIFACE::OnKifaceStart() contract
-        // of avoiding anything project specific is not violated here.
+        DIALOG_GLOBAL_FP_LIB_TABLE_CONFIG fpDialog( NULL );
 
-        if( !FP_LIB_TABLE::LoadGlobalTable( GFootprintTable ) )
+        fpDialog.ShowModal();
+    }
+    else
+    {
+        try
         {
-            DisplayInfoMessage( NULL, _(
-                "You have run Pcbnew for the first time using the "
-                "new footprint library table method for finding footprints.\n"
-                "Pcbnew has either copied the default "
-                "table or created an empty table in the kicad configuration folder.\n"
-                "You must first configure the library "
-                "table to include all footprint libraries you want to use.\n"
-                "See the \"Footprint Library Table\" section of "
-                "the CvPcb or Pcbnew documentation for more information." ) );
+            // The global table is not related to a specific project.  All projects
+            // will use the same global table.  So the KIFACE::OnKifaceStart() contract
+            // of avoiding anything project specific is not violated here.
+            if( !FP_LIB_TABLE::LoadGlobalTable( GFootprintTable ) )
+                return false;
+        }
+        catch( const IO_ERROR& ioe )
+        {
+            // if we are here, a incorrect global footprint library table was found.
+            // Incorrect global symbol library table is not a fatal error:
+            // the user just has to edit the (partially) loaded table.
+            wxString msg = _(
+                "An error occurred attempting to load the global footprint library table.\n"
+                "Please edit this global footprint library table in Preferences menu."
+                );
+
+            DisplayErrorMessage( NULL, msg, ioe.What() );
         }
     }
-    catch( const IO_ERROR& ioe )
-    {
-        // if we are here, a incorrect global footprint library table was found.
-        // Incorrect global footprint library table is not a fatal error:
-        // the user just has to edit the (partially) loaded table.
 
-        wxString msg = _(
-            "An error occurred attempting to load the global footprint library table:\n"
-            "Please edit this global footprint library table in Preferences menu"
-            );
-
-        DisplayErrorMessage( NULL, msg, ioe.What() );
-    }
-
-#if defined(KICAD_SCRIPTING)
+#if defined( KICAD_SCRIPTING )
     scriptingSetup();
 #endif
 
@@ -366,12 +370,6 @@ bool IFACE::OnKifaceStart( PGM_BASE* aProgram, int aCtlBits )
 
 void IFACE::OnKifaceEnd()
 {
-    // This function deletes OpenGL contexts used (if any) by wxGLCanvas objects.
-    // It can be called only when closing the application, because it deletes an OpenGL context
-    // which can still be in usage. Destroying OpenGL contexts earlier may crash the application.
-    GL_CONTEXT_MANAGER::Get().DeleteAll();
-
-    end_common();
 #if defined( KICAD_SCRIPTING_WXPYTHON )
     // Restore the thread state and tell Python to cleanup after itself.
     // wxPython will do its own cleanup as part of that process.
@@ -380,4 +378,94 @@ void IFACE::OnKifaceEnd()
     if( IsWxPythonLoaded() )
         pcbnewFinishPythonScripting();
 #endif
+
+    end_common();
 }
+
+
+void IFACE::SaveFileAs( const wxString& aProjectBasePath, const wxString& aSrcProjectName,
+                        const wxString& aNewProjectBasePath, const wxString& aNewProjectName,
+                        const wxString& aSrcFilePath, wxString& aErrors )
+{
+    wxFileName destFile( aSrcFilePath );
+    wxString   destPath = destFile.GetPathWithSep();
+    wxUniChar  pathSep = wxFileName::GetPathSeparator();
+    wxString   ext = destFile.GetExt();
+
+    if( destPath.StartsWith( aProjectBasePath + pathSep ) )
+        destPath.Replace( aProjectBasePath, aNewProjectBasePath, false );
+
+    wxString srcProjectFootprintLib = pathSep + aSrcProjectName + ".pretty" + pathSep;
+    wxString newProjectFootprintLib = pathSep + aNewProjectName + ".pretty" + pathSep;
+
+    destPath.Replace( srcProjectFootprintLib, newProjectFootprintLib, true );
+
+    destFile.SetPath( destPath );
+
+    if( ext == "kicad_pcb" || ext == "kicad_pcb-bak" )
+    {
+        if( destFile.GetName() == aSrcProjectName )
+            destFile.SetName( aNewProjectName );
+
+        CopyFile( aSrcFilePath, destFile.GetFullPath(), aErrors );
+    }
+    else if( ext == "brd" )
+    {
+        if( destFile.GetName() == aSrcProjectName )
+            destFile.SetName( aNewProjectName );
+
+        CopyFile( aSrcFilePath, destFile.GetFullPath(), aErrors );
+    }
+    else if( ext == "mod" || ext == "kicad_mod" )
+    {
+        // Footprints are not project-specific.  Keep their source names.
+        CopyFile( aSrcFilePath, destFile.GetFullPath(), aErrors );
+    }
+    else if( ext == "cmp" )
+    {
+        // JEY TODO
+    }
+    else if( ext == "rpt" )
+    {
+        // DRC must be the "gold standard".  Since we can't gaurantee that there aren't
+        // any non-deterministic cases in the save-as algorithm, we don't want to certify
+        // the result with the source's DRC report.  Therefore copy it under the old
+        // name.
+        CopyFile( aSrcFilePath, destFile.GetFullPath(), aErrors );
+    }
+    else if( destFile.GetName() == "fp-lib-table" )
+    {
+        try
+        {
+            FP_LIB_TABLE fpLibTable;
+            fpLibTable.Load( aSrcFilePath );
+
+            for( unsigned i = 0; i < fpLibTable.GetCount(); i++ )
+            {
+                LIB_TABLE_ROW& row = fpLibTable.At( i );
+                wxString       uri = row.GetFullURI();
+
+                uri.Replace( "/" + aSrcProjectName + ".pretty", "/" + aNewProjectName + ".pretty" );
+
+                row.SetFullURI( uri );
+            }
+
+            fpLibTable.Save( destFile.GetFullPath() );
+        }
+        catch( ... )
+        {
+            wxString msg;
+
+            if( !aErrors.empty() )
+                aErrors += "\n";
+
+            msg.Printf( _( "Cannot copy file \"%s\"." ), destFile.GetFullPath() );
+            aErrors += msg;
+        }
+    }
+    else
+    {
+        wxFAIL_MSG( "Unexpected filetype for Pcbnew::SaveFileAs()" );
+    }
+}
+

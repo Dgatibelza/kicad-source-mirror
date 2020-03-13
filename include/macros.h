@@ -31,6 +31,7 @@
 #define MACROS_H
 
 #include <wx/wx.h>
+#include <deque>
 #include <vector>
 #include <map>
 #include <set>
@@ -45,6 +46,14 @@
  * type of the parameter!
  */
 #define TO_UTF8( wxstring )  ( (const char*) (wxstring).utf8_str() )
+
+/**
+ * Stringifies the given parameter by placing in quotes
+ * @param cstring STRING (no spaces)
+ * @return "STRING"
+ */
+#define TO_STR2(x) #x
+#define TO_STR(x) TO_STR2(x)
 
 /**
  * function FROM_UTF8
@@ -94,9 +103,12 @@ static inline const wxChar* GetChars( const wxString& s )
     return (const wxChar*) s.c_str();
 }
 
-/// # of elements in an array
-#define DIM( x )    unsigned( sizeof(x) / sizeof( (x)[0] ) )    // not size_t
-
+/// # of elements in an array.  This implements type-safe compile time checking
+template <typename T, std::size_t N>
+constexpr std::size_t arrayDim(T const (&)[N]) noexcept
+{
+    return N;
+}
 
 /**
  * Function MIRROR
@@ -114,36 +126,17 @@ void MIRROR( T& aPoint, const T& aMirrorRef )
 }
 
 
-/**
- * Function Clamp
- * limits @a value within the range @a lower <= @a value <= @a upper.  It will work
- * on temporary expressions, since they are evaluated only once, and it should work
- * on most if not all numeric types, string types, or any type for which "operator < ()"
- * is present. The arguments are accepted in this order so you can remember the
- * expression as a memory aid:
- * <p>
- * result is:  lower <= value <= upper
- */
-template <typename T> inline const T& Clamp( const T& lower, const T& value, const T& upper )
-{
-    wxASSERT( lower <= upper );
-    if( value < lower )
-        return lower;
-    else if( upper < value )
-        return upper;
-    return value;
-}
-
-
 #ifdef SWIG
 /// Declare a std::vector and also the swig %template in unison
 #define DECL_VEC_FOR_SWIG(TypeName, MemberType) namespace std { %template(TypeName) vector<MemberType>; } typedef std::vector<MemberType> TypeName;
+#define DECL_DEQ_FOR_SWIG(TypeName, MemberType) namespace std { %template(TypeName) deque<MemberType>; } typedef std::deque<MemberType> TypeName;
 #define DECL_MAP_FOR_SWIG(TypeName, KeyType, ValueType) namespace std { %template(TypeName) map<KeyType, ValueType>; } typedef std::map<KeyType, ValueType> TypeName;
 #define DECL_SPTR_FOR_SWIG(TypeName, MemberType) %shared_ptr(MemberType) namespace std { %template(TypeName) shared_ptr<MemberType>; } typedef std::shared_ptr<MemberType> TypeName;
 #define DECL_SET_FOR_SWIG(TypeName, MemberType) namespace std { %template(TypeName) set<MemberType>; } typedef std::set<MemberType> TypeName;
 #else
 /// Declare a std::vector but no swig %template
 #define DECL_VEC_FOR_SWIG(TypeName, MemberType) typedef std::vector<MemberType> TypeName;
+#define DECL_DEQ_FOR_SWIG(TypeName, MemberType) typedef std::deque<MemberType> TypeName;
 #define DECL_MAP_FOR_SWIG(TypeName, KeyType, ValueType) typedef std::map<KeyType, ValueType> TypeName;
 #define DECL_SPTR_FOR_SWIG(TypeName, MemberType) typedef std::shared_ptr<MemberType> TypeName;
 #define DECL_SET_FOR_SWIG(TypeName, MemberType) typedef std::set<MemberType> TypeName;

@@ -22,6 +22,7 @@
 #ifndef __PNS_LINE_H
 #define __PNS_LINE_H
 
+#include <math/box2.h>
 #include <math/vector2d.h>
 
 #include <geometry/direction45.h>
@@ -34,12 +35,12 @@
 
 namespace PNS {
 
+class LINKED_ITEM;
 class NODE;
-class SEGMENT;
 class VIA;
 
 /**
- * Class LINE
+ * LINE
  *
  * Represents a track on a PCB, connecting two non-trivial joints (that is,
  * vias, pads, junctions between multiple traces or two traces different widths
@@ -60,7 +61,7 @@ class VIA;
 class LINE : public ITEM
 {
 public:
-    typedef std::vector<SEGMENT*> SEGMENT_REFS;
+    typedef std::vector<LINKED_ITEM*> SEGMENT_REFS;
 
     /**
      * Constructor
@@ -70,6 +71,7 @@ public:
     {
         m_hasVia = false;
         m_width = 1;        // Dummy value
+        m_snapThreshhold = 0;
     }
 
     LINE( const LINE& aOther );
@@ -79,14 +81,32 @@ public:
      * Copies properties (net, layers, etc.) from a base line and replaces the shape
      * by another
      **/
-    LINE( const LINE& aBase, const SHAPE_LINE_CHAIN& aLine ) :
-        ITEM( aBase ),
-        m_line( aLine ),
-        m_width( aBase.m_width )
+    LINE( const LINE& aBase, const SHAPE_LINE_CHAIN& aLine )
+            : ITEM( aBase ),
+              m_line( aLine ),
+              m_width( aBase.m_width ),
+              m_snapThreshhold( aBase.m_snapThreshhold )
     {
         m_net = aBase.m_net;
         m_layers = aBase.m_layers;
         m_hasVia = false;
+    }
+
+    /**
+     * Constructor
+     * Constructs a LINE for a lone VIA (ie a stitching via).
+     * @param aVia
+     */
+    LINE( const VIA& aVia ) :
+        ITEM( LINE_T )
+    {
+        m_hasVia = true;
+        m_via = aVia;
+        m_width = aVia.Diameter();
+        m_net = aVia.Net();
+        m_layers = aVia.Layers();
+        m_rank = aVia.Rank();
+        m_snapThreshhold = 0;
     }
 
     ~LINE();
@@ -99,12 +119,13 @@ public:
     /// @copydoc ITEM::Clone()
     virtual LINE* Clone() const override;
 
-    const LINE& operator=( const LINE& aOther );
+    LINE& operator=( const LINE& aOther );
 
     ///> Assigns a shape to the line (a polyline/line chain)
     void SetShape( const SHAPE_LINE_CHAIN& aLine )
     {
         m_line = aLine;
+        m_line.SetWidth( m_width );
     }
 
     ///> Returns the shape of the line
@@ -137,6 +158,12 @@ public:
         return m_line.PointCount();
     }
 
+    ///> Returns the number of arcs in the line
+    int ArcCount() const
+    {
+        return m_line.ArcCount();
+    }
+
     ///> Returns the aIdx-th point of the line
     const VECTOR2I& CPoint( int aIdx ) const
     {
@@ -153,6 +180,7 @@ public:
     void SetWidth( int aWidth )
     {
         m_width = aWidth;
+        m_line.SetWidth( aWidth );
     }
 
     ///> Returns line width
@@ -171,7 +199,7 @@ public:
     /* Linking functions */
 
     ///> Adds a reference to a segment registered in a NODE that is a part of this line.
-    void LinkSegment( SEGMENT* aSeg )
+    void LinkSegment( LINKED_ITEM* aSeg )
     {
         m_segmentRefs.push_back( aSeg );
     }
@@ -194,13 +222,13 @@ public:
     }
 
     ///> Checks if the segment aSeg is a part of the line.
-    bool ContainsSegment( SEGMENT* aSeg ) const
+    bool ContainsSegment( LINKED_ITEM* aSeg ) const
     {
         return std::find( m_segmentRefs.begin(), m_segmentRefs.end(),
                 aSeg ) != m_segmentRefs.end();
     }
 
-    SEGMENT* GetLink( int aIndex ) const
+    LINKED_ITEM* GetLink( int aIndex ) const
     {
         return m_segmentRefs[aIndex];
     }
@@ -236,7 +264,7 @@ public:
             SHAPE_LINE_CHAIN& aPost,
             bool aCw ) const;
 
-    void Walkaround( const SHAPE_LINE_CHAIN& aObstacle,
+    bool Walkaround( const SHAPE_LINE_CHAIN& aObstacle,
             SHAPE_LINE_CHAIN& aPath,
             bool aCw ) const;
 
@@ -256,8 +284,8 @@ public:
     virtual void Unmark( int aMarker = -1 ) override;
     virtual int Marker() const override;
 
-    void DragSegment( const VECTOR2I& aP, int aIndex, int aSnappingThreshold = 0, bool aFreeAngle = false );
-    void DragCorner( const VECTOR2I& aP, int aIndex, int aSnappingThreshold = 0, bool aFreeAngle = false );
+    void DragSegment( const VECTOR2I& aP, int aIndex, bool aFreeAngle = false );
+    void DragCorner( const VECTOR2I& aP, int aIndex, bool aFreeAngle = false );
 
     void SetRank( int aRank ) override;
     int Rank() const override;
@@ -265,20 +293,32 @@ public:
     bool HasLoops() const;
     bool HasLockedSegments() const;
 
+    void Clear();
+    void Merge ( const LINE& aOther );
+
     OPT_BOX2I ChangedArea( const LINE* aOther ) const;
 
+    void SetSnapThreshhold( int aThreshhold )
+    {
+        m_snapThreshhold = aThreshhold;
+    }
+
+    int GetSnapThreshhold() const
+    {
+        return m_snapThreshhold;
+    }
+
 private:
+    void dragSegment45( const VECTOR2I& aP, int aIndex );
+    void dragCorner45( const VECTOR2I& aP, int aIndex );
+    void dragSegmentFree( const VECTOR2I& aP, int aIndex );
+    void dragCornerFree( const VECTOR2I& aP, int aIndex );
 
-    void dragSegment45( const VECTOR2I& aP, int aIndex, int aSnappingThreshold );
-    void dragCorner45( const VECTOR2I& aP, int aIndex, int aSnappingThreshold  );
-    void dragSegmentFree( const VECTOR2I& aP, int aIndex, int aSnappingThreshold );
-    void dragCornerFree( const VECTOR2I& aP, int aIndex, int aSnappingThreshold  );
+    VECTOR2I snapToNeighbourSegments(
+            const SHAPE_LINE_CHAIN& aPath, const VECTOR2I& aP, int aIndex ) const;
 
-    VECTOR2I snapToNeighbourSegments( const SHAPE_LINE_CHAIN& aPath, const VECTOR2I &aP,
-                                      int aIndex, int aThreshold) const;
-
-    VECTOR2I snapDraggedCorner( const SHAPE_LINE_CHAIN& aPath, const VECTOR2I &aP,
-                                int aIndex, int aThreshold ) const;
+    VECTOR2I snapDraggedCorner(
+            const SHAPE_LINE_CHAIN& aPath, const VECTOR2I& aP, int aIndex ) const;
 
     ///> Copies m_segmentRefs from the line aParent.
     void copyLinks( const LINE* aParent ) ;
@@ -295,6 +335,9 @@ private:
 
     ///> If true, the line ends with a via
     bool m_hasVia;
+
+    ///> Width to smooth out jagged segments
+    int m_snapThreshhold;
 
     ///> Via at the end point, if m_hasVia == true
     VIA m_via;

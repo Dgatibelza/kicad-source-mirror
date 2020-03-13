@@ -2,7 +2,7 @@
  * This program source code file is part of KiCad, a free EDA CAD application.
  *
  * Copyright (C) 2015 Jean-Pierre Charras, jaen-pierre.charras@gipsa-lab.inpg.com
- * Copyright (C) 1992-2017 KiCad Developers, see AUTHORS.txt for contributors.
+ * Copyright (C) 1992-2019 KiCad Developers, see AUTHORS.txt for contributors.
  *
  * This program is free software; you can redistribute it and/or
  * modify it under the terms of the GNU General Public License
@@ -23,21 +23,19 @@
  */
 
 /**
- * @file base_struct.cpp
  * @brief Implementation of EDA_ITEM base class for KiCad.
  */
+
+#include <deque>
 
 #include <fctsys.h>
 #include <trigo.h>
 #include <common.h>
 #include <macros.h>
-#include <kicad_string.h>
-#include <wxstruct.h>
-#include <class_drawpanel.h>
-#include <class_base_screen.h>
+#include <base_screen.h>
 #include <bitmaps.h>
-
-#include "../eeschema/dialogs/dialog_schematic_find.h"
+#include <trace_helpers.h>
+#include <eda_rect.h>
 
 
 static const unsigned char dummy_png[] = {
@@ -54,8 +52,6 @@ static const unsigned char dummy_png[] = {
 };
 
 static const BITMAP_OPAQUE dummy_xpm[1] = {{ dummy_png, sizeof( dummy_png ), "dummy_xpm" }};
-
-const wxString traceFindReplace = "KICAD_TRACE_FIND_REPLACE";
 
 
 enum textbox {
@@ -88,12 +84,8 @@ EDA_ITEM::EDA_ITEM( const EDA_ITEM& base )
 void EDA_ITEM::initVars()
 {
     m_StructType = TYPE_NOT_INIT;
-    Pnext       = NULL;     // Linked list: Link (next struct)
-    Pback       = NULL;     // Linked list: Link (previous struct)
     m_Parent    = NULL;     // Linked list: Link (parent struct)
-    m_List      = NULL;     // I am not on any list yet
     m_Flags     = 0;        // flags for editions and other
-    SetTimeStamp( 0 );      // Time stamp used for logical links
     m_Status    = 0;
     m_forceVisible = false; // true to override the visibility setting of the item.
 }
@@ -129,50 +121,26 @@ EDA_ITEM* EDA_ITEM::Clone() const
 }
 
 
-SEARCH_RESULT EDA_ITEM::IterateForward( EDA_ITEM*       listStart,
-                                        INSPECTOR       inspector,
-                                        void*           testData,
-                                        const KICAD_T   scanTypes[] )
-{
-    EDA_ITEM* p = listStart;
-
-    for( ; p; p = p->Pnext )
-    {
-        if( SEARCH_QUIT == p->Visit( inspector, testData, scanTypes ) )
-            return SEARCH_QUIT;
-    }
-
-    return SEARCH_CONTINUE;
-}
-
-
 // see base_struct.h
 // many classes inherit this method, be careful:
+//TODO (snh): Fix this to use std::set instead of C-style vector
 SEARCH_RESULT EDA_ITEM::Visit( INSPECTOR inspector, void* testData, const KICAD_T scanTypes[] )
 {
-    KICAD_T stype;
-
 #if 0 && defined(DEBUG)
     std::cout << GetClass().mb_str() << ' ';
 #endif
 
-    for( const KICAD_T* p = scanTypes;  (stype = *p) != EOT;   ++p )
+    if( IsType( scanTypes ) )
     {
-        // If caller wants to inspect my type
-        if( stype == Type() )
-        {
-            if( SEARCH_QUIT == inspector( this, testData ) )
-                return SEARCH_QUIT;
-
-            break;
-        }
+        if( SEARCH_RESULT::QUIT == inspector( this, testData ) )
+            return SEARCH_RESULT::QUIT;
     }
 
-    return SEARCH_CONTINUE;
+    return SEARCH_RESULT::CONTINUE;
 }
 
 
-wxString EDA_ITEM::GetSelectMenuText() const
+wxString EDA_ITEM::GetSelectMenuText( EDA_UNITS aUnits ) const
 {
     wxFAIL_MSG( wxT( "GetSelectMenuText() was not overridden for schematic item type " ) +
                 GetClass() );
@@ -210,9 +178,6 @@ bool EDA_ITEM::Matches( const wxString& aText, wxFindReplaceData& aSearchData )
 
 bool EDA_ITEM::Replace( wxFindReplaceData& aSearchData, wxString& aText )
 {
-    wxCHECK_MSG( IsReplaceable(), false,
-                 wxT( "Attempt to replace text in <" ) + GetClass() + wxT( "> item." ) );
-
     wxString searchString = (aSearchData.GetFlags() & wxFR_MATCHCASE) ? aText : aText.Upper();
 
     int result = searchString.Find( (aSearchData.GetFlags() & wxFR_MATCHCASE) ?
@@ -256,11 +221,6 @@ EDA_ITEM& EDA_ITEM::operator=( const EDA_ITEM& aItem )
     m_Parent     = aItem.m_Parent;
     m_forceVisible = aItem.m_forceVisible;
 
-    // A copy of an item cannot have the same time stamp as the original item.
-    SetTimeStamp( GetNewTimeStamp() );
-
-    // do not copy list related fields (Pnext, Pback, m_List)
-
     return *this;
 }
 
@@ -285,22 +245,6 @@ BITMAP_DEF EDA_ITEM::GetMenuImage() const
 }
 
 #if defined(DEBUG)
-
-// A function that should have been in wxWidgets
-std::ostream& operator<<( std::ostream& out, const wxSize& size )
-{
-    out << " width=\"" << size.GetWidth() << "\" height=\"" << size.GetHeight() << "\"";
-    return out;
-}
-
-
-// A function that should have been in wxWidgets
-std::ostream& operator<<( std::ostream& out, const wxPoint& pt )
-{
-    out << " x=\"" << pt.x << "\" y=\"" << pt.y << "\"";
-    return out;
-}
-
 
 void EDA_ITEM::ShowDummy( std::ostream& os ) const
 {
@@ -407,6 +351,9 @@ bool EDA_RECT::Intersects( const wxPoint& aPoint1, const wxPoint& aPoint2 ) cons
 
 bool EDA_RECT::Intersects( const EDA_RECT& aRect ) const
 {
+    if( !m_init )
+        return false;
+
     // this logic taken from wxWidgets' geometry.cpp file:
     bool rc;
     EDA_RECT me(*this);
@@ -435,6 +382,9 @@ bool EDA_RECT::Intersects( const EDA_RECT& aRect ) const
 
 bool EDA_RECT::Intersects( const EDA_RECT& aRect, double aRot ) const
 {
+    if( !m_init )
+        return false;
+
     /* Most rectangles will be axis aligned.
      * It is quicker to check for this case and pass the rect
      * to the simpler intersection test
@@ -567,6 +517,9 @@ const wxPoint EDA_RECT::FarthestPointTo( const wxPoint& aPoint ) const
 
 bool EDA_RECT::IntersectsCircle( const wxPoint& aCenter, const int aRadius ) const
 {
+    if( !m_init )
+        return false;
+
     wxPoint closest = ClosestPointTo( aCenter );
 
     double dx = aCenter.x - closest.x;
@@ -580,6 +533,9 @@ bool EDA_RECT::IntersectsCircle( const wxPoint& aCenter, const int aRadius ) con
 
 bool EDA_RECT::IntersectsCircleEdge( const wxPoint& aCenter, const int aRadius, const int aWidth ) const
 {
+    if( !m_init )
+        return false;
+
     EDA_RECT me( *this );
     me.Normalize();         // ensure size is >= 0
 
@@ -677,6 +633,17 @@ EDA_RECT& EDA_RECT::Inflate( wxCoord dx, wxCoord dy )
 
 void EDA_RECT::Merge( const EDA_RECT& aRect )
 {
+    if( !m_init )
+    {
+        if( aRect.IsValid() )
+        {
+            m_Pos = aRect.GetPosition();
+            m_Size = aRect.GetSize();
+            m_init = true;
+        }
+        return;
+    }
+
     Normalize();        // ensure width and height >= 0
     EDA_RECT rect = aRect;
     rect.Normalize();   // ensure width and height >= 0
@@ -694,6 +661,13 @@ void EDA_RECT::Merge( const EDA_RECT& aRect )
 
 void EDA_RECT::Merge( const wxPoint& aPoint )
 {
+    if( !m_init )
+    {
+        m_Pos = aPoint;
+        m_Size = wxSize( 0, 0 );
+        return;
+    }
+
     Normalize();        // ensure width and height >= 0
 
     wxPoint  end = GetEnd();

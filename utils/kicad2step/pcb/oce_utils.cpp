@@ -43,6 +43,7 @@
 #include <STEPCAFControl_Reader.hxx>
 #include <STEPCAFControl_Writer.hxx>
 #include <APIHeaderSection_MakeHeader.hxx>
+#include <Standard_Version.hxx>
 #include <TCollection_ExtendedString.hxx>
 #include <TDataStd_Name.hxx>
 #include <TDF_LabelSequence.hxx>
@@ -56,6 +57,7 @@
 #include <BRepBuilderAPI.hxx>
 #include <BRepBuilderAPI_MakeEdge.hxx>
 #include <BRepBuilderAPI_Transform.hxx>
+#include <BRepBuilderAPI_GTransform.hxx>
 #include <BRepBuilderAPI_MakeFace.hxx>
 #include <BRepPrimAPI_MakePrism.hxx>
 #include <BRepPrimAPI_MakeCylinder.hxx>
@@ -67,21 +69,23 @@
 #include <TopoDS_Compound.hxx>
 #include <TopoDS_Builder.hxx>
 
+#include <Standard_Failure.hxx>
+
 #include <gp_Ax2.hxx>
 #include <gp_Circ.hxx>
 #include <gp_Dir.hxx>
 #include <gp_Pnt.hxx>
 
-#define USER_PREC (1e-4)
-#define USER_ANGLE_PREC (1e-6)
+static constexpr double USER_PREC = 1e-4;
+static constexpr double USER_ANGLE_PREC = 1e-6;
 // minimum PCB thickness in mm (2 microns assumes a very thin polyimide film)
-#define THICKNESS_MIN (0.002)
+static constexpr double THICKNESS_MIN = 0.002;
 // default PCB thickness in mm
-#define THICKNESS_DEFAULT (1.6)
+static constexpr double THICKNESS_DEFAULT = 1.6;
 // nominal offset from the board
-#define BOARD_OFFSET (0.05 )
+static constexpr double BOARD_OFFSET = 0.05;
 // min. length**2 below which 2 points are considered coincident
-#define MIN_LENGTH2 (0.0001)
+static constexpr double MIN_LENGTH2 = MIN_DISTANCE * MIN_DISTANCE;
 
 static void getEndPoints( const KICADCURVE& aCurve, double& spx0, double& spy0,
     double& epx0, double& epy0 )
@@ -148,7 +152,8 @@ enum FormatType
     FMT_STEP = 1,
     FMT_IGES = 2,
     FMT_EMN  = 3,
-    FMT_IDF  = 4
+    FMT_IDF  = 4,
+    FMT_WRL  = 5,  // .wrl files are replaced with MCAD equivalent
 };
 
 
@@ -159,14 +164,19 @@ FormatType fileType( const char* aFileName )
     if( !lfile.FileExists() )
     {
         std::ostringstream ostr;
+#ifdef DEBUG
         ostr << __FILE__ << ": " << __FUNCTION__ << ": " << __LINE__ << "\n";
+#endif /* DEBUG */
         ostr << "  * no such file: '" << aFileName << "'\n";
-        wxLogMessage( "%s\n", ostr.str().c_str() );
+        wxLogMessage( "%s", ostr.str().c_str() );
 
         return FMT_NONE;
     }
 
     wxString ext = lfile.GetExt();
+
+    if( ext.Lower() == "wrl" )
+        return FMT_WRL;
 
     if( ext == "idf" || ext == "IDF" )
         return FMT_IDF;     // component outline
@@ -217,6 +227,7 @@ PCBMODEL::PCBMODEL()
     m_precision = USER_PREC;
     m_angleprec = USER_ANGLE_PREC;
     m_thickness = THICKNESS_DEFAULT;
+    m_minDistance2 = MIN_LENGTH2;
     m_minx = 1.0e10;    // absurdly large number; any valid PCB X value will be smaller
     m_mincurve = m_curves.end();
     BRepBuilderAPI::Precision( 1.0e-6 );
@@ -243,12 +254,14 @@ bool PCBMODEL::AddOutlineSegment( KICADCURVE* aCurve )
         double dy = aCurve->m_end.y - aCurve->m_start.y;
         double distance = dx * dx + dy * dy;
 
-        if( distance < MIN_LENGTH2 )
+        if( distance < m_minDistance2 )
         {
             std::ostringstream ostr;
+#ifdef DEBUG
             ostr << __FILE__ << ": " << __FUNCTION__ << ": " << __LINE__ << "\n";
-            ostr << "  * rejected a zero-length line\n";
-            wxLogMessage( "%s\n", ostr.str().c_str() );
+#endif /* DEBUG */
+            ostr << "  * rejected a zero-length " << aCurve->Describe() << "\n";
+            wxLogMessage( "%s", ostr.str().c_str() );
             return false;
         }
 
@@ -260,12 +273,14 @@ bool PCBMODEL::AddOutlineSegment( KICADCURVE* aCurve )
         double dy = aCurve->m_end.y - aCurve->m_start.y;
         double rad = dx * dx + dy * dy;
 
-        if( rad < MIN_LENGTH2 )
+        if( rad < m_minDistance2 )
         {
             std::ostringstream ostr;
+#ifdef DEBUG
             ostr << __FILE__ << ": " << __FUNCTION__ << ": " << __LINE__ << "\n";
-            ostr << "  * rejected a zero-radius arc or circle\n";
-            wxLogMessage( "%s\n", ostr.str().c_str() );
+#endif /* DEBUG */
+            ostr << "  * rejected a zero-radius " << aCurve->Describe() << "\n";
+            wxLogMessage( "%s", ostr.str().c_str() );
             return false;
         }
 
@@ -298,12 +313,15 @@ bool PCBMODEL::AddOutlineSegment( KICADCURVE* aCurve )
             dy = aCurve->m_ep.y - aCurve->m_end.y;
             rad = dx * dx + dy * dy;
 
-            if( rad < MIN_LENGTH2 )
+            if( rad < m_minDistance2 )
             {
                 std::ostringstream ostr;
+#ifdef DEBUG
                 ostr << __FILE__ << ": " << __FUNCTION__ << ": " << __LINE__ << "\n";
-                ostr << "  * rejected an arc with equivalent end points\n";
-                wxLogMessage( "%s\n", ostr.str().c_str() );
+#endif /* DEBUG */
+                ostr << "  * rejected an arc with equivalent end points, "
+                    << aCurve->Describe() << "\n";
+                wxLogMessage( "%s", ostr.str().c_str() );
                 return false;
             }
         }
@@ -404,9 +422,11 @@ bool PCBMODEL::AddOutlineSegment( KICADCURVE* aCurve )
             do
             {
                 std::ostringstream ostr;
+#ifdef DEBUG
                 ostr << __FILE__ << ": " << __FUNCTION__ << ": " << __LINE__ << "\n";
+#endif /* DEBUG */
                 ostr << "  * unsupported curve type: '" << aCurve->m_form << "'\n";
-                wxLogMessage( "%s\n", ostr.str().c_str() );
+                wxLogMessage( "%s", ostr.str().c_str() );
             } while( 0 );
 
             return false;
@@ -510,6 +530,7 @@ bool PCBMODEL::AddPadHole( KICADPAD* aPad )
     p3.y += aPad->m_position.y;
 
     OUTLINE oln;
+    oln.SetMinSqDistance( m_minDistance2 );
     KICADCURVE crv0, crv1, crv2, crv3;
 
     // crv0 = arc
@@ -557,19 +578,32 @@ bool PCBMODEL::AddPadHole( KICADPAD* aPad )
 
 
 // add a component at the given position and orientation
-bool PCBMODEL::AddComponent( const std::string& aFileName, const std::string aRefDes,
+bool PCBMODEL::AddComponent( const std::string& aFileName, const std::string& aRefDes,
     bool aBottom, DOUBLET aPosition, double aRotation,
-    TRIPLET aOffset, TRIPLET aOrientation )
+    TRIPLET aOffset, TRIPLET aOrientation, TRIPLET aScale )
 {
+    if( aFileName.empty() )
+    {
+        std::ostringstream ostr;
+#ifdef DEBUG
+        ostr << __FILE__ << ": " << __FUNCTION__ << ": " << __LINE__ << "\n";
+#endif /* DEBUG */
+        ostr << "  * no model defined for component '" << aRefDes << "'\n";
+        wxLogMessage( "%s", ostr.str().c_str() );
+        return false;
+    }
+
     // first retrieve a label
     TDF_Label lmodel;
 
-    if( !getModelLabel( aFileName, lmodel ) )
+    if( !getModelLabel( aFileName, aScale, lmodel ) )
     {
         std::ostringstream ostr;
+#ifdef DEBUG
         ostr << __FILE__ << ": " << __FUNCTION__ << ": " << __LINE__ << "\n";
+#endif /* DEBUG */
         ostr << "  * no model for filename '" << aFileName << "'\n";
-        wxLogMessage( "%s\n", ostr.str().c_str() );
+        wxLogMessage( "%s", ostr.str().c_str() );
         return false;
     }
 
@@ -579,9 +613,11 @@ bool PCBMODEL::AddComponent( const std::string& aFileName, const std::string aRe
     if( !getModelLocation( aBottom, aPosition, aRotation, aOffset, aOrientation, toploc ) )
     {
         std::ostringstream ostr;
+#ifdef DEBUG
         ostr << __FILE__ << ": " << __FUNCTION__ << ": " << __LINE__ << "\n";
+#endif /* DEBUG */
         ostr << "  * no location data for filename '" << aFileName << "'\n";
-        wxLogMessage( "%s\n", ostr.str().c_str() );
+        wxLogMessage( "%s", ostr.str().c_str() );
         return false;
     }
 
@@ -591,9 +627,11 @@ bool PCBMODEL::AddComponent( const std::string& aFileName, const std::string aRe
     if( llabel.IsNull() )
     {
         std::ostringstream ostr;
+#ifdef DEBUG
         ostr << __FILE__ << ": " << __FUNCTION__ << ": " << __LINE__ << "\n";
+#endif /* DEBUG */
         ostr << "  * could not add component with filename '" << aFileName << "'\n";
-        wxLogMessage( "%s\n", ostr.str().c_str() );
+        wxLogMessage( "%s", ostr.str().c_str() );
         return false;
     }
 
@@ -633,15 +671,18 @@ bool PCBMODEL::CreatePCB()
     {
         m_hasPCB = true;
         std::ostringstream ostr;
+#ifdef DEBUG
         ostr << __FILE__ << ": " << __FUNCTION__ << ": " << __LINE__ << "\n";
+#endif /* DEBUG */
         ostr << "  * no valid board outline\n";
-        wxLogMessage( "%s\n", ostr.str().c_str() );
+        wxLogMessage( "%s", ostr.str().c_str() );
         return false;
     }
 
     m_hasPCB = true;    // whether or not operations fail we note that CreatePCB has been invoked
     TopoDS_Shape board;
     OUTLINE oln;    // loop to assemble (represents PCB outline and cutouts)
+    oln.SetMinSqDistance( m_minDistance2 );
     oln.AddSegment( *m_mincurve );
     m_curves.erase( m_mincurve );
 
@@ -654,9 +695,11 @@ bool PCBMODEL::CreatePCB()
                 if( !oln.MakeShape( board, m_thickness ) )
                 {
                     std::ostringstream ostr;
+#ifdef DEBUG
                     ostr << __FILE__ << ": " << __FUNCTION__ << ": " << __LINE__ << "\n";
+#endif /* DEBUG */
                     ostr << "  * could not create board extrusion\n";
-                    wxLogMessage( "%s\n", ostr.str().c_str() );
+                    wxLogMessage( "%s", ostr.str().c_str() );
 
                     return false;
                 }
@@ -672,9 +715,11 @@ bool PCBMODEL::CreatePCB()
                 else
                 {
                     std::ostringstream ostr;
+#ifdef DEBUG
                     ostr << __FILE__ << ": " << __FUNCTION__ << ": " << __LINE__ << "\n";
+#endif /* DEBUG */
                     ostr << "  * could not create board cutout\n";
-                    wxLogMessage( "%s\n", ostr.str().c_str() );
+                    wxLogMessage( "%s", ostr.str().c_str() );
                 }
             }
 
@@ -690,12 +735,13 @@ bool PCBMODEL::CreatePCB()
         }
 
         std::list< KICADCURVE >::iterator sC = m_curves.begin();
-        std::list< KICADCURVE >::iterator eC = m_curves.end();
+        bool added = false;
 
-        while( sC != eC )
+        while( sC != m_curves.end() )
         {
             if( oln.AddSegment( *sC ) )
             {
+                added = true;
                 m_curves.erase( sC );
                 break;
             }
@@ -703,12 +749,18 @@ bool PCBMODEL::CreatePCB()
             ++sC;
         }
 
-        if( sC == eC && !oln.m_curves.empty() )
+        if( !added && !oln.m_curves.empty() )
         {
             std::ostringstream ostr;
+#ifdef DEBUG
             ostr << __FILE__ << ": " << __FUNCTION__ << ": " << __LINE__ << "\n";
+#endif /* DEBUG */
             ostr << "  * could not close outline (dropping outline data with " << oln.m_curves.size() << " segments)\n";
-            wxLogMessage( "%s\n", ostr.str().c_str() );
+
+            for( const auto& c : oln.m_curves )
+                ostr << "    + " << c.Describe() << "\n";
+
+            wxLogMessage( "%s", ostr.str().c_str() );
             oln.Clear();
 
             if( !m_curves.empty() )
@@ -726,9 +778,11 @@ bool PCBMODEL::CreatePCB()
             if( !oln.MakeShape( board, m_thickness ) )
             {
                 std::ostringstream ostr;
+#ifdef DEBUG
                 ostr << __FILE__ << ": " << __FUNCTION__ << ": " << __LINE__ << "\n";
+#endif /* DEBUG */
                 ostr << "  * could not create board extrusion\n";
-                wxLogMessage( "%s\n", ostr.str().c_str() );
+                wxLogMessage( "%s", ostr.str().c_str() );
                 return false;
             }
         }
@@ -743,15 +797,17 @@ bool PCBMODEL::CreatePCB()
             else
             {
                 std::ostringstream ostr;
+#ifdef DEBUG
                 ostr << __FILE__ << ": " << __FUNCTION__ << ": " << __LINE__ << "\n";
+#endif /* DEBUG */
                 ostr << "  * could not create board cutout\n";
-                wxLogMessage( "%s\n", ostr.str().c_str() );
+                wxLogMessage( "%s", ostr.str().c_str() );
             }
         }
     }
 
     // subtract cutouts (if any)
-    for( auto i : m_cutouts )
+    for( const auto& i : m_cutouts )
         board = BRepAlgoAPI_Cut( board, i );
 
     // push the board to the data structure
@@ -775,20 +831,25 @@ bool PCBMODEL::CreatePCB()
         topex.Next();
     }
 
+#if ( defined OCC_VERSION_HEX ) && ( OCC_VERSION_HEX > 0x070101 )
+    m_assy->UpdateAssemblies();
+#endif
     return true;
 }
 
 
 #ifdef SUPPORTS_IGES
 // write the assembly model in IGES format
-bool PCBMODEL::WriteIGES( const std::string& aFileName, bool aOverwrite )
+bool PCBMODEL::WriteIGES( const std::string& aFileName )
 {
     if( m_pcb_label.IsNull() )
     {
         std::ostringstream ostr;
+#ifdef DEBUG
         ostr << __FILE__ << ": " << __FUNCTION__ << ": " << __LINE__ << "\n";
+#endif /* DEBUG */
         ostr << "  * No valid PCB assembly; cannot create output file " << aFileName << "\n";
-        wxLogMessage( "%s\n", ostr.str().c_str() );
+        wxLogMessage( "%s", ostr.str().c_str() );
         return false;
     }
 
@@ -813,14 +874,16 @@ bool PCBMODEL::WriteIGES( const std::string& aFileName, bool aOverwrite )
 
 
 // write the assembly model in STEP format
-bool PCBMODEL::WriteSTEP( const std::string& aFileName, bool aOverwrite )
+bool PCBMODEL::WriteSTEP( const std::string& aFileName )
 {
     if( m_pcb_label.IsNull() )
     {
         std::ostringstream ostr;
+#ifdef DEBUG
         ostr << __FILE__ << ": " << __FUNCTION__ << ": " << __LINE__ << "\n";
+#endif /* DEBUG */
         ostr << "  * No valid PCB assembly; cannot create output file " << aFileName << "\n";
-        wxLogMessage( "%s\n", ostr.str().c_str() );
+        wxLogMessage( "%s", ostr.str().c_str() );
         return false;
     }
 
@@ -847,9 +910,11 @@ bool PCBMODEL::WriteSTEP( const std::string& aFileName, bool aOverwrite )
 }
 
 
-bool PCBMODEL::getModelLabel( const std::string aFileName, TDF_Label& aLabel )
+bool PCBMODEL::getModelLabel( const std::string aFileName, TRIPLET aScale, TDF_Label& aLabel )
 {
-    MODEL_MAP::const_iterator mm = m_models.find( aFileName );
+    std::string model_key = aFileName + "_" + std::to_string( aScale.x ) + "_" + std::to_string( aScale.y ) + "_" + std::to_string( aScale.z );
+
+    MODEL_MAP::const_iterator mm = m_models.find( model_key );
 
     if( mm != m_models.end() )
     {
@@ -870,9 +935,11 @@ bool PCBMODEL::getModelLabel( const std::string aFileName, TDF_Label& aLabel )
             if( !readIGES( doc, aFileName.c_str() ) )
             {
                 std::ostringstream ostr;
+#ifdef DEBUG
                 ostr << __FILE__ << ": " << __FUNCTION__ << ": " << __LINE__ << "\n";
+#endif /* DEBUG */
                 ostr << "  * readIGES() failed on filename '" << aFileName << "'\n";
-                wxLogMessage( "%s\n", ostr.str().c_str() );
+                wxLogMessage( "%s", ostr.str().c_str() );
                 return false;
             }
             break;
@@ -881,11 +948,70 @@ bool PCBMODEL::getModelLabel( const std::string aFileName, TDF_Label& aLabel )
             if( !readSTEP( doc, aFileName.c_str() ) )
             {
                 std::ostringstream ostr;
+#ifdef DEBUG
                 ostr << __FILE__ << ": " << __FUNCTION__ << ": " << __LINE__ << "\n";
+#endif /* DEBUG */
                 ostr << "  * readSTEP() failed on filename '" << aFileName << "'\n";
-                wxLogMessage( "%s\n", ostr.str().c_str() );
+                wxLogMessage( "%s", ostr.str().c_str() );
                 return false;
             }
+            break;
+
+        case FMT_WRL:
+            /* WRL files are preferred for internal rendering,
+             * due to superior material properties, etc.
+             * However they are not suitable for MCAD export.
+             *
+             * If a .wrl file is specified, attempt to locate
+             * a replacement file for it.
+             *
+             * If a valid replacement file is found, the label
+             * for THAT file will be associated with the .wrl file
+             *
+             */
+            {
+                wxFileName wrlName( aFileName );
+
+                wxString basePath = wrlName.GetPath();
+                wxString baseName = wrlName.GetName();
+
+                // List of alternate files to look for
+                // Given in order of preference
+                // (Break if match is found)
+                wxArrayString alts;
+
+                // Step files
+                alts.Add( "stp" );
+                alts.Add( "step" );
+                alts.Add( "STP" );
+                alts.Add( "STEP" );
+                alts.Add( "Stp" );
+                alts.Add( "Step" );
+
+                // IGES files
+                alts.Add( "iges" );
+                alts.Add( "IGES" );
+                alts.Add( "igs" );
+                alts.Add( "IGS" );
+
+                //TODO - Other alternative formats?
+
+                for( const auto& alt : alts )
+                {
+                    wxFileName altFile( basePath, baseName + "." + alt );
+
+                    if( altFile.IsOk() && altFile.FileExists() )
+                    {
+                        std::string altFileName = altFile.GetFullPath().ToStdString();
+
+                        if( getModelLabel( altFileName, aScale, aLabel ) )
+                        {
+                            return true;
+                        }
+                    }
+                }
+            }
+
             break;
 
         // TODO: implement IDF and EMN converters
@@ -894,14 +1020,16 @@ bool PCBMODEL::getModelLabel( const std::string aFileName, TDF_Label& aLabel )
             return false;
     }
 
-    aLabel = transferModel( doc, m_doc );
+    aLabel = transferModel( doc, m_doc, aScale );
 
     if( aLabel.IsNull() )
     {
         std::ostringstream ostr;
+#ifdef DEBUG
         ostr << __FILE__ << ": " << __FUNCTION__ << ": " << __LINE__ << "\n";
+#endif /* DEBUG */
         ostr << "  * could not transfer model data from file '" << aFileName << "'\n";
-        wxLogMessage( "%s\n", ostr.str().c_str() );
+        wxLogMessage( "%s", ostr.str().c_str() );
         return false;
     }
 
@@ -912,7 +1040,7 @@ bool PCBMODEL::getModelLabel( const std::string aFileName, TDF_Label& aLabel )
     TCollection_ExtendedString partname( pname.c_str() );
     TDataStd_Name::Set( aLabel, partname );
 
-    m_models.insert( MODEL_DATUM( aFileName, aLabel ) );
+    m_models.insert( MODEL_DATUM( model_key, aLabel ) );
     ++m_components;
     return true;
 }
@@ -935,10 +1063,9 @@ bool PCBMODEL::getModelLocation( bool aBottom, DOUBLET aPosition, double aRotati
     gp_Trsf lPos;
     lPos.SetTranslation( gp_Vec( aPosition.x, -aPosition.y, 0.0 ) );
 
-    // offset (inches)
-    aOffset.x *= 25.4;
-    aOffset.y *= 25.4;
-    aOffset.z *= 25.4 + BOARD_OFFSET;
+    // Offset board thickness
+    aOffset.z += BOARD_OFFSET;
+
     gp_Trsf lRot;
 
     if( aBottom )
@@ -1053,9 +1180,16 @@ bool PCBMODEL::readSTEP( Handle(TDocStd_Document)& doc, const char* fname )
 
 
 TDF_Label PCBMODEL::transferModel( Handle( TDocStd_Document )& source,
-    Handle( TDocStd_Document )& dest )
+    Handle( TDocStd_Document )& dest, TRIPLET aScale )
 {
     // transfer data from Source into a top level component of Dest
+
+    gp_GTrsf scale_transform;
+    scale_transform.SetVectorialPart( gp_Mat( aScale.x, 0, 0,
+                                              0, aScale.y, 0,
+                                              0, 0, aScale.z ) );
+    BRepBuilderAPI_GTransform brep( scale_transform );
+
 
     // s_assy = shape tool for the source
     Handle(XCAFDoc_ShapeTool) s_assy = XCAFDoc_DocumentTool::ShapeTool ( source->Main() );
@@ -1083,7 +1217,22 @@ TDF_Label PCBMODEL::transferModel( Handle( TDocStd_Document )& source,
 
         if ( !shape.IsNull() )
         {
-            TDF_Label niulab = d_assy->AddComponent( component, shape, Standard_False );
+            brep.Perform( shape, Standard_False );
+            TopoDS_Shape scaled_shape;
+
+            if ( brep.IsDone() ) {
+                scaled_shape = brep.Shape();
+            } else {
+                std::ostringstream ostr;
+#ifdef DEBUG
+                ostr << __FILE__ << ": " << __FUNCTION__ << ": " << __LINE__ << "\n";
+#endif /* DEBUG */
+                ostr << "  * failed to scale model\n";
+                wxLogMessage( "%s", ostr.str().c_str() );
+                scaled_shape = shape;
+            }
+
+            TDF_Label niulab = d_assy->AddComponent( component, scaled_shape, Standard_False );
 
             // check for per-surface colors
             stop.Init( shape, TopAbs_FACE );
@@ -1159,6 +1308,7 @@ TDF_Label PCBMODEL::transferModel( Handle( TDocStd_Document )& source,
 OUTLINE::OUTLINE()
 {
     m_closed = false;
+    m_minDistance2 = MIN_LENGTH2;
     return;
 }
 
@@ -1210,7 +1360,7 @@ bool OUTLINE::AddSegment( const KICADCURVE& aCurve )
     dx = epx1 - spx0;
     dy = epy1 - spy0;
 
-    if( dx * dx + dy * dy < MIN_LENGTH2 )
+    if( dx * dx + dy * dy < m_minDistance2 )
     {
         m_curves.push_front( aCurve );
         m_closed = testClosed( m_curves.front(), m_curves.back() );
@@ -1221,7 +1371,7 @@ bool OUTLINE::AddSegment( const KICADCURVE& aCurve )
         dx = spx1 - spx0;
         dy = spy1 - spy0;
 
-        if( dx * dx + dy * dy < MIN_LENGTH2 )
+        if( dx * dx + dy * dy < m_minDistance2 )
         {
             KICADCURVE curve = aCurve;
             reverseCurve( curve );
@@ -1236,7 +1386,7 @@ bool OUTLINE::AddSegment( const KICADCURVE& aCurve )
     dx = spx1 - epx0;
     dy = spy1 - epy0;
 
-    if( dx * dx + dy * dy < MIN_LENGTH2 )
+    if( dx * dx + dy * dy < m_minDistance2 )
     {
         m_curves.push_back( aCurve );
         m_closed = testClosed( m_curves.front(), m_curves.back() );
@@ -1247,7 +1397,7 @@ bool OUTLINE::AddSegment( const KICADCURVE& aCurve )
         dx = epx1 - epx0;
         dy = epy1 - epy0;
 
-        if( dx * dx + dy * dy < MIN_LENGTH2 )
+        if( dx * dx + dy * dy < m_minDistance2 )
         {
             KICADCURVE curve = aCurve;
             reverseCurve( curve );
@@ -1279,12 +1429,29 @@ bool OUTLINE::MakeShape( TopoDS_Shape& aShape, double aThickness )
 
     for( auto i : m_curves )
     {
-        if( !addEdge( &wire, i, lastPoint ) )
+        bool success = false;
+
+        try
+        {
+            success = addEdge( &wire, i, lastPoint );
+        }
+        catch( const Standard_Failure& e )
+        {
+#ifdef DEBUG
+            wxLogMessage( "Exception caught: %s", e.GetMessageString() );
+#endif /* DEBUG */
+            success = false;
+        }
+
+        if( !success )
         {
             std::ostringstream ostr;
+#ifdef DEBUG
             ostr << __FILE__ << ": " << __FUNCTION__ << ": " << __LINE__ << "\n";
-            ostr << "  * failed to add an edge\n";
-            wxLogMessage( "%s\n", ostr.str().c_str() );
+#endif /* DEBUG */
+            ostr << "  * failed to add an edge: " << i.Describe() << "\n";
+            ostr << "  * last valid outline point: " << lastPoint << "\n";
+            wxLogMessage( "%s", ostr.str().c_str() );
             return false;
         }
     }
@@ -1295,9 +1462,11 @@ bool OUTLINE::MakeShape( TopoDS_Shape& aShape, double aThickness )
     if( aShape.IsNull() )
     {
         std::ostringstream ostr;
+#ifdef DEBUG
         ostr << __FILE__ << ": " << __FUNCTION__ << ": " << __LINE__ << "\n";
+#endif /* DEBUG */
         ostr << "  * failed to create a prismatic shape\n";
-        wxLogMessage( "%s\n", ostr.str().c_str() );
+        wxLogMessage( "%s", ostr.str().c_str() );
 
         return false;
     }
@@ -1320,7 +1489,6 @@ bool OUTLINE::addEdge( BRepBuilderAPI_MakeWire* aWire, KICADCURVE& aCurve, DOUBL
             break;
 
         case CURVE_ARC:
-            do
             {
                 gp_Circ arc( gp_Ax2( gp_Pnt( aCurve.m_start.x, aCurve.m_start.y, 0.0 ),
                     gp_Dir( 0.0, 0.0, 1.0 ) ), aCurve.m_radius );
@@ -1332,8 +1500,7 @@ bool OUTLINE::addEdge( BRepBuilderAPI_MakeWire* aWire, KICADCURVE& aCurve, DOUBL
                     edge = BRepBuilderAPI_MakeEdge( arc, ea, sa );
                 else
                     edge = BRepBuilderAPI_MakeEdge( arc, sa, ea );
-
-            } while( 0 );
+            }
             break;
 
         case CURVE_CIRCLE:
@@ -1342,15 +1509,16 @@ bool OUTLINE::addEdge( BRepBuilderAPI_MakeWire* aWire, KICADCURVE& aCurve, DOUBL
             break;
 
         default:
-            do
             {
                 std::ostringstream ostr;
+#ifdef DEBUG
                 ostr << __FILE__ << ": " << __FUNCTION__ << ": " << __LINE__ << "\n";
+#endif /* DEBUG */
                 ostr << "  * unsupported curve type: " << aCurve.m_form << "\n";
-                wxLogMessage( "%s\n", ostr.str().c_str() );
+                wxLogMessage( "%s", ostr.str().c_str() );
 
                 return false;
-            } while( 0 );
+            }
     }
 
     if( edge.IsNull() )
@@ -1362,9 +1530,11 @@ bool OUTLINE::addEdge( BRepBuilderAPI_MakeWire* aWire, KICADCURVE& aCurve, DOUBL
     if( BRepBuilderAPI_DisconnectedWire == aWire->Error() )
     {
         std::ostringstream ostr;
+#ifdef DEBUG
         ostr << __FILE__ << ": " << __FUNCTION__ << ": " << __LINE__ << "\n";
+#endif /* DEBUG */
         ostr << "  * failed to add curve\n";
-        wxLogMessage( "%s\n", ostr.str().c_str() );
+        wxLogMessage( "%s", ostr.str().c_str() );
 
         return false;
     }
@@ -1384,7 +1554,7 @@ bool OUTLINE::testClosed( KICADCURVE& aFrontCurve, KICADCURVE& aBackCurve )
     double dy = epy1 - spy0;
     double r = dx * dx + dy * dy;
 
-    if( r < MIN_LENGTH2 )
+    if( r < m_minDistance2 )
         return true;
 
     return false;

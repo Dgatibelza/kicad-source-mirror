@@ -1,8 +1,3 @@
-/**
- * @file dialog_new_dataitem.cpp
- * @brief a dialog called on creating a new plage layout data item.
-*/
-
 /*
  * This program source code file is part of KiCad, a free EDA CAD application.
  *
@@ -29,35 +24,33 @@
 
 #include <fctsys.h>
 #include <common.h>
-#include <class_drawpanel.h>
-
 #include <pl_editor_frame.h>
-#include <class_worksheet_dataitem.h>
+#include <ws_data_item.h>
 #include <dialog_new_dataitem_base.h>
+
 
 class DIALOG_NEW_DATAITEM : public DIALOG_NEW_DATAITEM_BASE
 {
-    WORKSHEET_DATAITEM* m_item;
+    WS_DATA_ITEM* m_item;
 
 public:
-    DIALOG_NEW_DATAITEM( PL_EDITOR_FRAME* aCaller, WORKSHEET_DATAITEM* aItem );
+    DIALOG_NEW_DATAITEM( PL_EDITOR_FRAME* aCaller, WS_DATA_ITEM* aItem );
 
 private:
-    void OnCancelClick( wxCommandEvent& event ) override;
     void OnOKClick( wxCommandEvent& event ) override;
 
     void initDlg();
 };
 
 
-int InvokeDialogNewItem( PL_EDITOR_FRAME* aCaller, WORKSHEET_DATAITEM* aItem )
+int InvokeDialogNewItem( PL_EDITOR_FRAME* aCaller, WS_DATA_ITEM* aItem )
 {
     DIALOG_NEW_DATAITEM dlg( aCaller, aItem );
     return dlg.ShowModal();
 }
 
-DIALOG_NEW_DATAITEM::DIALOG_NEW_DATAITEM( PL_EDITOR_FRAME* aCaller,
-                                          WORKSHEET_DATAITEM* aItem )
+
+DIALOG_NEW_DATAITEM::DIALOG_NEW_DATAITEM( PL_EDITOR_FRAME* aCaller, WS_DATA_ITEM* aItem )
     : DIALOG_NEW_DATAITEM_BASE( aCaller )
 {
     m_item = aItem;
@@ -67,16 +60,12 @@ DIALOG_NEW_DATAITEM::DIALOG_NEW_DATAITEM( PL_EDITOR_FRAME* aCaller,
     Centre();
 }
 
-void DIALOG_NEW_DATAITEM::OnCancelClick( wxCommandEvent& event )
-{
-    EndModal( wxID_CANCEL);
-}
 
 void DIALOG_NEW_DATAITEM::OnOKClick( wxCommandEvent& event )
 {
-    if( m_item->GetType() == WORKSHEET_DATAITEM::WS_TEXT )
+    if( m_item->GetType() == WS_DATA_ITEM::WS_TEXT )
     {
-        WORKSHEET_DATAITEM_TEXT* text = ((WORKSHEET_DATAITEM_TEXT*)m_item);
+        WS_DATA_ITEM_TEXT* text = ((WS_DATA_ITEM_TEXT*)m_item);
         text->m_TextBase = m_textCtrlText->GetValue();
         // For multiline texts, replace the '\n' char by the "\\n" sequence",
         // in internal string
@@ -97,10 +86,10 @@ void DIALOG_NEW_DATAITEM::OnOKClick( wxCommandEvent& event )
 
     switch( m_choiceCornerPos->GetSelection() )
     {
-        case 2: m_item->m_Pos.m_Anchor = RB_CORNER; break;
-        case 0: m_item->m_Pos.m_Anchor = RT_CORNER; break;
-        case 3: m_item->m_Pos.m_Anchor = LB_CORNER; break;
-        case 1: m_item->m_Pos.m_Anchor = LT_CORNER; break;
+    case 2: m_item->m_Pos.m_Anchor = RB_CORNER; break;
+    case 0: m_item->m_Pos.m_Anchor = RT_CORNER; break;
+    case 3: m_item->m_Pos.m_Anchor = LB_CORNER; break;
+    case 1: m_item->m_Pos.m_Anchor = LT_CORNER; break;
     }
 
     // Import End point
@@ -114,10 +103,10 @@ void DIALOG_NEW_DATAITEM::OnOKClick( wxCommandEvent& event )
 
     switch( m_choiceCornerEnd->GetSelection() )
     {
-        case 2: m_item->m_End.m_Anchor = RB_CORNER; break;
-        case 0: m_item->m_End.m_Anchor = RT_CORNER; break;
-        case 3: m_item->m_End.m_Anchor = LB_CORNER; break;
-        case 1: m_item->m_End.m_Anchor = LT_CORNER; break;
+    case 2: m_item->m_End.m_Anchor = RB_CORNER; break;
+    case 0: m_item->m_End.m_Anchor = RT_CORNER; break;
+    case 3: m_item->m_End.m_Anchor = LB_CORNER; break;
+    case 1: m_item->m_End.m_Anchor = LT_CORNER; break;
     }
 
     EndModal( wxID_OK);
@@ -125,23 +114,23 @@ void DIALOG_NEW_DATAITEM::OnOKClick( wxCommandEvent& event )
 
 void DIALOG_NEW_DATAITEM::initDlg()
 {
-    // Disable useless widgets, depending on WORKSHEET_DATAITEM type
+    // Disable useless widgets, depending on WS_DATA_ITEM type
     switch( m_item->GetType() )
     {
-        case WORKSHEET_DATAITEM::WS_SEGMENT:
-        case WORKSHEET_DATAITEM::WS_RECT:
-            m_textCtrlText->Enable( false );
-            break;
+    case WS_DATA_ITEM::WS_SEGMENT:
+    case WS_DATA_ITEM::WS_RECT:
+        m_textCtrlText->Enable( false );
+        break;
 
-        case WORKSHEET_DATAITEM::WS_BITMAP:
-        case WORKSHEET_DATAITEM::WS_POLYPOLYGON:
-            m_textCtrlText->Enable( false );
-            // fall through
-        case WORKSHEET_DATAITEM::WS_TEXT:
-            m_textCtrlEndX->Enable( false );
-            m_textCtrlEndY->Enable( false );
-            m_choiceCornerEnd->Enable( false );
-            break;
+    case WS_DATA_ITEM::WS_BITMAP:
+    case WS_DATA_ITEM::WS_POLYPOLYGON:
+        m_textCtrlText->Enable( false );
+        // fall through
+    case WS_DATA_ITEM::WS_TEXT:
+        m_textCtrlEndX->Enable( false );
+        m_textCtrlEndY->Enable( false );
+        m_choiceCornerEnd->Enable( false );
+        break;
     }
 
     wxString msg;
@@ -151,16 +140,13 @@ void DIALOG_NEW_DATAITEM::initDlg()
     m_textCtrlPosX->SetValue( msg );
     msg.Printf( wxT("%.3f"), m_item->m_Pos.m_Pos.y );
     m_textCtrlPosY->SetValue( msg );
+
     switch(  m_item->m_Pos.m_Anchor )
     {
-        case RB_CORNER:      // right bottom corner
-            m_choiceCornerPos->SetSelection( 2 ); break;
-        case RT_CORNER:      // right top corner
-            m_choiceCornerPos->SetSelection( 0 ); break;
-        case LB_CORNER:      // left bottom corner
-            m_choiceCornerPos->SetSelection( 3 ); break;
-        case LT_CORNER:      // left top corner
-            m_choiceCornerPos->SetSelection( 1 ); break;
+    case RB_CORNER: m_choiceCornerPos->SetSelection( 2 ); break;
+    case RT_CORNER: m_choiceCornerPos->SetSelection( 0 ); break;
+    case LB_CORNER: m_choiceCornerPos->SetSelection( 3 ); break;
+    case LT_CORNER: m_choiceCornerPos->SetSelection( 1 ); break;
     }
 
     // End point
@@ -168,18 +154,15 @@ void DIALOG_NEW_DATAITEM::initDlg()
     m_textCtrlEndX->SetValue( msg );
     msg.Printf( wxT("%.3f"), m_item->m_End.m_Pos.y );
     m_textCtrlEndY->SetValue( msg );
+
     switch( m_item->m_End.m_Anchor )
     {
-        case RB_CORNER:      // right bottom corner
-            m_choiceCornerEnd->SetSelection( 2 ); break;
-        case RT_CORNER:      // right top corner
-            m_choiceCornerEnd->SetSelection( 0 ); break;
-        case LB_CORNER:      // left bottom corner
-            m_choiceCornerEnd->SetSelection( 3 ); break;
-        case LT_CORNER:      // left top corner
-            m_choiceCornerEnd->SetSelection( 1 ); break;
+    case RB_CORNER: m_choiceCornerEnd->SetSelection( 2 ); break;
+    case RT_CORNER: m_choiceCornerEnd->SetSelection( 0 ); break;
+    case LB_CORNER: m_choiceCornerEnd->SetSelection( 3 ); break;
+    case LT_CORNER: m_choiceCornerEnd->SetSelection( 1 ); break;
     }
 
-    if( m_item->GetType() == WORKSHEET_DATAITEM::WS_TEXT )
-        m_textCtrlText->SetValue( ((WORKSHEET_DATAITEM_TEXT*)m_item)->m_TextBase );
+    if( m_item->GetType() == WS_DATA_ITEM::WS_TEXT )
+        m_textCtrlText->SetValue( ((WS_DATA_ITEM_TEXT*)m_item)->m_TextBase );
 }

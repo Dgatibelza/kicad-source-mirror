@@ -2,7 +2,7 @@
  * This program source code file is part of KiCad, a free EDA CAD application.
  *
  * Copyright (C) 2012 NBEE Embedded Systems, Miguel Angel Ajo <miguelangel@nbee.es>
- * Copyright (C) 1992-2017 KiCad Developers, see AUTHORS.txt for contributors.
+ * Copyright (C) 1992-2018 KiCad Developers, see AUTHORS.txt for contributors.
  *
  * This program is free software; you can redistribute it and/or
  * modify it under the terms of the GNU General Public License
@@ -84,10 +84,12 @@ def GetWizardsBackTrace():
     return FULL_BACK_TRACE
 
 
-def LoadOnePlugin(Dirname, ModuleName):
+def LoadPluginModule(Dirname, ModuleName, FileName):
     """
-    Load the plugin file ModuleName found in folder Dirname.
-    If this file cannot be loaded, its name is stored in failed_wizards_list
+    Load the plugin module named ModuleName located in the folder Dirname.
+    The module can be either inside a file called FileName or a subdirectory
+    called FileName that contains a __init__.py file.
+    If this module cannot be loaded, its name is stored in failed_wizards_list
     and the error trace is stored in FULL_BACK_TRACE
     """
     import os
@@ -97,21 +99,32 @@ def LoadOnePlugin(Dirname, ModuleName):
     global NOT_LOADED_WIZARDS
     global FULL_BACK_TRACE
 
-    module_filename = os.path.join(Dirname, ModuleName)
-
     try:  # If there is an error loading the script, skip it
-        mtime = os.path.getmtime(module_filename)
 
-        if KICAD_PLUGINS.has_key(ModuleName):
+        module_filename = os.path.join( Dirname, FileName )
+        mtime = os.path.getmtime( module_filename )
+
+        if ModuleName in KICAD_PLUGINS:
             plugin = KICAD_PLUGINS[ModuleName]
 
-            if not plugin["modification_time"] == mtime:
-                mod = reload(plugin["ModuleName"])
-                plugin["modification_time"] = mtime
+            if sys.version_info >= (3,4,0):
+                import importlib
+                mod = importlib.reload( plugin["ModuleName"] )
+            elif sys.version_info >= (3,2,0):
+                """
+                TODO: This branch can be removed once the required python version is >=3.4
+                """
+                import imp
+                mod = imp.reload( plugin["ModuleName"] )
             else:
-                mod = plugin["ModuleName"]
+                mod = reload( plugin["ModuleName"] )
+
         else:
-            mod = __import__(ModuleName[:-3], locals(), globals() )
+            if sys.version_info >= (3,0,0):
+                import importlib
+                mod = importlib.import_module( ModuleName )
+            else:
+                mod = __import__( ModuleName, locals(), globals() )
 
         KICAD_PLUGINS[ModuleName]={ "filename":module_filename,
                                     "modification_time":mtime,
@@ -121,46 +134,7 @@ def LoadOnePlugin(Dirname, ModuleName):
         if NOT_LOADED_WIZARDS != "" :
             NOT_LOADED_WIZARDS += "\n"
         NOT_LOADED_WIZARDS += module_filename
-        FULL_BACK_TRACE += traceback.format_exc(sys.exc_info())
-        pass
-
-
-
-def LoadOneSubdirPlugin(Dirname, SubDirname):
-    """
-    Load the plugins found in folder Dirname/SubDirname, by loading __ini__.py file.
-    If files cannot be loaded, its name is stored in failed_wizards_list
-    and the error trace is stored in FULL_BACK_TRACE
-    """
-    import os
-    import sys
-    import traceback
-
-    global NOT_LOADED_WIZARDS
-    global FULL_BACK_TRACE
-
-    fullPath = os.path.join(Dirname,SubDirname)
-
-    if os.path.isdir(fullPath):
-        """
-        Skip subdir which does not contain __init__.py, becuase if can be
-        a non python subdir (can be a subdir for .xsl plugins for instance)
-        """
-        if os.path.exists( os.path.join(fullPath, '__init__.py') ):
-            try:  # If there is an error loading the script, skip it
-                __import__(SubDirname, locals(), globals())
-
-            except:
-                if NOT_LOADED_WIZARDS != "" :
-                    NOT_LOADED_WIZARDS += "\n"
-                NOT_LOADED_WIZARDS += fullPath
-                FULL_BACK_TRACE += traceback.format_exc(sys.exc_info())
-                pass
-
-        else:
-            if NOT_LOADED_WIZARDS != "" :
-                NOT_LOADED_WIZARDS += "\n"
-            NOT_LOADED_WIZARDS += 'Skip subdir ' + fullPath
+        FULL_BACK_TRACE += traceback.format_exc()
 
 
 def LoadPlugins(bundlepath=None):
@@ -168,9 +142,14 @@ def LoadPlugins(bundlepath=None):
     Initialise Scripting/Plugin python environment and load plugins.
 
     Arguments:
-    scriptpath -- The path to the bundled scripts.
-                  The bunbled Plugins are relative to this path, in the
+    bundlepath -- The path to the bundled scripts.
+                  The bundled Plugins are relative to this path, in the
                   "plugins" subdirectory.
+                WARNING: bundlepath must use '/' as path separator, and not '\'
+                because it creates issues:
+                \n and \r are seen as a escaped seq when passing this string to this method
+                I am thinking this is due to the fact LoadPlugins is called from C++ code by
+                PyRun_SimpleString()
 
     NOTE: These are all of the possible "default" search paths for kicad
           python scripts.  These paths will ONLY be added to the python
@@ -198,9 +177,20 @@ def LoadPlugins(bundlepath=None):
     import traceback
     import pcbnew
 
+    if sys.version_info >= (3,3,0):
+        import importlib
+        importlib.invalidate_caches()
+
     kicad_path = os.environ.get('KICAD_PATH')
-    config_path = pcbnew.GetKicadConfigPath()
+    config_path = pcbnew.SETTINGS_MANAGER.GetUserSettingsPath()
     plugin_directories=[]
+
+    """
+    To be consistent with others paths, on windows, convert the unix '/' separator
+    to the windows separator, although using '/' works
+    """
+    if sys.platform.startswith('win32'):
+        bundlepath = bundlepath.replace("/","\\")
 
     if bundlepath:
         plugin_directories.append(bundlepath)
@@ -235,20 +225,27 @@ def LoadPlugins(bundlepath=None):
     global KICAD_PLUGINS
 
     for plugins_dir in plugin_directories:
-        if not os.path.isdir(plugins_dir):
+        if not os.path.isdir( plugins_dir ):
             continue
 
-        sys.path.append(plugins_dir)
+        sys.path.append( plugins_dir )
 
         for module in os.listdir(plugins_dir):
-            if os.path.isdir(os.path.join(plugins_dir,module)):
-                LoadOneSubdirPlugin(plugins_dir, module)
+            fullPath = os.path.join( plugins_dir, module )
+
+            if os.path.isdir( fullPath ):
+                if os.path.exists( os.path.join( fullPath, '__init__.py' ) ):
+                    LoadPluginModule( plugins_dir, module, module )
+                else:
+                    if NOT_LOADED_WIZARDS != "" :
+                        NOT_LOADED_WIZARDS += "\n"
+                    NOT_LOADED_WIZARDS += 'Skip subdir ' + fullPath
                 continue
 
             if module == '__init__.py' or module[-3:] != '.py':
                 continue
 
-            LoadOnePlugin(plugins_dir, module);
+            LoadPluginModule( plugins_dir, module[:-3], module )
 
 
 class KiCadPlugin:
@@ -256,14 +253,25 @@ class KiCadPlugin:
         pass
 
     def register(self):
+        import inspect
+        import os
+
         if isinstance(self,FilePlugin):
             pass # register to file plugins in C++
 
         if isinstance(self,FootprintWizardPlugin):
-            PYTHON_FOOTPRINT_WIZARDS.register_wizard(self)
+            PYTHON_FOOTPRINT_WIZARD_LIST.register_wizard(self)
             return
 
         if isinstance(self,ActionPlugin):
+            """
+            Get path to .py or .pyc that has definition of plugin class.
+            If path is binary but source also exists, assume definition is in source.
+            """
+            self.__plugin_path = inspect.getfile(self.__class__)
+            if self.__plugin_path.endswith('.pyc') and os.path.isfile(self.__plugin_path[:-1]):
+                self.__plugin_path = self.__plugin_path[:-1]
+            self.__plugin_path = self.__plugin_path + '/' + self.__class__.__name__
             PYTHON_ACTION_PLUGINS.register_action(self)
             return
 
@@ -274,7 +282,7 @@ class KiCadPlugin:
             pass # deregister to file plugins in C++
 
         if isinstance(self,FootprintWizardPlugin):
-            PYTHON_FOOTPRINT_WIZARDS.deregister_wizard(self)
+            PYTHON_FOOTPRINT_WIZARD_LIST.deregister_wizard(self)
             return
 
         if isinstance(self,ActionPlugin):
@@ -282,6 +290,9 @@ class KiCadPlugin:
             return
 
         return
+
+    def GetPluginPath( self ):
+        return self.__plugin_path
 
 
 class FilePlugin(KiCadPlugin):
@@ -380,7 +391,7 @@ class FootprintWizardParameter(object):
                     if (to_int % multiple) > 0:
                         self.AddError("value '{v}' is not a multiple of {m}".format(v=self.raw_value,m=multiple),info)
             except:
-                self.AddError("value {'v}' is not an integer".format(v=self.raw_value),info)
+                self.AddError("value '{v}' is not an integer".format(v=self.raw_value),info)
 
         if self.units == uBool:  # Check that the value is of a correct boolean format
             if self.raw_value in [True,False] or str(self.raw_value).lower() in self._bools:
@@ -621,6 +632,8 @@ class FootprintWizardPlugin(KiCadPlugin, object):
 class ActionPlugin(KiCadPlugin, object):
     def __init__( self ):
         KiCadPlugin.__init__( self )
+        self.icon_file_name = ""
+        self.show_toolbar_button = False
         self.defaults()
 
     def defaults( self ):
@@ -636,6 +649,12 @@ class ActionPlugin(KiCadPlugin, object):
 
     def GetDescription( self ):
         return self.description
+
+    def GetShowToolbarButton( self ):
+        return self.show_toolbar_button
+
+    def GetIconFileName( self ):
+        return self.icon_file_name
 
     def Run(self):
         return

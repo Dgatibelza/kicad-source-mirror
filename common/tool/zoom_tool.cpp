@@ -17,15 +17,15 @@
  * with this program.  If not, see <http://www.gnu.org/licenses/>.
  */
 
-
-#include <wxPcbStruct.h>
 #include <class_draw_panel_gal.h>
-#include <view/view_controls.h>
-#include <view/view.h>
-#include <tool/tool_manager.h>
-#include <tool/actions.h>
-#include <tool/zoom_tool.h>
+#include <eda_draw_frame.h>
+#include <id.h>
 #include <preview_items/selection_area.h>
+#include <tool/actions.h>
+#include <tool/tool_manager.h>
+#include <tool/zoom_tool.h>
+#include <view/view.h>
+#include <view/view_controls.h>
 
 
 ZOOM_TOOL::ZOOM_TOOL() :
@@ -46,17 +46,14 @@ void ZOOM_TOOL::Reset( RESET_REASON aReason )
 
 int ZOOM_TOOL::Main( const TOOL_EVENT& aEvent )
 {
-    // This method is called both when the zoom tool is activated (on) or deactivated (off)
-    bool zoom_tool_is_on = m_frame->GetToolToggled( ID_ZOOM_SELECTION );
+    std::string tool = aEvent.GetCommandStr().get();
+    m_frame->PushTool( tool );
 
-    if( !zoom_tool_is_on )  // This is a tool deselection: do nothing
-        return 0;
-
-    m_frame->SetToolID( ID_ZOOM_SELECTION, wxCURSOR_MAGNIFIER, _( "Zoom to selection" ) );
-
-    while( auto evt = Wait() )
+    while( TOOL_EVENT* evt = Wait() )
     {
-        if( evt->IsCancel() || evt->IsActivate() )
+        m_frame->GetCanvas()->SetCurrentCursor( wxCURSOR_ARROW );
+
+        if( evt->IsCancelInteractive() || evt->IsActivate() )
             break;
 
         else if( evt->IsDrag( BUT_LEFT ) || evt->IsDrag( BUT_RIGHT ) )
@@ -66,28 +63,29 @@ int ZOOM_TOOL::Main( const TOOL_EVENT& aEvent )
         }
 
         else
-            m_toolMgr->PassEvent();
+            evt->SetPassEvent();
     }
 
     // Exit zoom tool
-    m_frame->SetNoToolSelected();
+    m_frame->PopTool( tool );
     return 0;
 }
 
 
 bool ZOOM_TOOL::selectRegion()
 {
-    bool cancelled = false;
-    auto view = getView();
-    auto canvas = m_frame->GetGalCanvas();
+    bool                cancelled = false;
+    KIGFX::VIEW*        view = getView();
+    EDA_DRAW_PANEL_GAL* canvas = m_frame->GetCanvas();
+
     getViewControls()->SetAutoPan( true );
 
     KIGFX::PREVIEW::SELECTION_AREA area;
     view->Add( &area );
 
-    while( auto evt = Wait() )
+    while( TOOL_EVENT* evt = Wait() )
     {
-        if( evt->IsCancel() || evt->IsActivate() )
+        if( evt->IsCancelInteractive() || evt->IsActivate() )
         {
             cancelled = true;
             break;
@@ -106,27 +104,21 @@ bool ZOOM_TOOL::selectRegion()
             view->SetVisible( &area, false );
             auto selectionBox = area.ViewBBox();
 
-            VECTOR2D screenSize = view->ToWorld( canvas->GetClientSize(), false );
-
             if( selectionBox.GetWidth() == 0 || selectionBox.GetHeight() == 0 )
             {
                 break;
             }
             else
             {
-                VECTOR2D vsize = selectionBox.GetSize();
+                VECTOR2D sSize = view->ToWorld( canvas->GetClientSize(), false );
+                VECTOR2D vSize = selectionBox.GetSize();
                 double scale;
-                double ratio = std::max( fabs( vsize.x / screenSize.x ),
-                                         fabs( vsize.y / screenSize.y ) );
+                double ratio = std::max( fabs( vSize.x / sSize.x ), fabs( vSize.y / sSize.y ) );
 
                 if( evt->IsMouseUp( BUT_LEFT ) )
-                {
                     scale = view->GetScale() / ratio;
-                }
                 else
-                {
                     scale = view->GetScale() * ratio;
-                }
 
                 view->SetScale( scale );
                 view->SetCenter( selectionBox.Centre() );

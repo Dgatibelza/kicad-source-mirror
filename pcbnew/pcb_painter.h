@@ -33,17 +33,15 @@
 
 
 class EDA_ITEM;
-class COLORS_DESIGN_SETTINGS;
-class DISPLAY_OPTIONS;
-
+class PCB_DISPLAY_OPTIONS;
 class BOARD_ITEM;
+class ARC;
 class BOARD;
 class VIA;
 class TRACK;
 class D_PAD;
 class DRAWSEGMENT;
 class MODULE;
-class SEGZONE;
 class ZONE_CONTAINER;
 class TEXTE_PCB;
 class TEXTE_MODULE;
@@ -56,7 +54,7 @@ namespace KIGFX
 class GAL;
 
 /**
- * Class PCB_RENDER_SETTINGS
+ * PCB_RENDER_SETTINGS
  * Stores PCB specific render settings.
  */
 class PCB_RENDER_SETTINGS : public RENDER_SETTINGS
@@ -90,16 +88,15 @@ public:
 
     PCB_RENDER_SETTINGS();
 
-    /// @copydoc RENDER_SETTINGS::ImportLegacyColors()
-    void ImportLegacyColors( const COLORS_DESIGN_SETTINGS* aSettings ) override;
-
     /**
      * Function LoadDisplayOptions
      * Loads settings related to display options (high-contrast mode, full or outline modes
      * for vias/pads/tracks and so on).
      * @param aOptions are settings that you want to use for displaying items.
      */
-    void LoadDisplayOptions( const DISPLAY_OPTIONS* aOptions );
+    void LoadDisplayOptions( const PCB_DISPLAY_OPTIONS& aOptions, bool aShowPageLimits );
+
+    virtual void LoadColors( const COLOR_SETTINGS* aSettings ) override;
 
     /// @copydoc RENDER_SETTINGS::GetColor()
     virtual const COLOR4D& GetColor( const VIEW_ITEM* aItem, int aLayer ) const override;
@@ -126,11 +123,50 @@ public:
         return m_sketchMode[aItemLayer];
     }
 
-    inline bool IsBackgroundDark() const
+    /**
+     * Turns on/off sketch mode for graphic items (DRAWSEGMENTs, texts).
+     * @param aEnabled decides if it is drawn in sketch mode (true for sketched mode,
+     * false for filled mode).
+     */
+    inline void SetSketchModeGraphicItems( bool aEnabled )
+    {
+        m_sketchBoardGfx = aEnabled;
+    }
+
+    /**
+     * Turns on/off drawing outline and hatched lines for zones.
+     */
+    void EnableZoneOutlines( bool aEnabled )
+    {
+        m_zoneOutlines = aEnabled;
+    }
+
+    inline bool IsBackgroundDark() const override
     {
         auto luma = m_layerColors[ LAYER_PCB_BACKGROUND ].GetBrightness();
 
         return luma < 0.5;
+    }
+
+    const COLOR4D& GetBackgroundColor() override { return m_layerColors[ LAYER_PCB_BACKGROUND ]; }
+
+    void SetBackgroundColor( const COLOR4D& aColor ) override
+    {
+        m_layerColors[ LAYER_PCB_BACKGROUND ] = aColor;
+    }
+
+    const COLOR4D& GetGridColor() override { return m_layerColors[ LAYER_GRID ]; }
+
+    const COLOR4D& GetCursorColor() override { return m_layerColors[ LAYER_CURSOR ]; }
+
+    inline bool GetCurvedRatsnestLinesEnabled() const
+    {
+        return m_curvedRatsnestlines;
+    }
+
+    inline bool GetGlobalRatsnestLinesEnabled() const
+    {
+        return m_globalRatsnestlines;
     }
 
 protected:
@@ -143,6 +179,9 @@ protected:
     ///> Flag determining if footprint graphic items should be outlined or stroked
     bool    m_sketchFpGfx;
 
+    ///> Flag determining if footprint text items should be outlined or stroked
+    bool    m_sketchFpTxtfx;
+
     ///> Flag determining if pad numbers should be visible
     bool    m_padNumbers;
 
@@ -153,7 +192,16 @@ protected:
     bool    m_netNamesOnTracks;
 
     ///> Flag determining if net names should be visible for vias
-    bool    m_netNamesOnVias = true;
+    bool    m_netNamesOnVias;
+
+    ///> Flag determining if zones should have outlines drawn
+    bool    m_zoneOutlines;
+
+    ///> Flag determining if ratsnest lines should be drawn curved
+    bool    m_curvedRatsnestlines = true;
+
+    ///> Flag determining if ratsnest lines are shown by default
+    bool    m_globalRatsnestlines = true;
 
     ///> Maximum font size for netnames (and other dynamically shown strings)
     static const double MAX_FONT_SIZE;
@@ -170,7 +218,7 @@ protected:
 
 
 /**
- * Class PCB_PAINTER
+ * PCB_PAINTER
  * Contains methods for drawing PCB-specific items.
  */
 class PCB_PAINTER : public PAINTER
@@ -198,6 +246,7 @@ protected:
 
     // Drawing functions for various types of PCB-specific items
     void draw( const TRACK* aTrack, int aLayer );
+    void draw( const ARC* aArc, int aLayer );
     void draw( const VIA* aVia, int aLayer );
     void draw( const D_PAD* aPad, int aLayer );
     void draw( const DRAWSEGMENT* aSegment, int aLayer );
@@ -217,6 +266,21 @@ protected:
      * @return the thickness to draw
      */
     int getLineThickness( int aActualThickness ) const;
+
+    /**
+     * Return drill shape of a pad.
+     */
+    virtual int getDrillShape( const D_PAD* aPad ) const;
+
+    /**
+     * Return drill size for a pad (internal units).
+     */
+    virtual VECTOR2D getDrillSize( const D_PAD* aPad ) const;
+
+    /**
+     * Return drill diameter for a via (internal units).
+     */
+    virtual int getDrillSize( const VIA* aVia ) const;
 };
 } // namespace KIGFX
 

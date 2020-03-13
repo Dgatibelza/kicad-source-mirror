@@ -256,7 +256,7 @@ namespace IDF3 {
 
 
 /**
- * Class IDF_NOTE
+ * IDF_NOTE
  * represents an entry in the NOTE section of an IDF file
  */
 class IDF_NOTE
@@ -401,8 +401,8 @@ public:
      */
     IDF_DRILL_DATA( double aDrillDia, double aPosX, double aPosY,
                     IDF3::KEY_PLATING aPlating,
-                    const std::string aRefDes,
-                    const std::string aHoleType,
+                    const std::string& aRefDes,
+                    const std::string& aHoleType,
                     IDF3::KEY_OWNER aOwner );
 
     /**

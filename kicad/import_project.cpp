@@ -1,7 +1,7 @@
 /*
  * This program source code file is part of KiCad, a free EDA CAD application.
  *
- * Copyright (C) 2017 KiCad Developers, see AUTHORS.txt for contributors.
+ * Copyright (C) 2017-2018 KiCad Developers, see AUTHORS.txt for contributors.
  * @author Russell Oliver <roliver8143@gmail.com>
  *
  * This program is free software; you can redistribute it and/or
@@ -47,18 +47,13 @@
 
 #include <io_mgr.h>
 #include <sch_io_mgr.h>
-#include <wxPcbStruct.h>
-#include <schframe.h>
-#include <netlist.h>
 
-class PCB_EDIT_FRAME;
-
-#include "kicad.h"
+#include "kicad_manager_frame.h"
 
 void KICAD_MANAGER_FRAME::OnImportEagleFiles( wxCommandEvent& event )
 {
     // Close other windows.
-    if( !Kiway.PlayersClose( false ) )
+    if( !Kiway().PlayersClose( false ) )
         return;
 
 
@@ -69,7 +64,7 @@ void KICAD_MANAGER_FRAME::OnImportEagleFiles( wxCommandEvent& event )
     ClearMsg();
 
     wxFileDialog schdlg( this, title, default_dir, wxEmptyString,
-            EagleFilesWildcard, style );
+                         EagleFilesWildcard(), style );
 
     if( schdlg.ShowModal() == wxID_CANCEL )
         return;
@@ -79,16 +74,21 @@ void KICAD_MANAGER_FRAME::OnImportEagleFiles( wxCommandEvent& event )
 
     sch.SetExt( SchematicFileExtension );
 
+    wxFileName pro = sch;
 
-    wxString protitle = _( "Kicad Project Destination" );
+    pro.SetExt( ProjectFileExtension );
 
-    wxFileDialog prodlg( this, protitle, sch.GetPath(), sch.GetName(),
-            ProjectFileWildcard, wxFD_SAVE | wxFD_OVERWRITE_PROMPT );
+    wxString protitle = _( "KiCad Project Destination" );
+
+    // Don't use wxFileDialog here.  On GTK builds, the default path is returned unless a
+    // file is actually selected.
+    wxDirDialog prodlg( this, protitle, pro.GetPath(), wxDD_DEFAULT_STYLE );
 
     if( prodlg.ShowModal() == wxID_CANCEL )
-                return;
+        return;
 
-    wxFileName pro( prodlg.GetPath() );
+    pro.SetPath( prodlg.GetPath() );
+
     // Check if the project directory is empty
     wxDir directory( pro.GetPath() );
 
@@ -98,7 +98,10 @@ void KICAD_MANAGER_FRAME::OnImportEagleFiles( wxCommandEvent& event )
                           "create projects in their own clean directory.\n\nDo you "
                           "want to create a new empty directory for the project?" );
 
-        if( IsOK( this, msg ) )
+        KIDIALOG dlg( this, msg, _( "Confirmation" ), wxYES_NO | wxICON_WARNING );
+        dlg.DoNotShowCheckbox( __FILE__, __LINE__ );
+
+        if( dlg.ShowModal() == wxID_YES )
         {
             // Append a new directory with the same name of the project file
             // and try to create it
@@ -110,34 +113,27 @@ void KICAD_MANAGER_FRAME::OnImportEagleFiles( wxCommandEvent& event )
         }
     }
 
-
-
     wxFileName pcb( sch );
-    wxFileName netlist( pro );
     pro.SetExt( ProjectFileExtension );         // enforce extension
     pcb.SetExt( LegacyPcbFileExtension );       // enforce extension
-    netlist.SetExt( NetlistFileExtension );
 
     if( !pro.IsAbsolute() )
         pro.MakeAbsolute();
 
     SetProjectFileName( pro.GetFullPath() );
-
     wxString prj_filename = GetProjectFileName();
-
-    wxString sch_filename = sch.GetFullPath();
 
     if( sch.FileExists() )
     {
-        SCH_EDIT_FRAME* schframe = (SCH_EDIT_FRAME*) Kiway.Player( FRAME_SCH, false );
+        KIWAY_PLAYER* schframe = Kiway().Player( FRAME_SCH, false );
 
         if( !schframe )
         {
-            try
+            try     // SCH frame was not available, try to start it
             {
-                schframe = (SCH_EDIT_FRAME*) Kiway.Player( FRAME_SCH, true );
+                schframe = Kiway().Player( FRAME_SCH, true );
             }
-            catch( IO_ERROR err )
+            catch( const IO_ERROR& err )
             {
                 wxMessageBox( _( "Eeschema failed to load:\n" ) + err.What(),
                         _( "KiCad Error" ), wxOK | wxICON_ERROR, this );
@@ -145,7 +141,9 @@ void KICAD_MANAGER_FRAME::OnImportEagleFiles( wxCommandEvent& event )
             }
         }
 
-        schframe->ImportFile( sch_filename, SCH_IO_MGR::SCH_EAGLE );
+        std::string packet = StrPrintf( "%d\n%s", SCH_IO_MGR::SCH_EAGLE,
+                                                  TO_UTF8( sch.GetFullPath() ) );
+        schframe->Kiway().ExpressMail( FRAME_SCH, MAIL_IMPORT_FILE, packet, this );
 
         if( !schframe->IsShown() )      // the frame exists, (created by the dialog field editor)
                                         // but no project loaded.
@@ -157,21 +155,20 @@ void KICAD_MANAGER_FRAME::OnImportEagleFiles( wxCommandEvent& event )
             schframe->Iconize( false );
 
         schframe->Raise();
-
-        schframe->CreateNetlist( NET_TYPE_PCBNEW, netlist.GetFullPath(), 0, NULL,  true );
     }
+
 
     if( pcb.FileExists() )
     {
-        PCB_EDIT_FRAME* pcbframe = (PCB_EDIT_FRAME*) Kiway.Player( FRAME_PCB, false );
+        KIWAY_PLAYER* pcbframe = Kiway().Player( FRAME_PCB_EDITOR, false );
 
         if( !pcbframe )
         {
-            try
+            try     // PCB frame was not available, try to start it
             {
-                pcbframe = (PCB_EDIT_FRAME*) Kiway.Player( FRAME_PCB, true );
+                pcbframe = Kiway().Player( FRAME_PCB_EDITOR, true );
             }
-            catch( IO_ERROR err )
+            catch( const IO_ERROR& err )
             {
                 wxMessageBox( _( "Pcbnew failed to load:\n" ) + err.What(), _( "KiCad Error" ),
                         wxOK | wxICON_ERROR, this );
@@ -184,29 +181,20 @@ void KICAD_MANAGER_FRAME::OnImportEagleFiles( wxCommandEvent& event )
         // if the frame is not visible, the board is not yet loaded
         if( !pcbframe->IsVisible() )
         {
-            pcbframe->ImportFile(  pcb.GetFullPath(), IO_MGR::EAGLE );
             pcbframe->Show( true );
         }
+
+        std::string packet = StrPrintf( "%d\n%s", IO_MGR::EAGLE,
+                                                  TO_UTF8( pcb.GetFullPath() ) );
+        pcbframe->Kiway().ExpressMail( FRAME_PCB_EDITOR, MAIL_IMPORT_FILE, packet, this );
 
         // On Windows, Raise() does not bring the window on screen, when iconized
         if( pcbframe->IsIconized() )
             pcbframe->Iconize( false );
 
         pcbframe->Raise();
-
-        if( netlist.FileExists() )
-        {
-            pcbframe->ReadPcbNetlist( netlist.GetFullPath(),
-                    wxEmptyString,
-                    NULL,
-                    false,
-                    false,
-                    false,
-                    false,
-                    false,
-                    false );
-        }
     }
 
     ReCreateTreePrj();
+    m_active_project = true;
 }

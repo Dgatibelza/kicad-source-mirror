@@ -22,27 +22,82 @@
  */
 
 #include <pcb_general_settings.h>
+#include <wx/tokenzr.h>
 
-PCB_GENERAL_SETTINGS::PCB_GENERAL_SETTINGS( FRAME_T aFrameType )
-    : m_colorsSettings( aFrameType )
+
+PCB_GENERAL_SETTINGS::PCB_GENERAL_SETTINGS( FRAME_T aFrameType ) :
+        m_Use45DegreeGraphicSegments( false ),
+        m_FlipLeftRight( false ),
+        m_MagneticPads( CAPTURE_CURSOR_IN_TRACK_TOOL ),
+        m_MagneticTracks( CAPTURE_CURSOR_IN_TRACK_TOOL ),
+        m_MagneticGraphics( true ),
+        m_frameType( aFrameType ),
+        m_colorsSettings( aFrameType )
 {
-    m_frameType = aFrameType;
-
-    if( m_frameType == FRAME_PCB )
+    try
     {
-        Add( "LegacyAutoDeleteOldTrack", &m_legacyAutoDeleteOldTrack, true );
-        Add( "LegacyUse45DegreeTracks",&m_legacyUse45DegreeTracks, true);
-        Add( "LegacyUseTwoSegmentTracks", &m_legacyUseTwoSegmentTracks, true);
-        Add( "Use45DegreeGraphicSegments", &m_use45DegreeGraphicSegments, false);
-        Add( "MagneticPads", reinterpret_cast<int*>( &m_magneticPads ), CAPTURE_CURSOR_IN_TRACK_TOOL );
-        Add( "MagneticTracks", reinterpret_cast<int*>( &m_magneticTracks ), CAPTURE_CURSOR_IN_TRACK_TOOL );
-        Add( "EditActionChangesTrackWidth", &m_editActionChangesTrackWidth, false );
+        switch( m_frameType )
+        {
+        case FRAME_PCB_EDITOR:
+            Add( "Use45DegreeGraphicSegments", &m_Use45DegreeGraphicSegments, false);
+            Add( "MagneticPads", reinterpret_cast<int*>( &m_MagneticPads ), CAPTURE_CURSOR_IN_TRACK_TOOL );
+            Add( "MagneticTracks", reinterpret_cast<int*>( &m_MagneticTracks ), CAPTURE_CURSOR_IN_TRACK_TOOL );
+            Add( "MagneticGraphics", &m_MagneticGraphics, true );
+            Add( "FlipLeftRight", &m_FlipLeftRight, false );
+            break;
+
+        case FRAME_FOOTPRINT_EDITOR:
+            m_params.push_back( new PARAM_CFG_BOOL( "FpEditorUse45DegreeGraphicSegments",
+                    &m_Use45DegreeGraphicSegments, false,
+                    nullptr, "Use45DegreeGraphicSegments" ) );   // legacy location
+            m_params.push_back( new PARAM_CFG_INT( "FpEditorMagneticPads",
+                    reinterpret_cast<int*>( &m_MagneticPads ),
+                    CAPTURE_CURSOR_IN_TRACK_TOOL,               // default
+                    NO_EFFECT,                                  // min
+                    CAPTURE_ALWAYS,                             // max
+                    nullptr, "MagneticPads" ) );                // legacy location
+            break;
+
+        default:
+            break;
+        }
+    }
+    catch( boost::bad_pointer& )
+    {
+        // Out of memory?  Ship's going down anyway....
     }
 }
+
 
 void PCB_GENERAL_SETTINGS::Load( wxConfigBase* aCfg )
 {
     m_colorsSettings.Load( aCfg );
+
+#if defined(KICAD_SCRIPTING) && defined(KICAD_SCRIPTING_ACTION_MENU)
+
+    m_pluginSettings.clear();
+
+    wxString pluginSettings = aCfg->Read( "ActionPluginButtons" );
+
+    wxStringTokenizer pluginSettingsTokenizer = wxStringTokenizer( pluginSettings, ";" );
+
+    while( pluginSettingsTokenizer.HasMoreTokens() )
+    {
+        wxString plugin = pluginSettingsTokenizer.GetNextToken();
+        wxStringTokenizer pluginTokenizer = wxStringTokenizer( plugin, "=" );
+
+        if( pluginTokenizer.CountTokens() != 2 )
+        {
+            // Bad config
+            continue;
+        }
+
+        plugin = pluginTokenizer.GetNextToken();
+        m_pluginSettings.emplace_back( plugin, pluginTokenizer.GetNextToken() );
+    }
+
+#endif
+
     SETTINGS::Load( aCfg );
 }
 
@@ -50,5 +105,23 @@ void PCB_GENERAL_SETTINGS::Load( wxConfigBase* aCfg )
 void PCB_GENERAL_SETTINGS::Save( wxConfigBase* aCfg )
 {
     m_colorsSettings.Save( aCfg );
+
+#if defined(KICAD_SCRIPTING) && defined(KICAD_SCRIPTING_ACTION_MENU)
+
+    wxString pluginSettings;
+
+    for( auto const& entry : m_pluginSettings )
+    {
+        if( !pluginSettings.IsEmpty() )
+        {
+            pluginSettings = pluginSettings + wxT( ";" );
+        }
+        pluginSettings = pluginSettings + entry.first + wxT( "=" ) + entry.second;
+    }
+
+    aCfg->Write( "ActionPluginButtons" , pluginSettings );
+
+#endif
+
     SETTINGS::Save( aCfg );
 }

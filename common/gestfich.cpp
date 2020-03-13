@@ -3,7 +3,7 @@
  *
  * Copyright (C) 2004 Jean-Pierre Charras, jaen-pierre.charras@gipsa-lab.inpg.com
  * Copyright (C) 2008-2017 Wayne Stambaugh <stambaughw@verizon.net>
- * Copyright (C) 1992-2017 KiCad Developers, see AUTHORS.txt for contributors.
+ * Copyright (C) 1992-2019 KiCad Developers, see AUTHORS.txt for contributors.
  *
  * This program is free software; you can redistribute it and/or
  * modify it under the terms of the GNU General Public License
@@ -28,12 +28,10 @@
  * @brief Functions for file management
  */
 
+#include <fctsys.h>
 #include <wx/mimetype.h>
 #include <wx/filename.h>
 #include <wx/dir.h>
-
-// For compilers that support precompilation, includes "wx.h".
-#include <fctsys.h>
 #include <pgm_base.h>
 #include <confirm.h>
 #include <common.h>
@@ -48,34 +46,6 @@ void AddDelimiterString( wxString& string )
         string.Prepend ( wxT( "\"" ) );
         string.Append ( wxT( "\"" ) );
     }
-}
-
-
-bool EDA_PATH_SELECTOR( const wxString& aTitle,
-                        wxString&       aPath,
-                        int             aFlags,
-                        wxWindow*       aParent,
-                        const wxPoint&  aPosition )
-{
-    int          ii;
-    bool         selected = false;
-
-    wxDirDialog* DirFrame = new wxDirDialog( aParent,
-                                             aTitle,
-                                             aPath,
-                                             aFlags,
-                                             aPosition );
-
-    ii = DirFrame->ShowModal();
-
-    if( ii == wxID_OK )
-    {
-        aPath    = DirFrame->GetPath();
-        selected = true;
-    }
-
-    DirFrame->Destroy();
-    return selected;
 }
 
 
@@ -121,14 +91,10 @@ wxString EDA_FILE_SELECTOR( const wxString& aTitle,
             aKeepWorkingDirectory );
 #endif
 
-    fullfilename = wxFileSelector( aTitle,
-                                   defaultpath,
-                                   defaultname,
-                                   dotted_Ext,
-                                   aWildcard,
+    fullfilename = wxFileSelector( aTitle, defaultpath, defaultname,
+                                   dotted_Ext, aWildcard,
                                    aStyle,         // open mode wxFD_OPEN, wxFD_SAVE ..
-                                   aParent,
-                                   aPosition.x, aPosition.y );
+                                   aParent, aPosition.x, aPosition.y );
 
     if( aKeepWorkingDirectory )
         wxSetWorkingDirectory( curr_cwd );
@@ -188,7 +154,7 @@ wxString FindKicadFile( const wxString& shortname )
     };
 
     // find binary file from possibilities list:
-    for( unsigned i=0;  i<DIM(possibilities);  ++i )
+    for( unsigned i=0;  i<arrayDim(possibilities);  ++i )
     {
 #ifndef __WXMAC__
         fullFileName = possibilities[i] + shortname;
@@ -230,158 +196,57 @@ int ExecuteFile( wxWindow* frame, const wxString& ExecFile, const wxString& para
 #endif
 
     wxString msg;
-    msg.Printf( _( "Command <%s> could not found" ), GetChars( fullFileName ) );
+    msg.Printf( _( "Command \"%s\" could not found" ), GetChars( fullFileName ) );
     DisplayError( frame, msg, 20 );
     return -1;
-}
-
-
-wxString KicadDatasPath()
-{
-    bool     found = false;
-    wxString data_path;
-
-    if( Pgm().IsKicadEnvVariableDefined() ) // Path defined by the KICAD environment variable.
-    {
-        data_path = Pgm().GetKicadEnvVariable();
-        found = true;
-    }
-    else    // Path of executables.
-    {
-#ifndef __WXMAC__
-        wxString tmp = Pgm().GetExecutablePath();
-#ifdef __WINDOWS__
-        tmp.MakeLower();
-#endif
-        if( tmp.Contains( wxT( "kicad" ) ) )
-        {
-#ifdef __WINDOWS__
-            tmp = Pgm().GetExecutablePath();
-#endif
-            if( tmp.Last() == '/' )
-                tmp.RemoveLast();
-
-            data_path  = tmp.BeforeLast( '/' ); // id cd ../
-            data_path += UNIX_STRING_DIR_SEP;
-
-            // Old versions of KiCad use kicad/ as default for data
-            // and last versions kicad/share/
-            // So we search for kicad/share/ first
-            wxString old_path = data_path;
-            data_path += wxT( "share/" );
-
-            if( wxDirExists( data_path ) )
-            {
-                found = true;
-            }
-            else if( wxDirExists( old_path ) )
-            {
-                data_path = old_path;
-                found = true;
-            }
-        }
-    }
-
-    if( !found )
-    {
-        // find KiCad from possibilities list:
-        //  /usr/local/kicad/ or c:/kicad/
-
-        const static wxChar*  possibilities[] = {
-#ifdef __WINDOWS__
-            wxT( "c:/kicad/share/" ),
-            wxT( "d:/kicad/share/" ),
-            wxT( "c:/kicad/" ),
-            wxT( "d:/kicad/" ),
-            wxT( "c:/Program Files/kicad/share/" ),
-            wxT( "d:/Program Files/kicad/share/" ),
-            wxT( "c:/Program Files/kicad/" ),
-            wxT( "d:/Program Files/kicad/" ),
-#else
-            wxT( "/usr/share/kicad/" ),
-            wxT( "/usr/local/share/kicad/" ),
-            wxT( "/usr/local/kicad/share/" ),   // default data path for "universal
-                                                // tarballs" and build for a server
-                                                // (new)
-            wxT( "/usr/local/kicad/" ),         // default data path for "universal
-                                                // tarballs" and build for a server
-                                                // (old)
-#endif
-        };
-
-        for( unsigned i=0;  i<DIM(possibilities);  ++i )
-        {
-            data_path = possibilities[i];
-
-            if( wxDirExists( data_path ) )
-            {
-                found = true;
-                break;
-            }
-        }
-#else
-        // On OSX point to Contents/SharedSupport folder of main bundle
-        data_path = GetOSXKicadDataDir();
-        found = true;
-#endif
-    }
-
-    if( found )
-    {
-        data_path.Replace( WIN_STRING_DIR_SEP, UNIX_STRING_DIR_SEP );
-
-        if( data_path.Last() != '/' )
-            data_path += UNIX_STRING_DIR_SEP;
-    }
-    else
-    {
-        data_path.Empty();
-    }
-
-    return data_path;
 }
 
 
 bool OpenPDF( const wxString& file )
 {
     wxString command;
-    wxString filename = file;
-
-    // Quote in case there are spaces in the file name.
-    AddDelimiterString( filename );
+    const wxString& filename = file;
 
     Pgm().ReadPdfBrowserInfos();
 
     if( !Pgm().UseSystemPdfBrowser() )    //  Run the preferred PDF Browser
     {
-        command = Pgm().GetPdfBrowserName() + wxT( " " ) + filename;
+#ifdef __WXMSW__
+        // Windows requires double quotes around the filename to handle spaces
+        command = Pgm().GetPdfBrowserName() + wxT( " \"" ) + filename + wxT( "\"" );
+#else
+        command = Pgm().GetPdfBrowserName() + wxT( " '" ) + filename + wxT( "'" );
+#endif
     }
     else
     {
-        if( wxLaunchDefaultApplication( file ) )
+        if( wxLaunchDefaultApplication( filename ) )
             return true;
 
+#ifdef __WXMAC__
+        command = wxT( "/usr/bin/open -a '" ) + filename + wxT( "'" );
+#endif
         // If launching the system default PDF viewer fails, fall through with empty command
         // string so the error message is displayed.
     }
 
     if( !command.IsEmpty() )
     {
-        if( ProcessExecute( command ) )
+        if( ProcessExecute( command ) != -1 )
         {
             return true;
         }
         else
         {
             wxString msg;
-            msg.Printf( _( "Problem while running the PDF viewer\nCommand is '%s'" ), command );
+            msg.Printf( _( "Problem while running the PDF viewer\nCommand is \"%s\"" ), command );
             DisplayError( NULL, msg );
         }
     }
     else
     {
         wxString msg;
-        msg.Printf( _( "Unable to find a PDF viewer for '%s'" ), file );
+        msg.Printf( _( "Unable to find a PDF viewer for \"%s\"" ), file );
         DisplayError( NULL, msg );
     }
 
@@ -391,30 +256,190 @@ bool OpenPDF( const wxString& file )
 
 void OpenFile( const wxString& file )
 {
+    wxFileName  fileName( file );
+    wxFileType* filetype = wxTheMimeTypesManager->GetFileTypeFromExtension( fileName.GetExt() );
+
+    if( !filetype )
+        return;
+
     wxString    command;
-    wxString    filename = file;
+    wxFileType::MessageParameters params( file );
 
-    wxFileName  CurrentFileName( filename );
-    wxString    ext, type;
-
-    ext = CurrentFileName.GetExt();
-    wxFileType* filetype = wxTheMimeTypesManager->GetFileTypeFromExtension( ext );
-
-    bool        success = false;
-
-    wxFileType::MessageParameters params( filename, type );
-
-    if( filetype )
-        success = filetype->GetOpenCommand( &command, params );
-
+    filetype->GetOpenCommand( &command, params );
     delete filetype;
 
-    if( success && !command.IsEmpty() )
+    if( !command.IsEmpty() )
         ProcessExecute( command );
+}
+
+
+bool doPrintFile( const wxString& file, bool aDryRun )
+{
+    wxFileName  fileName( file );
+    wxString    ext = fileName.GetExt();
+    wxFileType* filetype = wxTheMimeTypesManager->GetFileTypeFromExtension( ext );
+
+    if( !filetype )
+        return false;
+
+    wxString    printCommand;
+    wxString    openCommand;
+    wxString    application;
+
+    wxFileType::MessageParameters params( file );
+    filetype->GetPrintCommand( &printCommand, params );
+    filetype->GetOpenCommand( &openCommand, params );
+    delete filetype;
+
+    if( !printCommand.IsEmpty() )
+    {
+        if( !aDryRun )
+            ProcessExecute( printCommand );
+
+        return true;
+    }
+
+#ifdef __WXMAC__
+    if( ext == "ps" || ext == "pdf" )
+        application = "Preview";
+    else if( ext == "csv" )
+        application = "Numbers";
+    else if( ext == "txt" || ext == "rpt" || ext == "pos" || ext == "cmp" || ext == "net" )
+        application = "TextEdit";
+
+    if( !application.IsEmpty() )
+    {
+        printCommand.Printf( "osascript -e 'tell application \"%s\"' "
+                                  "-e '   set srcFileRef to (open POSIX file \"%s\")' "
+                                  "-e '   activate' "
+                                  "-e '   print srcFileRef print dialog true' "
+                                  "-e 'end tell' ",
+                             application,
+                             file );
+
+        if( !aDryRun )
+            system( printCommand.c_str() );
+
+        return true;
+    }
+#endif
+
+#ifdef __WXGTK__
+    if( ext == "ps" || ext == "pdf"
+            || ext == "csv"
+            || ext == "txt" || ext == "rpt" || ext == "pos" || ext == "cmp" || ext == "net" )
+    {
+        printCommand.Printf( "lp \"%s\"", file );
+
+        if( !aDryRun )
+            ProcessExecute( printCommand );
+
+        return true;
+    }
+#endif
+
+    if( !aDryRun )
+    {
+        DisplayError( nullptr, wxString::Format( _( "Cannot print '%s'.\n\nUnknown filetype." ),
+                                                 file ) );
+    }
+
+    return false;
+}
+
+
+void PrintFile( const wxString& file )
+{
+    doPrintFile( file, false );
+}
+
+
+bool CanPrintFile( const wxString& file )
+{
+    return doPrintFile( file, true );
+}
+
+
+void CopyFile( const wxString& aSrcPath, const wxString& aDestPath, wxString& aErrors )
+{
+    if( !wxCopyFile( aSrcPath, aDestPath ) )
+    {
+        wxString msg;
+
+        if( !aErrors.IsEmpty() )
+            aErrors += "\n";
+
+        msg.Printf( _( "Cannot copy file \"%s\"." ), aDestPath );
+        aErrors += msg;
+    }
 }
 
 
 wxString QuoteFullPath( wxFileName& fn, wxPathFormat format )
 {
     return wxT( "\"" ) + fn.GetFullPath( format ) + wxT( "\"" );
+}
+
+
+bool DeleteDirectory( const wxString& aDirName, bool aRecurse, bool aIncludeHidden )
+{
+    int   hiddenFlag = ( aIncludeHidden ? wxDIR_HIDDEN : 0 );
+    wxDir mainDir( aDirName );
+
+    if( !mainDir.IsOpened() )
+        return false;
+
+    if( mainDir.HasSubDirs() && !aRecurse )
+    {
+        mainDir.Close();
+        return false;
+    }
+
+    // Get the name from wxWidgets so that we are sure all the separators are correct
+    wxString fullDirName = mainDir.GetNameWithSep();
+
+    wxString dir;
+    bool     valid = mainDir.GetFirst( &dir, wxEmptyString, wxDIR_DIRS | hiddenFlag );
+
+    // Iterate over the subdirectories to recursively delete them and their contents
+    while( valid )
+    {
+        dir.Prepend( fullDirName );
+
+        // This call will also delete the actual directory, so we don't have to
+        if( !DeleteDirectory( dir, true, aIncludeHidden ) )
+        {
+            mainDir.Close();
+            return false;
+        }
+        valid = mainDir.GetNext( &dir );
+    }
+
+
+    wxString file;
+    valid = mainDir.GetFirst( &file, wxEmptyString, wxDIR_FILES | hiddenFlag );
+
+    // Iterate over the files to remove all of them from the directory
+    while( valid )
+    {
+        file.Prepend( fullDirName );
+
+        if( !wxRemoveFile( file ) )
+        {
+            mainDir.Close();
+            return false;
+        }
+        valid = mainDir.GetNext( &file );
+    }
+
+    mainDir.Close();
+
+    // Now delete the actual directory
+    if( !wxRmdir( aDirName ) )
+    {
+        mainDir.Close();
+        return false;
+    }
+
+    return true;
 }

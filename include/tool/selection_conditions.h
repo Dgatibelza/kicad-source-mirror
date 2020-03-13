@@ -28,7 +28,6 @@
 #include <functional>
 #include <core/typeinfo.h>
 #include <vector>
-
 #include <tool/selection.h>
 
 ///> Functor type that checks a specific condition for selected items.
@@ -39,6 +38,8 @@ SELECTION_CONDITION operator||( const SELECTION_CONDITION& aConditionA,
 
 SELECTION_CONDITION operator&&( const SELECTION_CONDITION& aConditionA,
                                 const SELECTION_CONDITION& aConditionB );
+
+SELECTION_CONDITION operator!( const SELECTION_CONDITION& aCondition );
 
 
 /**
@@ -85,14 +86,6 @@ public:
     /**
      * Function OnlyTypes
      * Creates a functor that tests if the selected items are *only* of given types.
-     * @param aTypes is a vector containing types that are searched.
-     * @return Functor testing if selected items are exclusively of the requested types.
-     */
-    static SELECTION_CONDITION OnlyTypes( const std::vector<KICAD_T>& aTypes );
-
-    /**
-     * Function OnlyTypes
-     * Creates a functor that tests if the selected items are *only* of given types.
      * @param aTypes is an array containing types that are searched. It has to be ended with
      * KICAD_T::EOT as end marker.
      * @return Functor testing if selected items are exclusively of the requested types.
@@ -134,8 +127,7 @@ private:
     static bool onlyTypeFunc( const SELECTION& aSelection, KICAD_T aType );
 
     ///> Helper function used by OnlyTypes()
-    static bool onlyTypesFunc( const SELECTION& aSelection, const std::vector<KICAD_T>& aTypes );
-    static bool onlyTypesFuncArr( const SELECTION& aSelection, const KICAD_T aTypes[] );
+    static bool onlyTypesFunc( const SELECTION& aSelection, const KICAD_T aTypes[] );
 
     ///> Helper function used by Count()
     static bool countFunc( const SELECTION& aSelection, int aNumber );
@@ -160,11 +152,19 @@ private:
         return aConditionA( aSelection ) && aConditionB( aSelection );
     }
 
+    ///> Helper function used by operator!
+    static bool notFunc( const SELECTION_CONDITION& aCondition, const SELECTION& aSelection )
+    {
+        return !aCondition( aSelection );
+    }
+
     friend SELECTION_CONDITION operator||( const SELECTION_CONDITION& aConditionA,
                                            const SELECTION_CONDITION& aConditionB );
 
     friend SELECTION_CONDITION operator&&( const SELECTION_CONDITION& aConditionA,
                                            const SELECTION_CONDITION& aConditionB );
+
+    friend SELECTION_CONDITION operator!( const SELECTION_CONDITION& aCondition );
 };
 
 #endif /* SELECTION_CONDITIONS_H_ */

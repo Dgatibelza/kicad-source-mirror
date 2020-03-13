@@ -3,8 +3,8 @@
  *
  * Copyright (C) 2015-2016 Mario Luzeiro <mrluzeiro@ua.pt>
  * Copyright (C) 2014 Jean-Pierre Charras, jp.charras at wanadoo.fr
- * Copyright (C) 2011 Wayne Stambaugh <stambaughw@verizon.net>
- * Copyright (C) 1992-2016 KiCad Developers, see AUTHORS.txt for contributors.
+ * Copyright (C) 2011 Wayne Stambaugh <stambaughw@gmail.com>
+ * Copyright (C) 1992-2019 KiCad Developers, see AUTHORS.txt for contributors.
  *
  * This program is free software; you can redistribute it and/or
  * modify it under the terms of the GNU General Public License
@@ -32,19 +32,34 @@
 #ifndef EDA_3D_VIEWER_H
 #define EDA_3D_VIEWER_H
 
-
 #include "../3d_canvas/cinfo3d_visu.h"
 #include "../3d_canvas/eda_3d_canvas.h"
 #include <kiway_player.h>
 #include <wx/colourdata.h>
+#include <../common/dialogs/dialog_color_picker.h>  // for CUSTOM_COLORS_LIST definition
+
+
+/// A variable name whose value holds the path of 3D shape files.
+/// Currently an environment variable, eventually a project variable.
+#define KISYS3DMOD wxT( "KISYS3DMOD" )
 
 
 #define KICAD_DEFAULT_3D_DRAWFRAME_STYLE    (wxDEFAULT_FRAME_STYLE | wxWANTS_CHARS)
 
 #define VIEWER3D_FRAMENAME wxT( "Viewer3DFrameName" )
+#define QUALIFIED_VIEWER3D_FRAMENAME( parent ) \
+                    ( wxString( VIEWER3D_FRAMENAME ) + wxT( ":" ) + parent->GetName() )
+
+
+enum EDA_3D_VIEWER_STATUSBAR
+{
+    STATUS_TEXT = 0,
+    WARN_TEXT,
+    X_POS,
+    Y_POS
+};
 
 /**
- *  Class EDA_3D_VIEWER
  *  Create and handle a window for the 3d viewer connected to a Kiway and a pcbboard
  */
 class EDA_3D_VIEWER : public KIWAY_PLAYER
@@ -52,8 +67,7 @@ class EDA_3D_VIEWER : public KIWAY_PLAYER
 
  public:
 
-    EDA_3D_VIEWER( KIWAY *aKiway,
-                   PCB_BASE_FRAME *aParent,
+    EDA_3D_VIEWER( KIWAY *aKiway, PCB_BASE_FRAME *aParent,
                    const wxString &aTitle,
                    long style = KICAD_DEFAULT_3D_DRAWFRAME_STYLE );
 
@@ -66,7 +80,7 @@ class EDA_3D_VIEWER : public KIWAY_PLAYER
     /**
      * Request reloading the 3D view. However the request will be executed
      * only when the 3D canvas is refreshed.
-     * It allows to prepare changes and request for 3D rebuild only when all
+     * It allows one to prepare changes and request for 3D rebuild only when all
      * changes are committed.
      * This is made because the 3D rebuild can take a long time, and this rebuild
      * cannot always made after each change, for calculation time reason.
@@ -86,44 +100,23 @@ class EDA_3D_VIEWER : public KIWAY_PLAYER
     void NewDisplay( bool aForceImmediateRedraw = false );
 
     /**
-     *  Function SetDefaultFileName
-     *  Set the default file name (eg: to be suggested to a screenshot)
-     *  @param aFn = file name to assign
-     */
-    void SetDefaultFileName( const wxString &aFn )
-    {
-        wxFileName fn( aFn );
-        m_defaultFileName = fn.GetName();
-    }
-
-    /**
-     *  Function GetDefaultFileName
-     *  @return the default suggested file name
-     */
-    const wxString &GetDefaultFileName() const { return m_defaultFileName; }
-
-    /**
-     * Function GetSettings
      *  @return current settings
      */
     CINFO3D_VISU &GetSettings() { return m_settings; }
 
     /**
-     * Function Set3DColorFromUser
      * Get a SFVEC3D from a wx colour dialog
      * @param aColor is the SFVEC3D to change
      * @param aTitle is the title displayed in the colordialog selector
-     * @param aPredefinedColors is a reference to a wxColourData
+     * @param aPredefinedColors is a reference to a CUSTOM_COLOR_ITEM list
      * which contains a few predefined colors
-     * if it is NULL, no predefined colors are used
-     * @return true if a new color is chosen, false if
-     * no change or aborted by user
+     * if empty, no predefined colors are used.
+     * no change if aborted by user
      */
     bool Set3DColorFromUser( SFVEC3D &aColor, const wxString& aTitle,
-                             wxColourData* aPredefinedColors = NULL );
+                             CUSTOM_COLORS_LIST* aPredefinedColors );
 
     /**
-     * Function Set3DSolderMaskColorFromUser
      * Set the solder mask color from a set of colors
      * @return true if a new color is chosen, false if
      * no change or aborted by user
@@ -131,7 +124,6 @@ class EDA_3D_VIEWER : public KIWAY_PLAYER
     bool Set3DSolderMaskColorFromUser();
 
     /**
-     * Function Set3DSolderPasteColorFromUser
      * Set the solder mask color from a set of colors
      * @return true if a new color is chosen, false if
      * no change or aborted by user
@@ -139,7 +131,6 @@ class EDA_3D_VIEWER : public KIWAY_PLAYER
     bool Set3DSolderPasteColorFromUser();
 
     /**
-     * Function Set3DCopperColorFromUser
      * Set the copper color from a set of colors
      * @return true if a new color is chosen, false if
      * no change or aborted by user
@@ -147,7 +138,6 @@ class EDA_3D_VIEWER : public KIWAY_PLAYER
     bool Set3DCopperColorFromUser();
 
     /**
-     * Function Set3DBoardBodyBodyColorFromUser
      * Set the copper color from a set of colors
      * @return true if a new color is chosen, false if
      * no change or aborted by user
@@ -155,18 +145,26 @@ class EDA_3D_VIEWER : public KIWAY_PLAYER
     bool Set3DBoardBodyColorFromUser();
 
     /**
-     * Function Set3DSilkScreenColorFromUser
      * Set the silkscreen color from a set of colors
      * @return true if a new color is chosen, false if
      * no change or aborted by user
      */
     bool Set3DSilkScreenColorFromUser();
 
- private:
     /**
-     * @brief Exit3DFrame - Called when user press the File->Exit
-     * @param event
+     * Notification that common settings are updated.
+     *
+     * This would be private (and only called by the Kiway), but we
+     * need to do this manually from the PCB frame because the 3D viewer isn't
+     * updated via the #KIWAY.
      */
+    void CommonSettingsChanged( bool aEnvVarsChanged ) override;
+
+
+    void SynchroniseColoursWithBoard( void );
+
+private:
+    /// Called when user press the File->Exit
     void Exit3DFrame( wxCommandEvent &event );
 
     void OnCloseWindow( wxCloseEvent &event );
@@ -176,8 +174,7 @@ class EDA_3D_VIEWER : public KIWAY_PLAYER
     void On3DGridSelection( wxCommandEvent &event );
 
     void OnRenderEngineSelection( wxCommandEvent &event );
-
-    void OnUpdateMenus(wxUpdateUIEvent& event);
+    void OnDisableRayTracing( wxCommandEvent& aEvent );
 
     void ProcessZoom( wxCommandEvent &event );
 
@@ -187,31 +184,23 @@ class EDA_3D_VIEWER : public KIWAY_PLAYER
 
     void Install3DViewOptionDialog( wxCommandEvent &event );
 
+    void OnUpdateUIEngine( wxUpdateUIEvent& aEvent );
+    void OnUpdateUIMaterial( wxUpdateUIEvent& aEvent );
+
     void CreateMenuBar();
 
-    void DisplayHotKeys();
-
     /**
-     *  Set the state of toggle menus according to the current display options
+     * Equivalent of EDA_DRAW_FRAME::ReCreateHToolbar
      */
-    void SetMenuBarOptionsState();
-
     void ReCreateMainToolbar();
 
-    void SetToolbars();
+    void SaveSettings( APP_SETTINGS_BASE *aCfg ) override;
 
-    void SaveSettings( wxConfigBase *aCfg ) override;
+    void LoadSettings( APP_SETTINGS_BASE *aCfg ) override;
 
-    void LoadSettings( wxConfigBase *aCfg ) override;
-
-    void OnLeftClick( wxDC *DC, const wxPoint &MousePos );
-
-    void OnRightClick( const wxPoint &MousePos, wxMenu *PopMenu );
-
-    void RedrawActiveWindow( wxDC *DC, bool EraseBg );
+    void OnKeyEvent( wxKeyEvent& event );
 
     /**
-     *  Function TakeScreenshot
      *  Create a Screenshot of the current 3D view.
      *  Output file format is png or jpeg, or image is copied to the clipboard
      */
@@ -222,24 +211,22 @@ class EDA_3D_VIEWER : public KIWAY_PLAYER
      */
     void RenderEngineChanged();
 
-    DECLARE_EVENT_TABLE();
+    DECLARE_EVENT_TABLE()
 
  private:
 
     /**
-     *  Filename to propose for save a screenshot
+     * Load configuration from common settings.
      */
-    wxString m_defaultFileName;
+    void loadCommonSettings();
 
-    /**
-     *  The canvas where the openGL context will be rendered
-     */
-    EDA_3D_CANVAS *m_canvas;
+    wxFileName     m_defaultSaveScreenshotFileName;
 
-    /**
-     *  Store all the settings and options to be used by the renders
-     */
-    CINFO3D_VISU m_settings;
+    wxAuiToolBar*  m_mainToolBar;
+    EDA_3D_CANVAS* m_canvas;
+    CINFO3D_VISU   m_settings;
+
+    bool           m_disable_ray_tracing;
 
     /**
      *  Trace mask used to enable or disable the trace output of this class.

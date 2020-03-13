@@ -25,13 +25,14 @@
  */
 
 #include <fctsys.h>
-#include <plot_common.h>
-#include <class_sch_screen.h>
-#include <schframe.h>
+#include <plotter.h>
+#include <sch_edit_frame.h>
 #include <base_units.h>
 #include <sch_sheet_path.h>
+#include <pgm_base.h>
 #include <project.h>
 #include <reporter.h>
+#include <settings/settings_manager.h>
 
 #include <dialog_plot_schematic.h>
 #include <wx_html_report_panel.h>
@@ -104,22 +105,21 @@ void DIALOG_PLOT_SCHEMATIC::createPSFile( bool aPlotAll, bool aPlotFrameRef )
             if( plotOneSheetPS( plotFileName.GetFullPath(), screen, plotPage, plot_offset,
                                 scale, aPlotFrameRef ) )
             {
-                msg.Printf( _( "Plot: '%s' OK.\n" ), GetChars( plotFileName.GetFullPath() ) );
-                reporter.Report( msg, REPORTER::RPT_ACTION );
+                msg.Printf( _( "Plot: \"%s\" OK.\n" ), plotFileName.GetFullPath() );
+                reporter.Report( msg, RPT_SEVERITY_ACTION );
             }
             else
             {
                 // Error
-                msg.Printf( _( "Unable to create file '%s'.\n" ),
-                            GetChars( plotFileName.GetFullPath() ) );
-                reporter.Report( msg, REPORTER::RPT_ERROR );
+                msg.Printf( _( "Unable to create file \"%s\".\n" ), plotFileName.GetFullPath() );
+                reporter.Report( msg, RPT_SEVERITY_ERROR );
             }
 
         }
         catch( IO_ERROR& e )
         {
-            msg.Printf( wxT( "PS Plotter exception: %s"), GetChars( e.What() ) );
-            reporter.Report( msg, REPORTER::RPT_ERROR );
+            msg.Printf( wxT( "PS Plotter exception: %s"), e.What() );
+            reporter.Report( msg, RPT_SEVERITY_ERROR );
         }
     }
 
@@ -136,10 +136,14 @@ bool DIALOG_PLOT_SCHEMATIC::plotOneSheetPS( const wxString&     aFileName,
                                             double              aScale,
                                             bool                aPlotFrameRef )
 {
+    auto colors = static_cast<COLOR_SETTINGS*>(
+            m_colorTheme->GetClientData( m_colorTheme->GetSelection() ) );
+
     PS_PLOTTER* plotter = new PS_PLOTTER();
     plotter->SetPageSettings( aPageInfo );
     plotter->SetDefaultLineWidth( GetDefaultLineThickness() );
     plotter->SetColorMode( getModeColor() );
+    plotter->SetColorSettings( colors );
     // Currently, plot units are in decimil
     plotter->SetViewport( aPlot0ffset, IU_PER_MILS/10, aScale, false );
 
@@ -156,14 +160,26 @@ bool DIALOG_PLOT_SCHEMATIC::plotOneSheetPS( const wxString&     aFileName,
 
     plotter->StartPlot();
 
+    if( m_plotBackgroundColor )
+    {
+        plotter->SetColor( plotter->ColorSettings()->GetColor( LAYER_SCHEMATIC_BACKGROUND ) );
+        wxPoint end( plotter->PageSettings().GetWidthIU(),
+                     plotter->PageSettings().GetHeightIU() );
+        plotter->Rect( wxPoint( 0, 0 ), end, FILLED_SHAPE, 1.0 );
+    }
+
     if( aPlotFrameRef )
     {
-        plotter->SetColor( BLACK );
+        COLOR4D color = plotter->GetColorMode() ?
+                        plotter->ColorSettings()->GetColor( LAYER_SCHEMATIC_WORKSHEET ) :
+                        COLOR4D::BLACK;
+
         PlotWorkSheet( plotter, m_parent->GetTitleBlock(),
                        m_parent->GetPageSettings(),
                        aScreen->m_ScreenNumber, aScreen->m_NumberOfScreens,
                        m_parent->GetScreenDesc(),
-                       aScreen->GetFileName() );
+                       aScreen->GetFileName(),
+                       color );
     }
 
     aScreen->Plot( plotter );

@@ -1,8 +1,8 @@
 ///////////////////////////////////////////////////////////////////////////
-// C++ code generated with wxFormBuilder (version Dec  4 2016)
+// C++ code generated with wxFormBuilder (version Jun  5 2018)
 // http://www.wxformbuilder.org/
 //
-// PLEASE DO "NOT" EDIT THIS FILE!
+// PLEASE DO *NOT* EDIT THIS FILE!
 ///////////////////////////////////////////////////////////////////////////
 
 #ifndef __PANEL_PREV_3D_BASE_H__
@@ -61,21 +61,19 @@ class PANEL_PREV_3D_BASE : public wxPanel
 		wxTextCtrl* xoff;
 		wxSpinButton* m_spinXoffset;
 		wxStaticText* m_staticText22;
-		wxTextCtrl* yoff;
 		wxSpinButton* m_spinYoffset;
 		wxStaticText* m_staticText32;
 		wxTextCtrl* zoff;
 		wxSpinButton* m_spinZoffset;
 		wxBoxSizer* m_SizerPanelView;
-		wxFlexGridSizer* m_fgSizerButtons;
 		wxBitmapButton* m_bpvISO;
 		wxBitmapButton* m_bpvLeft;
-		wxBitmapButton* m_bpvFront;
-		wxBitmapButton* m_bpvTop;
-		wxBitmapButton* m_bpUpdate;
 		wxBitmapButton* m_bpvRight;
+		wxBitmapButton* m_bpvFront;
 		wxBitmapButton* m_bpvBack;
+		wxBitmapButton* m_bpvTop;
 		wxBitmapButton* m_bpvBottom;
+		wxBitmapButton* m_bpUpdate;
 		
 		// Virtual event handlers, overide them in your derived class
 		virtual void onMouseWheelScale( wxMouseEvent& event ) { event.Skip(); }
@@ -90,17 +88,18 @@ class PANEL_PREV_3D_BASE : public wxPanel
 		virtual void onIncrementOffset( wxSpinEvent& event ) { event.Skip(); }
 		virtual void View3DISO( wxCommandEvent& event ) { event.Skip(); }
 		virtual void View3DLeft( wxCommandEvent& event ) { event.Skip(); }
-		virtual void View3DFront( wxCommandEvent& event ) { event.Skip(); }
-		virtual void View3DTop( wxCommandEvent& event ) { event.Skip(); }
-		virtual void View3DUpdate( wxCommandEvent& event ) { event.Skip(); }
 		virtual void View3DRight( wxCommandEvent& event ) { event.Skip(); }
+		virtual void View3DFront( wxCommandEvent& event ) { event.Skip(); }
 		virtual void View3DBack( wxCommandEvent& event ) { event.Skip(); }
+		virtual void View3DTop( wxCommandEvent& event ) { event.Skip(); }
 		virtual void View3DBottom( wxCommandEvent& event ) { event.Skip(); }
+		virtual void View3DUpdate( wxCommandEvent& event ) { event.Skip(); }
 		
 	
 	public:
+		wxTextCtrl* yoff;
 		
-		PANEL_PREV_3D_BASE( wxWindow* parent, wxWindowID id = wxID_ANY, const wxPoint& pos = wxDefaultPosition, const wxSize& size = wxSize( 503,371 ), long style = wxTAB_TRAVERSAL ); 
+		PANEL_PREV_3D_BASE( wxWindow* parent, wxWindowID id = wxID_ANY, const wxPoint& pos = wxDefaultPosition, const wxSize& size = wxSize( -1,-1 ), long style = wxTAB_TRAVERSAL ); 
 		~PANEL_PREV_3D_BASE();
 	
 };

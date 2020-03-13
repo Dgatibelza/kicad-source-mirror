@@ -28,9 +28,13 @@
 
 #ifndef PCBNEW_ACTION_PLUGINS_H
 #define PCBNEW_ACTION_PLUGINS_H
+
+#undef HAVE_CLOCK_GETTIME  // macro is defined in Python.h and causes redefine warning
 #include <Python.h>
+#undef HAVE_CLOCK_GETTIME
+
 #include <vector>
-#include <class_action_plugin.h>
+#include <action_plugin.h>
 
 
 class PYTHON_ACTION_PLUGIN : public ACTION_PLUGIN
@@ -47,6 +51,9 @@ public:
     wxString    GetCategoryName() override;
     wxString    GetName() override;
     wxString    GetDescription() override;
+    bool        GetShowToolbarButton() override;
+    wxString    GetIconFileName() override;
+    wxString    GetPluginPath() override;
     void        Run() override;
     void*       GetObject() override;
 };

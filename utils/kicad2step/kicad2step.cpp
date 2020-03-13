@@ -32,7 +32,7 @@
 #include <sstream>
 #include <Standard_Failure.hxx>
 
-#include "kicadpcb.h"
+#include "pcb/kicadpcb.h"
 
 class KICAD2MCAD : public wxAppConsole
 {
@@ -43,6 +43,9 @@ public:
     virtual bool OnCmdLineParsed(wxCmdLineParser& parser) override;
 
 private:
+    ///> Returns file extension for the selected output format
+    wxString getOutputExt() const;
+
 #ifdef SUPPORTS_IGES
     bool     m_fmtIGES;
 #endif
@@ -54,7 +57,7 @@ private:
     wxString m_outputFile;
     double   m_xOrigin;
     double   m_yOrigin;
-    bool     m_inch;
+    double   m_minDistance;
 };
 
 static const wxCmdLineEntryDesc cmdLineDesc[] =
@@ -79,6 +82,9 @@ static const wxCmdLineEntryDesc cmdLineDesc[] =
         { wxCMD_LINE_SWITCH, NULL, "no-virtual",
             _( "exclude 3D models for components with 'virtual' attribute" ).mb_str(),
             wxCMD_LINE_VAL_NONE, wxCMD_LINE_PARAM_OPTIONAL },
+        { wxCMD_LINE_OPTION, NULL, "min-distance",
+            _( "Minimum distance between points to treat them as separate ones (default 0.01 mm)" ).mb_str(),
+            wxCMD_LINE_VAL_STRING, wxCMD_LINE_PARAM_OPTIONAL },
         { wxCMD_LINE_SWITCH, "h", NULL, _( "display this message" ).mb_str(),
             wxCMD_LINE_VAL_NONE, wxCMD_LINE_OPTION_HELP },
         { wxCMD_LINE_NONE }
@@ -97,9 +103,9 @@ bool KICAD2MCAD::OnInit()
     m_useGridOrigin = false;
     m_useDrillOrigin = false;
     m_includeVirtual = true;
-    m_inch = false;
     m_xOrigin = 0.0;
     m_yOrigin = 0.0;
+    m_minDistance = MIN_DISTANCE;
 
     if( !wxAppConsole::OnInit() )
         return false;
@@ -173,7 +179,38 @@ bool KICAD2MCAD::OnCmdLineParsed( wxCmdLineParser& parser )
 
             if( !tunit.compare( "in" ) || !tunit.compare( "inch" ) )
             {
-                m_inch = true;
+                m_xOrigin *= 25.4;
+                m_yOrigin *= 25.4;
+            }
+            else if( tunit.compare( "mm" ) )
+            {
+                parser.Usage();
+                return false;
+            }
+        }
+    }
+
+
+    if( parser.Found( "min-distance", &tstr ) )
+    {
+        std::istringstream istr;
+        istr.str( std::string( tstr.ToUTF8() ) );
+        istr >> m_minDistance;
+
+        if( istr.fail() )
+        {
+            parser.Usage();
+            return false;
+        }
+
+        if( !istr.eof() )
+        {
+            std::string tunit;
+            istr >> tunit;
+
+            if( !tunit.compare( "in" ) || !tunit.compare( "inch" ) )
+            {
+                m_minDistance *= 25.4;
             }
             else if( tunit.compare( "mm" ) )
             {
@@ -216,29 +253,33 @@ int KICAD2MCAD::OnRun()
     wxFileName tfname;
 
     if( m_outputFile.empty() )
+    {
         tfname.Assign( fname.GetFullPath() );
+        tfname.SetExt( getOutputExt() );
+    }
     else
+    {
         tfname.Assign( m_outputFile );
 
-    // Set the file extension if the user's requested file name does not have an extension.
-    if( !tfname.HasExt() )
+        // Set the file extension if the user's requested
+        // file name does not have an extension.
+        if( !tfname.HasExt() )
+            tfname.SetExt( getOutputExt() );
+    }
+
+    if( tfname.FileExists() && !m_overwrite )
     {
-#ifdef SUPPORTS_IGES
-        if( m_fmtIGES )
-            tfname.SetExt( "igs" );
-        else
-#endif
-            tfname.SetExt( "stp" );
+        std::cerr << "** Output already exists. "
+            << "Enable the force overwrite flag to overwrite it." << std::endl;
+
+        return -1;
     }
 
     wxString outfile = tfname.GetFullPath();
-
     KICADPCB pcb;
 
-    if( m_inch )
-        pcb.SetOrigin( m_xOrigin * 25.4, m_yOrigin * 25.4 );
-    else
-        pcb.SetOrigin( m_xOrigin, m_yOrigin );
+    pcb.SetOrigin( m_xOrigin, m_yOrigin );
+    pcb.SetMinDistance( m_minDistance );
 
     if( pcb.ReadFile( m_filename ) )
     {
@@ -256,15 +297,15 @@ int KICAD2MCAD::OnRun()
 
         #ifdef SUPPORTS_IGES
             if( m_fmtIGES )
-                res = pcb.WriteIGES( outfile, m_overwrite );
+                res = pcb.WriteIGES( outfile );
             else
         #endif
-                res = pcb.WriteSTEP( outfile, m_overwrite );
+                res = pcb.WriteSTEP( outfile );
 
             if( !res )
                 return -1;
         }
-        catch( Standard_Failure e )
+        catch( const Standard_Failure& e )
         {
             e.Print( std::cerr );
             return -1;
@@ -277,4 +318,15 @@ int KICAD2MCAD::OnRun()
     }
 
     return 0;
+}
+
+
+wxString KICAD2MCAD::getOutputExt() const
+{
+#ifdef SUPPORTS_IGES
+    if( m_fmtIGES )
+        return wxString( "igs" );
+    else
+#endif
+        return wxString( "stp" );
 }

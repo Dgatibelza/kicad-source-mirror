@@ -2,7 +2,7 @@
  * This program source code file is part of KiCad, a free EDA CAD application.
  *
  * Copyright (C) 2009-2014 Jerry Jacobs
- * Copyright (C) 1992-2014 KiCad Developers, see CHANGELOG.TXT for contributors.
+ * Copyright (C) 1992-2019 KiCad Developers, see CHANGELOG.TXT for contributors.
  *
  * This program is free software; you can redistribute it and/or
  * modify it under the terms of the GNU General Public License
@@ -33,16 +33,17 @@
 
 
 /**
- * Function KeyWordOk
+ * Function KeywordMatch
  * searches \a aKeyList for any words found in \a aDatabase.
  *
- * @return 0 if no keyword is found or 1 if keyword is found.
+ * @return true if keyword is found.
  */
-int KeyWordOk( const wxString& aKeyList, const wxString& aDatabase );
+bool KeywordMatch( const wxString& aKeys, const wxString& aDatabase );
 
 /**
  * Function GetAssociatedDocument
- * open a document (file) with the suitable browser
+ * open a document (file) with the suitable browser.  Environmental variables are
+ * substituted before the document name is resolved for either browser or file
  * @param aParent = main frame
  * @param aDocName = filename of file to open (Full filename or short filename)
  * if \a aDocName begins with http: or ftp: or www. the default internet browser is launched

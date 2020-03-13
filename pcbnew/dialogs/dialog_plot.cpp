@@ -1,11 +1,7 @@
-/**
- * @file dialog_plot.cpp
- */
-
 /*
  * This program source code file is part of KiCad, a free EDA CAD application.
  *
- * Copyright (C) 1992-2017 KiCad Developers, see AUTHORS.txt for contributors.
+ * Copyright (C) 1992-2018 KiCad Developers, see AUTHORS.txt for contributors.
  *
  * This program is free software; you can redistribute it and/or
  * modify it under the terms of the GNU General Public License
@@ -27,28 +23,46 @@
 
 
 #include <kiface_i.h>
-#include <plot_common.h>
+#include <plotter.h>
 #include <confirm.h>
-#include <wxPcbStruct.h>
+#include <pcb_edit_frame.h>
+#include <pcbnew_settings.h>
 #include <pcbplot.h>
 #include <gerber_jobfile_writer.h>
-#include <base_units.h>
-#include <macros.h>
 #include <reporter.h>
 #include <wildcards_and_files_ext.h>
-
+#include <layers_id_colors_and_visibility.h>
+#include <bitmaps.h>
 #include <class_board.h>
-#include <wx/ffile.h>
 #include <dialog_plot.h>
+#include <dialog_gendrill.h>
 #include <wx_html_report_panel.h>
+#include <drc/drc.h>
+#include <tool/tool_manager.h>
+#include <tools/zone_filler_tool.h>
+#include <math/util.h>      // for KiROUND
+
 
 DIALOG_PLOT::DIALOG_PLOT( PCB_EDIT_FRAME* aParent ) :
     DIALOG_PLOT_BASE( aParent ), m_parent( aParent ),
-    m_board( aParent->GetBoard() )
+    m_defaultLineWidth( aParent, m_lineWidthLabel, m_lineWidthCtrl, m_lineWidthUnits, true ),
+    m_defaultPenSize( aParent, m_hpglPenLabel, m_hpglPenCtrl, m_hpglPenUnits, true ),
+    m_trackWidthCorrection( aParent, m_widthAdjustLabel, m_widthAdjustCtrl, m_widthAdjustUnits, true )
 {
-    m_config = Kiface().KifaceSettings();
+    SetName( DLG_WINDOW_NAME );
     m_plotOpts = aParent->GetPlotSettings();
+    m_DRCWarningTemplate = m_DRCExclusionsWarning->GetLabel();
+
     init_Dialog();
+
+    // We use a sdbSizer to get platform-dependent ordering of the action buttons, but
+    // that requires us to correct the button labels here.
+    m_sdbSizer1OK->SetLabel( _( "Plot" ) );
+    m_sdbSizer1Apply->SetLabel( _( "Generate Drill Files..." ) );
+    m_sdbSizer1Cancel->SetLabel( _( "Close" ) );
+    m_sizerButtons->Layout();
+
+    m_sdbSizer1OK->SetDefault();
 
     GetSizer()->Fit( this );
     GetSizer()->SetSizeHints( this );
@@ -57,131 +71,104 @@ DIALOG_PLOT::DIALOG_PLOT( PCB_EDIT_FRAME* aParent ) :
 
 void DIALOG_PLOT::init_Dialog()
 {
-    wxString    msg;
+    BOARD*      board = m_parent->GetBoard();
     wxFileName  fileName;
 
-    m_config->Read( OPTKEY_PLOT_X_FINESCALE_ADJ, &m_XScaleAdjust );
-    m_config->Read( OPTKEY_PLOT_Y_FINESCALE_ADJ, &m_YScaleAdjust );
+    auto cfg = m_parent->GetSettings();
+
+    m_XScaleAdjust = cfg->m_Plot.fine_scale_x;
+    m_YScaleAdjust = cfg->m_Plot.fine_scale_y;
+
+    m_zoneFillCheck->SetValue( cfg->m_Plot.check_zones_before_plotting );
+
+    m_browseButton->SetBitmap( KiBitmap( folder_xpm ) );
 
     // m_PSWidthAdjust is stored in mm in user config
-    double dtmp;
-    m_config->Read( CONFIG_PS_FINEWIDTH_ADJ, &dtmp, 0 );
-    m_PSWidthAdjust = KiROUND( dtmp * IU_PER_MM );
+    m_PSWidthAdjust = KiROUND( cfg->m_Plot.ps_fine_width_adjust * IU_PER_MM );
 
     // The reasonable width correction value must be in a range of
     // [-(MinTrackWidth-1), +(MinClearanceValue-1)] decimils.
-    m_widthAdjustMinValue   = -( m_board->GetDesignSettings().m_TrackMinWidth - 1 );
-    m_widthAdjustMaxValue   = m_board->GetDesignSettings().GetSmallestClearanceValue() - 1;
+    m_widthAdjustMinValue   = -( board->GetDesignSettings().m_TrackMinWidth - 1 );
+    m_widthAdjustMaxValue   = board->GetDesignSettings().GetSmallestClearanceValue() - 1;
 
     switch( m_plotOpts.GetFormat() )
     {
     default:
-    case PLOT_FORMAT_GERBER:
-        m_plotFormatOpt->SetSelection( 0 );
-        break;
-
-    case PLOT_FORMAT_POST:
-        m_plotFormatOpt->SetSelection( 1 );
-        break;
-
-    case PLOT_FORMAT_SVG:
-        m_plotFormatOpt->SetSelection( 2 );
-        break;
-
-    case PLOT_FORMAT_DXF:
-        m_plotFormatOpt->SetSelection( 3 );
-        break;
-
-    case PLOT_FORMAT_HPGL:
-        m_plotFormatOpt->SetSelection( 4 );
-        break;
-
-    case PLOT_FORMAT_PDF:
-        m_plotFormatOpt->SetSelection( 5 );
-        break;
+    case PLOT_FORMAT::GERBER: m_plotFormatOpt->SetSelection( 0 ); break;
+    case PLOT_FORMAT::POST:   m_plotFormatOpt->SetSelection( 1 ); break;
+    case PLOT_FORMAT::SVG:    m_plotFormatOpt->SetSelection( 2 ); break;
+    case PLOT_FORMAT::DXF:    m_plotFormatOpt->SetSelection( 3 ); break;
+    case PLOT_FORMAT::HPGL:   m_plotFormatOpt->SetSelection( 4 ); break;
+    case PLOT_FORMAT::PDF:    m_plotFormatOpt->SetSelection( 5 ); break;
     }
 
-    msg = StringFromValue( g_UserUnit, m_board->GetDesignSettings().m_SolderMaskMargin, true );
-    m_SolderMaskMarginCurrValue->SetLabel( msg );
-    msg = StringFromValue( g_UserUnit, m_board->GetDesignSettings().m_SolderMaskMinWidth, true );
-    m_SolderMaskMinWidthCurrValue->SetLabel( msg );
+    // Set units and value for HPGL pen size (this param is in mils).
+    m_defaultPenSize.SetValue( m_plotOpts.GetHPGLPenDiameter() * IU_PER_MILS );
 
-    // Set units and value for HPGL pen size (this param in in mils).
-    AddUnitSymbol( *m_textPenSize, g_UserUnit );
-    msg = StringFromValue( g_UserUnit,
-                           m_plotOpts.GetHPGLPenDiameter() * IU_PER_MILS );
-    m_HPGLPenSizeOpt->AppendText( msg );
-
-    AddUnitSymbol( *m_textDefaultPenSize, g_UserUnit );
-    msg = StringFromValue( g_UserUnit, m_plotOpts.GetLineWidth() );
-    m_linesWidth->AppendText( msg );
-
-    // Set units for PS global width correction.
-    AddUnitSymbol( *m_textPSFineAdjustWidth, g_UserUnit );
+    m_defaultLineWidth.SetValue( m_plotOpts.GetLineWidth() );
 
     // Test for a reasonable scale value. Set to 1 if problem
     if( m_XScaleAdjust < PLOT_MIN_SCALE || m_YScaleAdjust < PLOT_MIN_SCALE
         || m_XScaleAdjust > PLOT_MAX_SCALE || m_YScaleAdjust > PLOT_MAX_SCALE )
         m_XScaleAdjust = m_YScaleAdjust = 1.0;
 
-    msg.Printf( wxT( "%f" ), m_XScaleAdjust );
-    m_fineAdjustXscaleOpt->AppendText( msg );
-
-    msg.Printf( wxT( "%f" ), m_YScaleAdjust );
-    m_fineAdjustYscaleOpt->AppendText( msg );
+    m_fineAdjustXCtrl->SetValue( StringFromValue( EDA_UNITS::UNSCALED, m_XScaleAdjust ) );
+    m_fineAdjustYCtrl->SetValue( StringFromValue( EDA_UNITS::UNSCALED, m_YScaleAdjust ) );
 
     // Test for a reasonable PS width correction value. Set to 0 if problem.
     if( m_PSWidthAdjust < m_widthAdjustMinValue || m_PSWidthAdjust > m_widthAdjustMaxValue )
         m_PSWidthAdjust = 0.;
 
-    msg.Printf( wxT( "%f" ), To_User_Unit( g_UserUnit, m_PSWidthAdjust ) );
-    m_PSFineAdjustWidthOpt->AppendText( msg );
+    m_trackWidthCorrection.SetValue( m_PSWidthAdjust );
 
     m_plotPSNegativeOpt->SetValue( m_plotOpts.GetNegative() );
     m_forcePSA4OutputOpt->SetValue( m_plotOpts.GetA4Output() );
 
     // Could devote a PlotOrder() function in place of UIOrder().
-    m_layerList = m_board->GetEnabledLayers().UIOrder();
+    m_layerList = board->GetEnabledLayers().UIOrder();
 
     // Populate the check list box by all enabled layers names
     for( LSEQ seq = m_layerList;  seq;  ++seq )
     {
         PCB_LAYER_ID layer = *seq;
 
-        int checkIndex = m_layerCheckListBox->Append( m_board->GetLayerName( layer ) );
+        int checkIndex = m_layerCheckListBox->Append( board->GetLayerName( layer ) );
 
         if( m_plotOpts.GetLayerSelection()[layer] )
             m_layerCheckListBox->Check( checkIndex );
     }
 
-    // Option for using proper Gerber extensions
+    // Option for using proper Gerber extensions. Note also Protel extensions are
+    // a broken feature. However, for now, we need to handle it.
     m_useGerberExtensions->SetValue( m_plotOpts.GetUseGerberProtelExtensions() );
 
-    // Option for including Gerber attributes (from Gerber X2 format) in the output
-    m_useGerberX2Attributes->SetValue( m_plotOpts.GetUseGerberAttributes() );
+    // Option for including Gerber attributes, from Gerber X2 format, in the output
+    // In X1 format, they will be added as comments
+    m_useGerberX2Format->SetValue( m_plotOpts.GetUseGerberX2format() );
 
     // Option for including Gerber netlist info (from Gerber X2 format) in the output
     m_useGerberNetAttributes->SetValue( m_plotOpts.GetIncludeGerberNetlistInfo() );
-
-    // Grey out if m_useGerberX2Attributes is not checked
-    m_useGerberNetAttributes->Enable( m_useGerberX2Attributes->GetValue() );
 
     // Option to generate a Gerber job file
     m_generateGerberJobFile->SetValue( m_plotOpts.GetCreateGerberJobFile() );
 
     // Gerber precision for coordinates
-    m_rbGerberFormat->SetSelection( m_plotOpts.GetGerberPrecision() == 5 ? 0 : 1 );
+    m_coordFormatCtrl->SetSelection( m_plotOpts.GetGerberPrecision() == 5 ? 0 : 1 );
 
     // Option for excluding contents of "Edges Pcb" layer
     m_excludeEdgeLayerOpt->SetValue( m_plotOpts.GetExcludeEdgeLayer() );
 
+    // Option to exclude pads from silkscreen layers
+    m_excludePadsFromSilkscreen->SetValue( !m_plotOpts.GetPlotPadsOnSilkLayer() );
+
+    // Option to tent vias
     m_subtractMaskFromSilk->SetValue( m_plotOpts.GetSubtractMaskFromSilk() );
+
+    // Option to use aux origin
+    m_useAuxOriginCheckBox->SetValue( m_plotOpts.GetUseAuxOrigin() );
 
     // Option to plot page references:
     m_plotSheetRef->SetValue( m_plotOpts.GetPlotFrameRef() );
-
-    // Option to allow pads on silkscreen layers
-    m_plotPads_on_Silkscreen->SetValue( m_plotOpts.GetPlotPadsOnSilkLayer() );
 
     // Options to plot texts on footprints
     m_plotModuleValueOpt->SetValue( m_plotOpts.GetPlotValue() );
@@ -197,11 +184,14 @@ void DIALOG_PLOT::init_Dialog()
     // Plot mode
     setPlotModeChoiceSelection( m_plotOpts.GetPlotMode() );
 
-    // Plot outline mode
+    // DXF outline mode
     m_DXF_plotModeOpt->SetValue( m_plotOpts.GetDXFPlotPolygonMode() );
 
-    // Plot text mode
-    m_DXF_plotTextStrokeFontOpt->SetValue( m_plotOpts.GetTextMode() == PLOTTEXTMODE_DEFAULT );
+    // DXF text mode
+    m_DXF_plotTextStrokeFontOpt->SetValue( m_plotOpts.GetTextMode() == PLOT_TEXT_MODE::DEFAULT );
+
+    // DXF units selection
+    m_DXF_plotUnits->SetSelection( static_cast<int>( m_plotOpts.GetDXFPlotUnits() ) );
 
     // Plot mirror option
     m_plotMirrorOpt->SetValue( m_plotOpts.GetMirror() );
@@ -222,26 +212,34 @@ void DIALOG_PLOT::init_Dialog()
 
 void DIALOG_PLOT::reInitDialog()
 {
-    // after calling drill dialog, some parameters can be modified.
-    // update them
+    // after calling the Drill or DRC dialogs some parameters can be modified....
 
     // Output directory
     m_outputDirectoryName->SetValue( m_plotOpts.GetOutputDirectory() );
 
     // Origin of coordinates:
     m_useAuxOriginCheckBox->SetValue( m_plotOpts.GetUseAuxOrigin() );
-}
 
-void DIALOG_PLOT::OnQuit( wxCommandEvent& event )
-{
-    Close( true );    // true is to force the frame to close
-}
+    int knownViolations = 0;
+    int exclusions = 0;
 
+    for( MARKER_PCB* marker : m_parent->GetBoard()->Markers() )
+    {
+        if( marker->IsExcluded() )
+            exclusions++;
+        else
+            knownViolations++;
+    }
 
-void DIALOG_PLOT::OnClose( wxCloseEvent& event )
-{
-    applyPlotSettings();
-    EndModal( 0 );
+    if( knownViolations || exclusions )
+    {
+        m_DRCExclusionsWarning->SetLabel( wxString::Format( m_DRCWarningTemplate,
+                                                            knownViolations,
+                                                            exclusions ) );
+        m_DRCExclusionsWarning->Show();
+    }
+    else
+        m_DRCExclusionsWarning->Hide();
 }
 
 
@@ -253,19 +251,21 @@ void DIALOG_PLOT::OnRightClick( wxMouseEvent& event )
 
 
 // Select or deselect groups of layers in the layers list:
-#include <layers_id_colors_and_visibility.h>
 void DIALOG_PLOT::OnPopUpLayers( wxCommandEvent& event )
 {
-    unsigned int i;
+    // Build a list of layers for usual fabrication:
+    // copper layers + tech layers without courtyard
+    LSET fab_layer_set = ( LSET::AllCuMask() | LSET::AllTechMask() )
+                         & ~LSET( 2, B_CrtYd, F_CrtYd );
 
     switch( event.GetId() )
     {
     case ID_LAYER_FAB: // Select layers usually needed to build a board
-        for( i = 0; i < m_layerList.size(); i++ )
+        for( unsigned i = 0; i < m_layerList.size(); i++ )
         {
             LSET layermask( m_layerList[ i ] );
 
-            if( ( layermask & ( LSET::AllCuMask() | LSET::AllTechMask() ) ).any() )
+            if( ( layermask & fab_layer_set ).any() )
                 m_layerCheckListBox->Check( i, true );
             else
                 m_layerCheckListBox->Check( i, false );
@@ -273,7 +273,7 @@ void DIALOG_PLOT::OnPopUpLayers( wxCommandEvent& event )
         break;
 
     case ID_SELECT_COPPER_LAYERS:
-        for( i = 0; i < m_layerList.size(); i++ )
+        for( unsigned i = 0; i < m_layerList.size(); i++ )
         {
             if( IsCopperLayer( m_layerList[i] ) )
                 m_layerCheckListBox->Check( i, true );
@@ -281,7 +281,7 @@ void DIALOG_PLOT::OnPopUpLayers( wxCommandEvent& event )
         break;
 
     case ID_DESELECT_COPPER_LAYERS:
-        for( i = 0; i < m_layerList.size(); i++ )
+        for( unsigned i = 0; i < m_layerList.size(); i++ )
         {
             if( IsCopperLayer( m_layerList[i] ) )
                 m_layerCheckListBox->Check( i, false );
@@ -289,12 +289,12 @@ void DIALOG_PLOT::OnPopUpLayers( wxCommandEvent& event )
         break;
 
     case ID_SELECT_ALL_LAYERS:
-        for( i = 0; i < m_layerList.size(); i++ )
+        for( unsigned i = 0; i < m_layerList.size(); i++ )
             m_layerCheckListBox->Check( i, true );
         break;
 
     case ID_DESELECT_ALL_LAYERS:
-        for( i = 0; i < m_layerList.size(); i++ )
+        for( unsigned i = 0; i < m_layerList.size(); i++ )
             m_layerCheckListBox->Check( i, false );
         break;
 
@@ -307,9 +307,11 @@ void DIALOG_PLOT::OnPopUpLayers( wxCommandEvent& event )
 void DIALOG_PLOT::CreateDrillFile( wxCommandEvent& event )
 {
     // Be sure drill file use the same settings (axis option, plot directory)
-    // than plot files:
+    // as plot files:
     applyPlotSettings();
-    m_parent->InstallDrillFrame( event );
+
+    DIALOG_GENDRILL dlg( m_parent, this );
+    dlg.ShowModal();
 
     // a few plot settings can be modified: take them in account
     m_plotOpts = m_parent->GetPlotSettings();
@@ -359,7 +361,7 @@ void DIALOG_PLOT::OnOutputDirectoryBrowseClicked( wxCommandEvent& event )
     fn = Prj().AbsolutePath( m_parent->GetBoard()->GetFileName() );
     wxString defaultPath = fn.GetPathWithSep();
     wxString msg;
-    msg.Printf( _( "Do you want to use a path relative to\n'%s'" ),
+    msg.Printf( _( "Do you want to use a path relative to\n\"%s\"" ),
                    GetChars( defaultPath ) );
 
     wxMessageDialog dialog( this, msg, _( "Plot Output Directory" ),
@@ -376,20 +378,13 @@ void DIALOG_PLOT::OnOutputDirectoryBrowseClicked( wxCommandEvent& event )
 }
 
 
-PlotFormat DIALOG_PLOT::getPlotFormat()
+PLOT_FORMAT DIALOG_PLOT::getPlotFormat()
 {
     // plot format id's are ordered like displayed in m_plotFormatOpt
-    static const PlotFormat plotFmt[] =
-    {
-        PLOT_FORMAT_GERBER,
-        PLOT_FORMAT_POST,
-        PLOT_FORMAT_SVG,
-        PLOT_FORMAT_DXF,
-        PLOT_FORMAT_HPGL,
-        PLOT_FORMAT_PDF
-    };
+    static const PLOT_FORMAT plotFmt[] = { PLOT_FORMAT::GERBER, PLOT_FORMAT::POST, PLOT_FORMAT::SVG,
+        PLOT_FORMAT::DXF, PLOT_FORMAT::HPGL, PLOT_FORMAT::PDF };
 
-    return plotFmt[ m_plotFormatOpt->GetSelection() ];
+    return plotFmt[m_plotFormatOpt->GetSelection()];
 }
 
 
@@ -398,26 +393,26 @@ PlotFormat DIALOG_PLOT::getPlotFormat()
 void DIALOG_PLOT::SetPlotFormat( wxCommandEvent& event )
 {
     // this option exist only in DXF format:
-    m_DXF_plotModeOpt->Enable( getPlotFormat() == PLOT_FORMAT_DXF );
+    m_DXF_plotModeOpt->Enable( getPlotFormat() == PLOT_FORMAT::DXF );
 
     switch( getPlotFormat() )
     {
-    case PLOT_FORMAT_PDF:
-    case PLOT_FORMAT_SVG:
+    case PLOT_FORMAT::PDF:
+    case PLOT_FORMAT::SVG:
         m_drillShapeOpt->Enable( true );
         m_plotModeOpt->Enable( false );
         setPlotModeChoiceSelection( FILLED );
         m_plotMirrorOpt->Enable( true );
         m_useAuxOriginCheckBox->Enable( false );
         m_useAuxOriginCheckBox->SetValue( false );
-        m_linesWidth->Enable( true );
-        m_HPGLPenSizeOpt->Enable( false );
+        m_defaultLineWidth.Enable( true );
+        m_defaultPenSize.Enable( false );
         m_excludeEdgeLayerOpt->Enable( true );
         m_scaleOpt->Enable( false );
         m_scaleOpt->SetSelection( 1 );
-        m_fineAdjustXscaleOpt->Enable( false );
-        m_fineAdjustYscaleOpt->Enable( false );
-        m_PSFineAdjustWidthOpt->Enable( false );
+        m_fineAdjustXCtrl->Enable( false );
+        m_fineAdjustYCtrl->Enable( false );
+        m_trackWidthCorrection.Enable( false );
         m_plotPSNegativeOpt->Enable( true );
         m_forcePSA4OutputOpt->Enable( false );
         m_forcePSA4OutputOpt->SetValue( false );
@@ -428,19 +423,19 @@ void DIALOG_PLOT::SetPlotFormat( wxCommandEvent& event )
         m_PlotOptionsSizer->Hide( m_SizerDXF_options );
         break;
 
-    case PLOT_FORMAT_POST:
+    case PLOT_FORMAT::POST:
         m_drillShapeOpt->Enable( true );
         m_plotModeOpt->Enable( true );
         m_plotMirrorOpt->Enable( true );
         m_useAuxOriginCheckBox->Enable( false );
         m_useAuxOriginCheckBox->SetValue( false );
-        m_linesWidth->Enable( true );
-        m_HPGLPenSizeOpt->Enable( false );
+        m_defaultLineWidth.Enable( true );
+        m_defaultPenSize.Enable( false );
         m_excludeEdgeLayerOpt->Enable( true );
         m_scaleOpt->Enable( true );
-        m_fineAdjustXscaleOpt->Enable( true );
-        m_fineAdjustYscaleOpt->Enable( true );
-        m_PSFineAdjustWidthOpt->Enable( true );
+        m_fineAdjustXCtrl->Enable( true );
+        m_fineAdjustYCtrl->Enable( true );
+        m_trackWidthCorrection.Enable( true );
         m_plotPSNegativeOpt->Enable( true );
         m_forcePSA4OutputOpt->Enable( true );
 
@@ -450,7 +445,7 @@ void DIALOG_PLOT::SetPlotFormat( wxCommandEvent& event )
         m_PlotOptionsSizer->Hide( m_SizerDXF_options );
         break;
 
-    case PLOT_FORMAT_GERBER:
+    case PLOT_FORMAT::GERBER:
         m_drillShapeOpt->Enable( false );
         m_drillShapeOpt->SetSelection( 0 );
         m_plotModeOpt->Enable( false );
@@ -458,14 +453,14 @@ void DIALOG_PLOT::SetPlotFormat( wxCommandEvent& event )
         m_plotMirrorOpt->Enable( false );
         m_plotMirrorOpt->SetValue( false );
         m_useAuxOriginCheckBox->Enable( true );
-        m_linesWidth->Enable( true );
-        m_HPGLPenSizeOpt->Enable( false );
+        m_defaultLineWidth.Enable( true );
+        m_defaultPenSize.Enable( false );
         m_excludeEdgeLayerOpt->Enable( true );
         m_scaleOpt->Enable( false );
         m_scaleOpt->SetSelection( 1 );
-        m_fineAdjustXscaleOpt->Enable( false );
-        m_fineAdjustYscaleOpt->Enable( false );
-        m_PSFineAdjustWidthOpt->Enable( false );
+        m_fineAdjustXCtrl->Enable( false );
+        m_fineAdjustYCtrl->Enable( false );
+        m_trackWidthCorrection.Enable( false );
         m_plotPSNegativeOpt->Enable( false );
         m_plotPSNegativeOpt->SetValue( false );
         m_forcePSA4OutputOpt->Enable( false );
@@ -477,19 +472,19 @@ void DIALOG_PLOT::SetPlotFormat( wxCommandEvent& event )
         m_PlotOptionsSizer->Hide( m_SizerDXF_options );
         break;
 
-    case PLOT_FORMAT_HPGL:
+    case PLOT_FORMAT::HPGL:
         m_drillShapeOpt->Enable( true );
         m_plotModeOpt->Enable( true );
         m_plotMirrorOpt->Enable( true );
         m_useAuxOriginCheckBox->Enable( false );
         m_useAuxOriginCheckBox->SetValue( false );
-        m_linesWidth->Enable( false );
-        m_HPGLPenSizeOpt->Enable( true );
+        m_defaultLineWidth.Enable( false );
+        m_defaultPenSize.Enable( true );
         m_excludeEdgeLayerOpt->Enable( true );
         m_scaleOpt->Enable( true );
-        m_fineAdjustXscaleOpt->Enable( false );
-        m_fineAdjustYscaleOpt->Enable( false );
-        m_PSFineAdjustWidthOpt->Enable( false );
+        m_fineAdjustXCtrl->Enable( false );
+        m_fineAdjustYCtrl->Enable( false );
+        m_trackWidthCorrection.Enable( false );
         m_plotPSNegativeOpt->SetValue( false );
         m_plotPSNegativeOpt->Enable( false );
         m_forcePSA4OutputOpt->Enable( true );
@@ -500,21 +495,21 @@ void DIALOG_PLOT::SetPlotFormat( wxCommandEvent& event )
         m_PlotOptionsSizer->Hide( m_SizerDXF_options );
         break;
 
-    case PLOT_FORMAT_DXF:
+    case PLOT_FORMAT::DXF:
         m_drillShapeOpt->Enable( true );
         m_plotModeOpt->Enable( false );
         setPlotModeChoiceSelection( FILLED );
         m_plotMirrorOpt->Enable( false );
         m_plotMirrorOpt->SetValue( false );
         m_useAuxOriginCheckBox->Enable( true );
-        m_linesWidth->Enable( false );
-        m_HPGLPenSizeOpt->Enable( false );
+        m_defaultLineWidth.Enable( false );
+        m_defaultPenSize.Enable( false );
         m_excludeEdgeLayerOpt->Enable( true );
         m_scaleOpt->Enable( false );
         m_scaleOpt->SetSelection( 1 );
-        m_fineAdjustXscaleOpt->Enable( false );
-        m_fineAdjustYscaleOpt->Enable( false );
-        m_PSFineAdjustWidthOpt->Enable( false );
+        m_fineAdjustXCtrl->Enable( false );
+        m_fineAdjustYCtrl->Enable( false );
+        m_trackWidthCorrection.Enable( false );
         m_plotPSNegativeOpt->Enable( false );
         m_plotPSNegativeOpt->SetValue( false );
         m_forcePSA4OutputOpt->Enable( false );
@@ -526,6 +521,9 @@ void DIALOG_PLOT::SetPlotFormat( wxCommandEvent& event )
         m_PlotOptionsSizer->Show( m_SizerDXF_options );
 
         OnChangeDXFPlotMode( event );
+        break;
+
+    case PLOT_FORMAT::UNDEFINED:
         break;
     }
 
@@ -579,117 +577,123 @@ static bool setInt( int* aResult, int aValue, int aMin, int aMax )
 
 void DIALOG_PLOT::applyPlotSettings()
 {
-    REPORTER&   reporter = m_messagesPanel->Reporter();
-
+    REPORTER&       reporter = m_messagesPanel->Reporter();
+    int             sel;
     PCB_PLOT_PARAMS tempOptions;
 
     tempOptions.SetExcludeEdgeLayer( m_excludeEdgeLayerOpt->GetValue() );
     tempOptions.SetSubtractMaskFromSilk( m_subtractMaskFromSilk->GetValue() );
     tempOptions.SetPlotFrameRef( m_plotSheetRef->GetValue() );
-    tempOptions.SetPlotPadsOnSilkLayer( m_plotPads_on_Silkscreen->GetValue() );
+    tempOptions.SetPlotPadsOnSilkLayer( !m_excludePadsFromSilkscreen->GetValue() );
     tempOptions.SetUseAuxOrigin( m_useAuxOriginCheckBox->GetValue() );
     tempOptions.SetPlotValue( m_plotModuleValueOpt->GetValue() );
     tempOptions.SetPlotReference( m_plotModuleRefOpt->GetValue() );
     tempOptions.SetPlotInvisibleText( m_plotInvisibleText->GetValue() );
     tempOptions.SetScaleSelection( m_scaleOpt->GetSelection() );
-    tempOptions.SetDrillMarksType( static_cast<PCB_PLOT_PARAMS::DrillMarksType>
-                                   ( m_drillShapeOpt->GetSelection() ) );
+
+    sel = m_drillShapeOpt->GetSelection();
+    tempOptions.SetDrillMarksType( static_cast<PCB_PLOT_PARAMS::DrillMarksType>( sel ) );
+
     tempOptions.SetMirror( m_plotMirrorOpt->GetValue() );
     tempOptions.SetPlotMode( m_plotModeOpt->GetSelection() == 1 ? SKETCH : FILLED );
     tempOptions.SetDXFPlotPolygonMode( m_DXF_plotModeOpt->GetValue() );
+
+    sel = m_DXF_plotUnits->GetSelection();
+    tempOptions.SetDXFPlotUnits( static_cast<DXF_PLOTTER::DXF_UNITS>( sel ) );
+
     tempOptions.SetPlotViaOnMaskLayer( m_plotNoViaOnMaskOpt->GetValue() );
 
-    if( !m_DXF_plotTextStrokeFontOpt->IsEnabled() )     // Currently, only DXF supports this option
-        tempOptions.SetTextMode( PLOTTEXTMODE_DEFAULT  );
+    if( !m_DXF_plotTextStrokeFontOpt->IsEnabled() ) // Currently, only DXF supports this option
+        tempOptions.SetTextMode( PLOT_TEXT_MODE::DEFAULT );
     else
-        tempOptions.SetTextMode( m_DXF_plotTextStrokeFontOpt->GetValue() ?
-                                 PLOTTEXTMODE_DEFAULT : PLOTTEXTMODE_NATIVE );
+        tempOptions.SetTextMode( m_DXF_plotTextStrokeFontOpt->GetValue() ? PLOT_TEXT_MODE::DEFAULT :
+                                                                           PLOT_TEXT_MODE::NATIVE );
 
     // Update settings from text fields. Rewrite values back to the fields,
     // since the values may have been constrained by the setters.
+    wxString    msg;
 
     // read HPLG pen size (this param is stored in mils)
-    wxString    msg = m_HPGLPenSizeOpt->GetValue();
-    int         tmp = ValueFromString( g_UserUnit, msg ) / IU_PER_MILS;
-
-    if( !tempOptions.SetHPGLPenDiameter( tmp ) )
+    // However, due to issues when converting this value from or to mm
+    // that can slightly change the value, update this param only if it
+    // is in use
+    if( getPlotFormat() == PLOT_FORMAT::HPGL )
     {
-        msg = StringFromValue( g_UserUnit, tempOptions.GetHPGLPenDiameter() * IU_PER_MILS );
-        m_HPGLPenSizeOpt->SetValue( msg );
-        msg.Printf( _( "HPGL pen size constrained." ) );
-        reporter.Report( msg, REPORTER::RPT_INFO );
+        if( !tempOptions.SetHPGLPenDiameter( m_defaultPenSize.GetValue() / IU_PER_MILS ) )
+        {
+            m_defaultPenSize.SetValue( tempOptions.GetHPGLPenDiameter() * IU_PER_MILS );
+            msg.Printf( _( "HPGL pen size constrained." ) );
+            reporter.Report( msg, RPT_SEVERITY_INFO );
+        }
     }
+    else    // keep the last value (initial value if no HPGL plot made)
+        tempOptions.SetHPGLPenDiameter( m_plotOpts.GetHPGLPenDiameter() );
 
     // Default linewidth
-    msg = m_linesWidth->GetValue();
-    tmp = ValueFromString( g_UserUnit, msg );
-
-    if( !tempOptions.SetLineWidth( tmp ) )
+    if( !tempOptions.SetLineWidth( m_defaultLineWidth.GetValue() ) )
     {
-        msg = StringFromValue( g_UserUnit, tempOptions.GetLineWidth() );
-        m_linesWidth->SetValue( msg );
+        m_defaultLineWidth.SetValue( tempOptions.GetLineWidth() );
         msg.Printf( _( "Default line width constrained." ) );
-        reporter.Report( msg, REPORTER::RPT_INFO );
+        reporter.Report( msg, RPT_SEVERITY_INFO );
     }
 
     // X scale
     double tmpDouble;
-    msg = m_fineAdjustXscaleOpt->GetValue();
+    msg = m_fineAdjustXCtrl->GetValue();
     msg.ToDouble( &tmpDouble );
 
     if( !setDouble( &m_XScaleAdjust, tmpDouble, PLOT_MIN_SCALE, PLOT_MAX_SCALE ) )
     {
         msg.Printf( wxT( "%f" ), m_XScaleAdjust );
-        m_fineAdjustXscaleOpt->SetValue( msg );
+        m_fineAdjustXCtrl->SetValue( msg );
         msg.Printf( _( "X scale constrained." ) );
-        reporter.Report( msg, REPORTER::RPT_INFO );
+        reporter.Report( msg, RPT_SEVERITY_INFO );
     }
 
-    ConfigBaseWriteDouble( m_config, OPTKEY_PLOT_X_FINESCALE_ADJ, m_XScaleAdjust );
-
     // Y scale
-    msg = m_fineAdjustYscaleOpt->GetValue();
+    msg = m_fineAdjustYCtrl->GetValue();
     msg.ToDouble( &tmpDouble );
 
     if( !setDouble( &m_YScaleAdjust, tmpDouble, PLOT_MIN_SCALE, PLOT_MAX_SCALE ) )
     {
         msg.Printf( wxT( "%f" ), m_YScaleAdjust );
-        m_fineAdjustYscaleOpt->SetValue( msg );
+        m_fineAdjustYCtrl->SetValue( msg );
         msg.Printf( _( "Y scale constrained." ) );
-        reporter.Report( msg, REPORTER::RPT_INFO );
+        reporter.Report( msg, RPT_SEVERITY_INFO );
     }
 
-    ConfigBaseWriteDouble( m_config, OPTKEY_PLOT_Y_FINESCALE_ADJ, m_YScaleAdjust );
+    auto cfg = m_parent->GetSettings();
+
+    cfg->m_Plot.fine_scale_x = m_XScaleAdjust;
+    cfg->m_Plot.fine_scale_y = m_YScaleAdjust;
+
+    cfg->m_Plot.check_zones_before_plotting = m_zoneFillCheck->GetValue();
 
     // PS Width correction
-    msg = m_PSFineAdjustWidthOpt->GetValue();
-    int itmp = ValueFromString( g_UserUnit, msg );
-
-    if( !setInt( &m_PSWidthAdjust, itmp, m_widthAdjustMinValue, m_widthAdjustMaxValue ) )
+    if( !setInt( &m_PSWidthAdjust, m_trackWidthCorrection.GetValue(),
+                 m_widthAdjustMinValue, m_widthAdjustMaxValue ) )
     {
-        msg = StringFromValue( g_UserUnit, m_PSWidthAdjust );
-        m_PSFineAdjustWidthOpt->SetValue( msg );
+        m_trackWidthCorrection.SetValue( m_PSWidthAdjust );
         msg.Printf( _( "Width correction constrained. "
                        "The reasonable width correction value must be in a range of "
-                       " [%+f; %+f] (%s) for current design rules. " ),
-                    To_User_Unit( g_UserUnit, m_widthAdjustMinValue ),
-                    To_User_Unit( g_UserUnit, m_widthAdjustMaxValue ),
-                    ( g_UserUnit == INCHES ) ? wxT( "\"" ) : wxT( "mm" ) );
-        reporter.Report( msg, REPORTER::RPT_WARNING );
+                       " [%s; %s] (%s) for current design rules." ),
+                    StringFromValue( GetUserUnits(), m_widthAdjustMinValue, false, true ),
+                    StringFromValue( GetUserUnits(), m_widthAdjustMaxValue, false, true ),
+                    GetAbbreviatedUnitsLabel( GetUserUnits(), true ) );
+        reporter.Report( msg, RPT_SEVERITY_WARNING );
     }
 
     // Store m_PSWidthAdjust in mm in user config
-    ConfigBaseWriteDouble( m_config, CONFIG_PS_FINEWIDTH_ADJ,
-                           (double)m_PSWidthAdjust / IU_PER_MM );
+    cfg->m_Plot.ps_fine_width_adjust = Iu2Millimeter( m_PSWidthAdjust );
 
     tempOptions.SetFormat( getPlotFormat() );
 
     tempOptions.SetUseGerberProtelExtensions( m_useGerberExtensions->GetValue() );
-    tempOptions.SetUseGerberAttributes( m_useGerberX2Attributes->GetValue() );
+    tempOptions.SetUseGerberX2format( m_useGerberX2Format->GetValue() );
     tempOptions.SetIncludeGerberNetlistInfo( m_useGerberNetAttributes->GetValue() );
     tempOptions.SetCreateGerberJobFile( m_generateGerberJobFile->GetValue() );
 
-    tempOptions.SetGerberPrecision( m_rbGerberFormat->GetSelection() == 0 ? 5 : 6 );
+    tempOptions.SetGerberPrecision( m_coordFormatCtrl->GetSelection() == 0 ? 5 : 6 );
 
     LSET selectedLayers;
     for( unsigned i = 0; i < m_layerList.size(); i++ )
@@ -698,7 +702,7 @@ void DIALOG_PLOT::applyPlotSettings()
             selectedLayers.set( m_layerList[i] );
     }
     // Get a list of copper layers that aren't being used by inverting enabled layers.
-    LSET disabledCopperLayers = LSET::AllCuMask() & ~m_board->GetEnabledLayers();
+    LSET disabledCopperLayers = LSET::AllCuMask() & ~m_parent->GetBoard()->GetEnabledLayers();
     // Enable all of the disabled copper layers.
     // If someone enables more copper layers they will be selected by default.
     selectedLayers = selectedLayers | disabledCopperLayers;
@@ -728,23 +732,14 @@ void DIALOG_PLOT::applyPlotSettings()
 
 void DIALOG_PLOT::OnGerberX2Checked( wxCommandEvent& event )
 {
-    // m_useGerberNetAttributes is useless if m_useGerberX2Attributes
-    // is not checked. So disabled (greyed out) when Gerber X2 gets unchecked
-    // to make it clear to the user.
-    if( m_useGerberX2Attributes->GetValue() )
-    {
-        m_useGerberNetAttributes->Enable( true );
-    }
-    else
-    {
-        m_useGerberNetAttributes->Enable( false );
-        m_useGerberNetAttributes->SetValue( false );
-    }
+    // Currently: do nothing
 }
 
 
 void DIALOG_PLOT::Plot( wxCommandEvent& event )
 {
+    BOARD* board = m_parent->GetBoard();
+
     applyPlotSettings();
 
     // If no layer selected, we have nothing plotted.
@@ -770,29 +765,18 @@ void DIALOG_PLOT::Plot( wxCommandEvent& event )
         return;
     }
 
+    if( m_zoneFillCheck->GetValue() )
+        m_parent->GetToolManager()->GetTool<ZONE_FILLER_TOOL>()->CheckAllZones( this );
+
     m_plotOpts.SetAutoScale( false );
-    m_plotOpts.SetScale( 1 );
 
     switch( m_plotOpts.GetScaleSelection() )
     {
-    default:
-        break;
-
-    case 0:     // Autoscale option
-        m_plotOpts.SetAutoScale( true );
-        break;
-
-    case 2:     // 3:2 option
-        m_plotOpts.SetScale( 1.5 );
-        break;
-
-    case 3:     // 2:1 option
-        m_plotOpts.SetScale( 2 );
-        break;
-
-    case 4:     // 3:1 option
-        m_plotOpts.SetScale( 3 );
-        break;
+    default: m_plotOpts.SetScale( 1 );        break;
+    case 0:  m_plotOpts.SetAutoScale( true ); break;
+    case 2:  m_plotOpts.SetScale( 1.5 );      break;
+    case 3:  m_plotOpts.SetScale( 2 );        break;
+    case 4:  m_plotOpts.SetScale( 3 );        break;
     }
 
     /* If the scale factor edit controls are disabled or the scale value
@@ -800,14 +784,16 @@ void DIALOG_PLOT::Plot( wxCommandEvent& event )
      * the default scale adjust is initialized to 0 and saved in program
      * settings resulting in a divide by zero fault.
      */
-    if( m_fineAdjustXscaleOpt->IsEnabled()  && m_XScaleAdjust != 0.0 )
-        m_plotOpts.SetFineScaleAdjustX( m_XScaleAdjust );
+    if( getPlotFormat() == PLOT_FORMAT::POST )
+    {
+        if( m_XScaleAdjust != 0.0 )
+            m_plotOpts.SetFineScaleAdjustX( m_XScaleAdjust );
 
-    if( m_fineAdjustYscaleOpt->IsEnabled() && m_YScaleAdjust != 0.0 )
-        m_plotOpts.SetFineScaleAdjustY( m_YScaleAdjust );
+        if( m_YScaleAdjust != 0.0 )
+            m_plotOpts.SetFineScaleAdjustY( m_YScaleAdjust );
 
-    if( m_PSFineAdjustWidthOpt->IsEnabled() )
         m_plotOpts.SetWidthAdjust( m_PSWidthAdjust );
+    }
 
     wxString file_ext( GetDefaultPlotExtension( m_plotOpts.GetFormat() ) );
 
@@ -815,14 +801,12 @@ void DIALOG_PLOT::Plot( wxCommandEvent& event )
     // XXX could this actually happen? isn't it constrained in the apply
     // function?
     if( m_plotOpts.GetScale() < PLOT_MIN_SCALE )
-        DisplayInfoMessage( this,
-                            _( "Warning: Scale option set to a very small value" ) );
+        DisplayInfoMessage( this, _( "Warning: Scale option set to a very small value" ) );
 
     if( m_plotOpts.GetScale() > PLOT_MAX_SCALE )
-        DisplayInfoMessage( this,
-                            _( "Warning: Scale option set to a very large value" ) );
+        DisplayInfoMessage( this, _( "Warning: Scale option set to a very large value" ) );
 
-    GERBER_JOBFILE_WRITER jobfile_writer( m_board, &reporter );
+    GERBER_JOBFILE_WRITER jobfile_writer( board, &reporter );
 
     // Save the current plot options in the board
     m_parent->SetPlotSettings( m_plotOpts );
@@ -839,7 +823,7 @@ void DIALOG_PLOT::Plot( wxCommandEvent& event )
         // If plot options become accessible to the layers setup dialog
         // please move this functionality there!
         // This skips a copper layer if it is actually disabled on the board.
-        if( ( LSET::AllCuMask() & ~m_board->GetEnabledLayers() )[layer] )
+        if( ( LSET::AllCuMask() & ~board->GetEnabledLayers() )[layer] )
             continue;
 
         // Pick the basename from the board file
@@ -847,16 +831,15 @@ void DIALOG_PLOT::Plot( wxCommandEvent& event )
 
         // Use Gerber Extensions based on layer number
         // (See http://en.wikipedia.org/wiki/Gerber_File)
-        if( m_plotOpts.GetFormat() == PLOT_FORMAT_GERBER && m_useGerberExtensions->GetValue() )
+        if( m_plotOpts.GetFormat() == PLOT_FORMAT::GERBER && m_useGerberExtensions->GetValue() )
             file_ext = GetGerberProtelExtension( layer );
 
-        BuildPlotFileName( &fn, outputDir.GetPath(), m_board->GetLayerName( layer ), file_ext );
+        BuildPlotFileName( &fn, outputDir.GetPath(), board->GetLayerName( layer ), file_ext );
         wxString fullname = fn.GetFullName();
         jobfile_writer.AddGbrFile( layer, fullname );
 
         LOCALE_IO toggle;
 
-        BOARD*      board = m_parent->GetBoard();
         PLOTTER*    plotter = StartPlotBoard( board, &m_plotOpts, layer, fn.GetFullPath(), wxEmptyString );
 
         // Print diags in messages box:
@@ -868,17 +851,19 @@ void DIALOG_PLOT::Plot( wxCommandEvent& event )
             plotter->EndPlot();
             delete plotter;
 
-            msg.Printf( _( "Plot file '%s' created." ), GetChars( fn.GetFullPath() ) );
-            reporter.Report( msg, REPORTER::RPT_ACTION );
+            msg.Printf( _( "Plot file \"%s\" created." ), fn.GetFullPath() );
+            reporter.Report( msg, RPT_SEVERITY_ACTION );
         }
         else
         {
-            msg.Printf( _( "Unable to create file '%s'." ), GetChars( fn.GetFullPath() ) );
-            reporter.Report( msg, REPORTER::RPT_ERROR );
+            msg.Printf( _( "Unable to create file \"%s\"." ), fn.GetFullPath() );
+            reporter.Report( msg, RPT_SEVERITY_ERROR );
         }
+
+        wxSafeYield();      // displays report message.
     }
 
-    if( m_plotOpts.GetFormat() == PLOT_FORMAT_GERBER && m_plotOpts.GetCreateGerberJobFile() )
+    if( m_plotOpts.GetFormat() == PLOT_FORMAT::GERBER && m_plotOpts.GetCreateGerberJobFile() )
     {
         // Pick the basename from the board file
         wxFileName fn( boardFilename );
@@ -888,19 +873,24 @@ void DIALOG_PLOT::Plot( wxCommandEvent& event )
     }
 }
 
-#include <drc_stuff.h>
+
 void DIALOG_PLOT::onRunDRC( wxCommandEvent& event )
 {
     PCB_EDIT_FRAME* parent = dynamic_cast<PCB_EDIT_FRAME*>( GetParent() );
 
     if( parent )
     {
+        DRC* drcTool = parent->GetToolManager()->GetTool<DRC>();
+
         // First close an existing dialog if open
         // (low probability, but can happen)
-        parent->GetDrcController()->DestroyDRCDialog( wxID_OK );
+        drcTool->DestroyDRCDialog( wxID_OK );
 
         // Open a new drc dialod, with the right parent frame, and in Modal Mode
-        parent->GetDrcController()->ShowDRCDialog( this );
+        drcTool->ShowDRCDialog( this );
+
+        // Update DRC warnings on return to this dialog
+        reInitDialog();
     }
 }
 

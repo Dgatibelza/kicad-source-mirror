@@ -23,7 +23,7 @@
 #define __PNS_SIZES_SETTINGS_H
 
 #include <map>
-#include <boost/optional.hpp>
+#include <core/optional.h>
 
 #include "../class_track.h" // for VIATYPE_T
 
@@ -37,16 +37,15 @@ class ITEM;
 class SIZES_SETTINGS {
 
 public:
-    SIZES_SETTINGS() :
-        m_trackWidth( 155000 ),
-        m_diffPairWidth( 125000 ),
-        m_diffPairGap( 180000 ),
-        m_diffPairViaGap( 180000 ),
-        m_viaDiameter( 600000 ),
-        m_viaDrill( 250000 ),
-        m_diffPairViaGapSameAsTraceGap( true ),
-        m_viaType( VIA_THROUGH )
-    {};
+    SIZES_SETTINGS()
+            : m_trackWidth( 155000 ),
+              m_diffPairWidth( 125000 ),
+              m_diffPairGap( 180000 ),
+              m_diffPairViaGap( 180000 ),
+              m_viaDiameter( 600000 ),
+              m_viaDrill( 250000 ),
+              m_diffPairViaGapSameAsTraceGap( true ),
+              m_viaType( VIATYPE::THROUGH ){};
 
     ~SIZES_SETTINGS() {};
 
@@ -82,10 +81,10 @@ public:
     int ViaDrill() const { return m_viaDrill; }
     void SetViaDrill( int aDrill ) { m_viaDrill = aDrill; }
 
-    boost::optional<int> PairedLayer( int aLayerId )
+    OPT<int> PairedLayer( int aLayerId )
     {
         if( m_layerPairs.find(aLayerId) == m_layerPairs.end() )
-            return boost::optional<int>();
+            return OPT<int>();
 
         return m_layerPairs[aLayerId];
     }
@@ -93,8 +92,15 @@ public:
     int GetLayerTop() const;
     int GetLayerBottom() const;
 
-    void SetViaType( VIATYPE_T aViaType ) { m_viaType = aViaType; }
-    VIATYPE_T ViaType() const { return m_viaType; }
+    void SetViaType( VIATYPE aViaType )
+    {
+        m_viaType = aViaType;
+    }
+
+    VIATYPE ViaType() const
+    {
+        return m_viaType;
+    }
 
 private:
 
@@ -109,7 +115,7 @@ private:
 
     bool m_diffPairViaGapSameAsTraceGap;
 
-    VIATYPE_T m_viaType;
+    VIATYPE m_viaType;
 
     std::map<int, int> m_layerPairs;
 };

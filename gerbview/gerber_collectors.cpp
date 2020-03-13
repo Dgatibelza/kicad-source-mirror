@@ -20,7 +20,7 @@
 #include "gerber_collectors.h"
 
 const KICAD_T GERBER_COLLECTOR::AllItems[] = {
-    GERBER_IMAGE_LIST_T,
+    GERBER_LAYOUT_T,
     GERBER_IMAGE_T,
     GERBER_DRAW_ITEM_T,
     EOT
@@ -30,9 +30,7 @@ const KICAD_T GERBER_COLLECTOR::AllItems[] = {
 /**
  * Function Inspect
  * is the examining function within the INSPECTOR which is passed to the
- * Iterate function.  Searches and collects all the objects that the old
- * function PcbGeneralLocateAndDisplay() would find, except that it keeps all
- * that it finds and does not do any displaying.
+ * Iterate function.
  *
  * @param testItem An EDA_ITEM to examine.
  * @param testData not used here.
@@ -44,7 +42,7 @@ SEARCH_RESULT GERBER_COLLECTOR::Inspect( EDA_ITEM* testItem, void* testData )
     if( testItem->HitTest( m_RefPos ) )
         Append( testItem );
 
-    return SEARCH_CONTINUE;
+    return SEARCH_RESULT::CONTINUE;
 }
 
 
@@ -63,8 +61,6 @@ void GERBER_COLLECTOR::Collect( EDA_ITEM* aItem, const KICAD_T aScanList[],
     SetRefPos( aRefPos );
 
     aItem->Visit( m_inspector, NULL, m_ScanTypes );
-
-    SetTimeNow();               // when snapshot was taken
 
     // record the length of the primary list before concatenating on to it.
     m_PrimaryLength = m_List.size();

@@ -2,7 +2,7 @@
  * This program source code file is part of KiCad, a free EDA CAD application.
  *
  * Copyright (C) 2012 SoftPLC Corporation, Dick Hollenbeck <dick@softplc.com>
- * Copyright (C) 2012 KiCad Developers, see change_log.txt for contributors.
+ * Copyright (C) 2012-18 KiCad Developers, see change_log.txt for contributors.
  *
  * This program is free software; you can redistribute it and/or
  * modify it under the terms of the GNU General Public License
@@ -26,30 +26,17 @@
 #include <fctsys.h>
 #include <grid_tricks.h>
 #include <wx/tokenzr.h>
-#include <wx/arrstr.h>
 #include <wx/clipbrd.h>
+#include <widgets/grid_readonly_text_helpers.h>
 
-#include <algorithm>
 
-
- // It works for table data on clipboard for an Excell spreadsheet,
+// It works for table data on clipboard for an Excell spreadsheet,
 // why not us too for now.
 #define COL_SEP     wxT( '\t' )
 #define ROW_SEP     wxT( '\n' )
 
 
-enum
-{
-    MYID_FIRST = -1,
-    MYID_CUT,
-    MYID_COPY,
-    MYID_PASTE,
-    MYID_SELECT,
-    MYID_LAST,
-};
-
-
-GRID_TRICKS::GRID_TRICKS( wxGrid* aGrid ):
+GRID_TRICKS::GRID_TRICKS( WX_GRID* aGrid ):
     m_grid( aGrid )
 {
     m_sel_row_start = 0;
@@ -57,10 +44,125 @@ GRID_TRICKS::GRID_TRICKS( wxGrid* aGrid ):
     m_sel_row_count = 0;
     m_sel_col_count = 0;
 
+    aGrid->Connect( wxEVT_GRID_CELL_LEFT_CLICK, wxGridEventHandler( GRID_TRICKS::onGridCellLeftClick ), NULL, this );
+    aGrid->Connect( wxEVT_GRID_CELL_LEFT_DCLICK, wxGridEventHandler( GRID_TRICKS::onGridCellLeftDClick ), NULL, this );
     aGrid->Connect( wxEVT_GRID_CELL_RIGHT_CLICK, wxGridEventHandler( GRID_TRICKS::onGridCellRightClick ), NULL, this );
-    aGrid->Connect( MYID_FIRST, MYID_LAST, wxEVT_COMMAND_MENU_SELECTED, wxCommandEventHandler( GRID_TRICKS::onPopupSelection ), NULL, this );
+    aGrid->Connect( wxEVT_GRID_LABEL_RIGHT_CLICK, wxGridEventHandler( GRID_TRICKS::onGridLabelRightClick ), NULL, this );
+    aGrid->Connect( wxEVT_GRID_LABEL_LEFT_CLICK, wxGridEventHandler( GRID_TRICKS::onGridLabelLeftClick ), NULL, this );
+    aGrid->Connect( GRIDTRICKS_FIRST_ID, GRIDTRICKS_LAST_ID, wxEVT_COMMAND_MENU_SELECTED, wxCommandEventHandler( GRID_TRICKS::onPopupSelection ), NULL, this );
     aGrid->Connect( wxEVT_KEY_DOWN, wxKeyEventHandler( GRID_TRICKS::onKeyDown ), NULL, this );
-    aGrid->Connect( wxEVT_RIGHT_DOWN, wxMouseEventHandler( GRID_TRICKS::onRightDown ), NULL, this );
+    aGrid->Connect( wxEVT_UPDATE_UI, wxUpdateUIEventHandler( GRID_TRICKS::onUpdateUI ), NULL, this );
+}
+
+
+bool GRID_TRICKS::toggleCell( int aRow, int aCol, bool aPreserveSelection )
+{
+    auto renderer = m_grid->GetCellRenderer( aRow, aCol );
+    bool isCheckbox = ( dynamic_cast<wxGridCellBoolRenderer*>( renderer ) != nullptr );
+    renderer->DecRef();
+
+    if( isCheckbox )
+    {
+        if( !aPreserveSelection )
+            m_grid->ClearSelection();
+
+        m_grid->SetGridCursor( aRow, aCol );
+
+        wxGridTableBase* model = m_grid->GetTable();
+
+        if( model->CanGetValueAs( aRow, aCol, wxGRID_VALUE_BOOL )
+                && model->CanSetValueAs( aRow, aCol, wxGRID_VALUE_BOOL ) )
+        {
+            model->SetValueAsBool( aRow, aCol, !model->GetValueAsBool( aRow, aCol ) );
+        }
+        else    // fall back to string processing
+        {
+            if( model->GetValue( aRow, aCol ) == wxT( "1" ) )
+                model->SetValue( aRow, aCol, wxT( "0" ) );
+            else
+                model->SetValue( aRow, aCol, wxT( "1" ) );
+        }
+
+        // Mac needs this for the keyboard events; Linux appears to always need it.
+        m_grid->ForceRefresh();
+
+        // Let any clients know
+        wxGridEvent event( m_grid->GetId(), wxEVT_GRID_CELL_CHANGED, m_grid, aRow, aCol );
+        event.SetString( model->GetValue( aRow, aCol ) );
+        m_grid->GetEventHandler()->ProcessEvent( event );
+
+        return true;
+    }
+
+    return false;
+}
+
+
+bool GRID_TRICKS::showEditor( int aRow, int aCol )
+{
+    if( m_grid->GetGridCursorRow() != aRow || m_grid->GetGridCursorCol() != aCol )
+        m_grid->SetGridCursor( aRow, aCol );
+
+    if( m_grid->IsEditable() && !m_grid->IsReadOnly( aRow, aCol ) )
+    {
+        m_grid->ClearSelection();
+
+        if( m_grid->GetSelectionMode() == wxGrid::wxGridSelectRows )
+        {
+            wxArrayInt rows = m_grid->GetSelectedRows();
+
+            if( rows.size() != 1 || rows.Item( 0 ) != aRow )
+                m_grid->SelectRow( aRow );
+        }
+
+        // For several reasons we can't enable the control here.  There's the whole
+        // SetInSetFocus() issue/hack in wxWidgets, and there's also wxGrid's MouseUp
+        // handler which doesn't notice it's processing a MouseUp until after it has
+        // disabled the editor yet again.  So we re-use wxWidgets' slow-click hack,
+        // which is processed later in the MouseUp handler.
+        //
+        // It should be pointed out that the fact that it's wxWidgets' hack doesn't
+        // make it any less of a hack.  Be extra careful with any modifications here.
+        // See, in particular, https://bugs.launchpad.net/kicad/+bug/1817965.
+        m_grid->ShowEditorOnMouseUp();
+
+        return true;
+    }
+
+    return false;
+}
+
+
+void GRID_TRICKS::onGridCellLeftClick( wxGridEvent& aEvent )
+{
+    int row = aEvent.GetRow();
+    int col = aEvent.GetCol();
+
+    // Don't make users click twice to toggle a checkbox or edit a text cell
+    if( !aEvent.GetModifiers() )
+    {
+        if( toggleCell( row, col ) )
+            return;
+
+        if( showEditor( row, col ) )
+            return;
+    }
+
+    aEvent.Skip();
+}
+
+
+void GRID_TRICKS::onGridCellLeftDClick( wxGridEvent& aEvent )
+{
+    if( !handleDoubleClick( aEvent ) )
+        onGridCellLeftClick( aEvent );
+}
+
+
+bool GRID_TRICKS::handleDoubleClick( wxGridEvent& aEvent )
+{
+    // Double-click processing must be handled by specific sub-classes
+    return false;
 }
 
 
@@ -71,8 +173,6 @@ void GRID_TRICKS::getSelectedArea()
 
     wxArrayInt  cols = m_grid->GetSelectedCols();
     wxArrayInt  rows = m_grid->GetSelectedRows();
-
-    DBG(printf("topLeft.Count():%d botRight:Count():%d\n", int( topLeft.Count() ), int( botRight.Count() ) );)
 
     if( topLeft.Count() && botRight.Count() )
     {
@@ -98,47 +198,69 @@ void GRID_TRICKS::getSelectedArea()
     }
     else
     {
-        m_sel_row_start = -1;
-        m_sel_col_start = -1;
-        m_sel_row_count = 0;
-        m_sel_col_count = 0;
+        m_sel_row_start = m_grid->GetGridCursorRow();
+        m_sel_col_start = m_grid->GetGridCursorCol();
+        m_sel_row_count = m_sel_row_start >= 0 ? 1 : 0;
+        m_sel_col_count = m_sel_col_start >= 0 ? 1 : 0;
     }
-
-    //DBG(printf("m_sel_row_start:%d m_sel_col_start:%d m_sel_row_count:%d m_sel_col_count:%d\n", m_sel_row_start, m_sel_col_start, m_sel_row_count, m_sel_col_count );)
 }
 
 
-void GRID_TRICKS::showPopupMenu()
+void GRID_TRICKS::onGridCellRightClick( wxGridEvent&  )
 {
-    wxMenu      menu;
+    wxMenu menu;
 
-    menu.Append( MYID_CUT,    _( "Cut\tCTRL+X" ),         _( "Clear selected cells pasting original contents to clipboard" ) );
-    menu.Append( MYID_COPY,   _( "Copy\tCTRL+C" ),        _( "Copy selected cells to clipboard" ) );
-    menu.Append( MYID_PASTE,  _( "Paste\tCTRL+V" ),       _( "Paste clipboard cells to matrix at current cell" ) );
-    menu.Append( MYID_SELECT, _( "Select All\tCTRL+A" ),  _( "Select all cells" ) );
+    showPopupMenu( menu );
+}
+
+
+void GRID_TRICKS::onGridLabelLeftClick( wxGridEvent& aEvent )
+{
+    m_grid->CommitPendingChanges();
+
+    aEvent.Skip();
+}
+
+
+void GRID_TRICKS::onGridLabelRightClick( wxGridEvent&  )
+{
+    wxMenu menu;
+
+    for( int i = 0; i < m_grid->GetNumberCols(); ++i )
+    {
+        int id = GRIDTRICKS_FIRST_SHOWHIDE + i;
+        menu.AppendCheckItem( id, m_grid->GetColLabelValue( i ) );
+        menu.Check( id, m_grid->IsColShown( i ) );
+    }
+
+    m_grid->PopupMenu( &menu );
+}
+
+
+void GRID_TRICKS::showPopupMenu( wxMenu& menu )
+{
+    menu.Append( GRIDTRICKS_ID_CUT,    _( "Cut\tCTRL+X" ),         _( "Clear selected cells placing original contents on clipboard" ) );
+    menu.Append( GRIDTRICKS_ID_COPY,   _( "Copy\tCTRL+C" ),        _( "Copy selected cells to clipboard" ) );
+    menu.Append( GRIDTRICKS_ID_PASTE,  _( "Paste\tCTRL+V" ),       _( "Paste clipboard cells to matrix at current cell" ) );
+    menu.Append( GRIDTRICKS_ID_SELECT, _( "Select All\tCTRL+A" ),  _( "Select all cells" ) );
 
     getSelectedArea();
 
     // if nothing is selected, disable cut and copy.
     if( !m_sel_row_count && !m_sel_col_count )
     {
-        menu.Enable( MYID_CUT,  false );
-        menu.Enable( MYID_COPY, false );
+        menu.Enable( GRIDTRICKS_ID_CUT,  false );
+        menu.Enable( GRIDTRICKS_ID_COPY, false );
     }
 
-    bool have_cb_text = false;
+    menu.Enable( GRIDTRICKS_ID_PASTE, false );
+
     if( wxTheClipboard->Open() )
     {
         if( wxTheClipboard->IsSupported( wxDF_TEXT ) )
-            have_cb_text = true;
+            menu.Enable( GRIDTRICKS_ID_PASTE, true );
 
         wxTheClipboard->Close();
-    }
-
-    if( !have_cb_text )
-    {
-        // if nothing on clipboard, disable paste.
-        menu.Enable( MYID_PASTE, false );
     }
 
     m_grid->PopupMenu( &menu );
@@ -147,6 +269,12 @@ void GRID_TRICKS::showPopupMenu()
 
 void GRID_TRICKS::onPopupSelection( wxCommandEvent& event )
 {
+    doPopupSelection( event );
+}
+
+
+void GRID_TRICKS::doPopupSelection( wxCommandEvent& event )
+{
     int     menu_id = event.GetId();
 
     // assume getSelectedArea() was called by rightClickPopupMenu() and there's
@@ -154,21 +282,29 @@ void GRID_TRICKS::onPopupSelection( wxCommandEvent& event )
 
     switch( menu_id )
     {
-    case MYID_CUT:
-    case MYID_COPY:
-        cutcopy( menu_id == MYID_CUT );
+    case GRIDTRICKS_ID_CUT:
+    case GRIDTRICKS_ID_COPY:
+        cutcopy( menu_id == GRIDTRICKS_ID_CUT );
         break;
 
-    case MYID_PASTE:
+    case GRIDTRICKS_ID_PASTE:
         paste_clipboard();
         break;
 
-    case MYID_SELECT:
+    case GRIDTRICKS_ID_SELECT:
         m_grid->SelectAll();
         break;
 
     default:
-        ;
+        if( menu_id >= GRIDTRICKS_FIRST_SHOWHIDE )
+        {
+            int col = menu_id - GRIDTRICKS_FIRST_SHOWHIDE;
+
+            if( m_grid->IsColShown( col ) )
+                m_grid->HideCol( col );
+            else
+                m_grid->ShowCol( col );
+        }
     }
 }
 
@@ -178,26 +314,159 @@ void GRID_TRICKS::onKeyDown( wxKeyEvent& ev )
     if( isCtl( 'A', ev ) )
     {
         m_grid->SelectAll();
+        return;
     }
     else if( isCtl( 'C', ev ) )
     {
         getSelectedArea();
         cutcopy( false );
+        return;
     }
     else if( isCtl( 'V', ev ) )
     {
         getSelectedArea();
         paste_clipboard();
+        return;
     }
     else if( isCtl( 'X', ev ) )
     {
         getSelectedArea();
         cutcopy( true );
+        return;
     }
-    else
+
+    // space-bar toggling of checkboxes
+    if( ev.GetKeyCode() == ' ' )
     {
-        ev.Skip( true );
+        bool retVal = false;
+
+        // If only rows can be selected, only toggle the first cell in a row
+        if( m_grid->GetSelectionMode() == wxGrid::wxGridSelectRows )
+        {
+            wxArrayInt rowSel = m_grid->GetSelectedRows();
+
+            for( unsigned int rowInd = 0; rowInd < rowSel.GetCount(); rowInd++ )
+            {
+                retVal |= toggleCell( rowSel[rowInd], 0, true );
+            }
+        }
+
+        // If only columns can be selected, only toggle the first cell in a column
+        else if( m_grid->GetSelectionMode() == wxGrid::wxGridSelectColumns )
+        {
+            wxArrayInt colSel = m_grid->GetSelectedCols();
+
+            for( unsigned int colInd = 0; colInd < colSel.GetCount(); colInd++ )
+            {
+                retVal |= toggleCell( 0, colSel[colInd], true );
+            }
+        }
+
+        // If the user can select the individual cells, toggle each cell selected
+        else if( m_grid->GetSelectionMode() == wxGrid::wxGridSelectCells )
+        {
+            wxArrayInt            rowSel   = m_grid->GetSelectedRows();
+            wxArrayInt            colSel   = m_grid->GetSelectedCols();
+            wxGridCellCoordsArray cellSel  = m_grid->GetSelectedCells();
+            wxGridCellCoordsArray topLeft  = m_grid->GetSelectionBlockTopLeft();
+            wxGridCellCoordsArray botRight = m_grid->GetSelectionBlockBottomRight();
+
+            // Iterate over every individually selected cell and try to toggle it
+            for( unsigned int cellInd = 0; cellInd < cellSel.GetCount(); cellInd++ )
+            {
+                retVal |= toggleCell( cellSel[cellInd].GetRow(), cellSel[cellInd].GetCol(), true );
+            }
+
+            // Iterate over every column and try to toggle each cell in it
+            for( unsigned int colInd = 0; colInd < colSel.GetCount(); colInd++ )
+            {
+                for( int row = 0; row < m_grid->GetNumberRows(); row++ )
+                {
+                    retVal |= toggleCell( row, colSel[colInd], true );
+                }
+            }
+
+            // Iterate over every row and try to toggle each cell in it
+            for( unsigned int rowInd = 0; rowInd < rowSel.GetCount(); rowInd++ )
+            {
+                for( int col = 0; col < m_grid->GetNumberCols(); col++ )
+                {
+                    retVal |= toggleCell( rowSel[rowInd], col, true );
+                }
+            }
+
+            // Iterate over the selection blocks
+            for( unsigned int blockInd = 0; blockInd < topLeft.GetCount(); blockInd++ )
+            {
+                wxGridCellCoords start = topLeft[blockInd];
+                wxGridCellCoords end   = botRight[blockInd];
+
+                for( int row = start.GetRow(); row <= end.GetRow(); row++ )
+                {
+                    for( int col = start.GetCol(); col <= end.GetCol(); col++ )
+                    {
+                        retVal |= toggleCell( row, col, true );
+                    }
+                }
+            }
+        }
+        else
+        {
+        }
+
+        // Return if there were any cells toggled
+        if( retVal )
+            return;
     }
+
+    // ctrl-tab for exit grid
+#ifdef __APPLE__
+    bool ctrl = ev.RawControlDown();
+#else
+    bool ctrl = ev.ControlDown();
+#endif
+
+    if( ctrl && ev.GetKeyCode() == WXK_TAB )
+    {
+        wxWindow* test = m_grid->GetNextSibling();
+
+        if( !test )
+            test = m_grid->GetParent()->GetNextSibling();
+
+        while( test && !test->IsTopLevel() )
+        {
+            test->SetFocus();
+
+            if( test->HasFocus() )
+                break;
+
+            if( !test->GetChildren().empty() )
+                test = test->GetChildren().front();
+            else if( test->GetNextSibling() )
+                test = test->GetNextSibling();
+            else
+            {
+                while( test )
+                {
+                    test = test->GetParent();
+
+                    if( test && test->IsTopLevel() )
+                    {
+                        break;
+                    }
+                    else if( test && test->GetNextSibling() )
+                    {
+                        test = test->GetNextSibling();
+                        break;
+                    }
+                }
+            }
+        }
+
+        return;
+    }
+
+    ev.Skip( true );
 }
 
 
@@ -211,9 +480,7 @@ void GRID_TRICKS::paste_clipboard()
 
             wxTheClipboard->GetData( data );
 
-            wxString    cb_text = data.GetText();
-
-            paste_text( cb_text );
+            paste_text( data.GetText() );
         }
 
         wxTheClipboard->Close();
@@ -226,32 +493,88 @@ void GRID_TRICKS::paste_text( const wxString& cb_text )
 {
     wxGridTableBase*   tbl = m_grid->GetTable();
 
-    const int cur_row = std::max( getCursorRow(), 0 );    // no -1
-    const int cur_col = std::max( getCursorCol(), 0 );
+    const int cur_row = m_grid->GetGridCursorRow();
+    const int cur_col = m_grid->GetGridCursorCol();
+    int start_row;
+    int end_row;
+    int start_col;
+    int end_col;
+    bool is_selection = false;
 
-    wxStringTokenizer   rows( cb_text, ROW_SEP, wxTOKEN_RET_EMPTY );
-
-    // if clipboard rows would extend past end of current table size...
-    if( int( rows.CountTokens() ) > tbl->GetNumberRows() - cur_row )
+    if( cur_row < 0 || cur_col < 0 )
     {
-        int newRowsNeeded = rows.CountTokens() - ( tbl->GetNumberRows() - cur_row );
-
-        tbl->AppendRows( newRowsNeeded );
+        wxBell();
+        return;
     }
 
-    for( int row = cur_row;  rows.HasMoreTokens();  ++row )
+    if( m_grid->GetSelectionMode() == wxGrid::wxGridSelectRows )
     {
+        if( m_sel_row_count > 1 )
+            is_selection = true;
+    }
+    else
+    {
+        if( m_grid->IsSelection() )
+            is_selection = true;
+    }
+
+    wxStringTokenizer rows( cb_text, ROW_SEP, wxTOKEN_RET_EMPTY );
+
+    // If selection of cells is present
+    // then a clipboard pastes to selected cells only.
+    if( is_selection )
+    {
+        start_row = m_sel_row_start;
+        end_row = m_sel_row_start + m_sel_row_count;
+        start_col = m_sel_col_start;
+        end_col = m_sel_col_start + m_sel_col_count;
+    }
+    // Otherwise, paste whole clipboard
+    // starting from cell with cursor.
+    else
+    {
+        start_row = cur_row;
+        end_row = cur_row + rows.CountTokens();
+
+        if( end_row > tbl->GetNumberRows() )
+            end_row = tbl->GetNumberRows();
+
+        start_col = cur_col;
+        end_col = start_col; // end_col actual value calculates later
+    }
+
+    for( int row = start_row;  row < end_row;  ++row )
+    {
+        // If number of selected rows bigger than count of rows in
+        // the clipboard, paste from the clipboard again and again
+        // while end of the selection is reached.
+        if( !rows.HasMoreTokens() )
+            rows.SetString( cb_text, ROW_SEP, wxTOKEN_RET_EMPTY );
+
         wxString rowTxt = rows.GetNextToken();
 
-        wxStringTokenizer   cols( rowTxt, COL_SEP, wxTOKEN_RET_EMPTY );
+        wxStringTokenizer cols( rowTxt, COL_SEP, wxTOKEN_RET_EMPTY );
 
-        for( int col = cur_col;  cols.HasMoreTokens();  ++col )
+        if( !is_selection )
         {
+            end_col = cur_col + cols.CountTokens();
+
+            if( end_col > tbl->GetNumberCols() )
+                end_col = tbl->GetNumberCols();
+        }
+
+        for( int col = start_col;  col < end_col;  ++col )
+        {
+            // If number of selected columns bigger than count of columns in
+            // the clipboard, paste from the clipboard again and again while
+            // end of the selection is reached.
+            if( !cols.HasMoreTokens() )
+                cols.SetString( rowTxt, COL_SEP, wxTOKEN_RET_EMPTY );
+
             wxString cellTxt = cols.GetNextToken();
             tbl->SetValue( row, col, cellTxt );
         }
     }
-    m_grid->AutoSizeColumns( false );
 }
 
 
@@ -282,10 +605,30 @@ void GRID_TRICKS::cutcopy( bool doCut )
         wxTheClipboard->Close();
 
         if( doCut )
-        {
-            m_grid->AutoSizeColumns( false );
             m_grid->ForceRefresh();
-        }
     }
 }
 
+
+void GRID_TRICKS::onUpdateUI( wxUpdateUIEvent& event )
+{
+    // Respect ROW selectionMode when moving cursor
+
+    if( m_grid->GetSelectionMode() == wxGrid::wxGridSelectRows )
+    {
+        int cursorRow = m_grid->GetGridCursorRow();
+        bool cursorInSelectedRow = false;
+
+        for( int row : m_grid->GetSelectedRows() )
+        {
+            if( row == cursorRow )
+            {
+                cursorInSelectedRow = true;
+                break;
+            }
+        }
+
+        if( !cursorInSelectedRow && cursorRow >= 0 )
+            m_grid->SelectRow( cursorRow );
+    }
+}

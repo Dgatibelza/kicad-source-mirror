@@ -25,16 +25,16 @@
 #define __PAD_TOOL_H
 
 
-#include <tools/pcb_tool.h>
+#include <tools/pcb_tool_base.h>
 
-class CONTEXT_MENU;
+class ACTION_MENU;
 
 /**
- * Class PAD_TOOL
+ * PAD_TOOL
  *
  * Tools relating to pads and pad settings
  */
-class PAD_TOOL : public PCB_TOOL
+class PAD_TOOL : public PCB_TOOL_BASE
 {
 public:
     PAD_TOOL();
@@ -46,6 +46,12 @@ public:
     ///> Basic initalization
     bool Init() override;
 
+    /**
+     * Function EnumeratePads()
+     * Tool for quick pad enumeration.
+     */
+    int EnumeratePads( const TOOL_EVENT& aEvent );
+
     ///> Bind handlers to corresponding TOOL_ACTIONs
     void setTransitions() override;
 
@@ -54,7 +60,7 @@ private:
     bool haveFootprints();
 
     ///> Apply pad settings from board design settings to a pad
-    int applyPadSettings( const TOOL_EVENT& aEvent );
+    int pastePadProperties( const TOOL_EVENT& aEvent );
 
     ///> Copy pad settings from a pad to the board design settings
     int copyPadSettings( const TOOL_EVENT& aEvent );

@@ -2,7 +2,7 @@
  * This program source code file is part of KiCad, a free EDA CAD application.
  *
  * Copyright (C) 2010 SoftPLC Corporation, Dick Hollenbeck <dick@softplc.com>
- * Copyright (C) 2015 KiCad Developers, see CHANGELOG.TXT for contributors.
+ * Copyright (C) 2015-2020 KiCad Developers, see CHANGELOG.TXT for contributors.
  *
  * This program is free software; you can redistribute it and/or
  * modify it under the terms of the GNU General Public License
@@ -26,46 +26,52 @@
 #include <dsnlexer.h>
 #include <fctsys.h>
 #include <macros.h>
+#include <pgm_base.h>
 
 using namespace TFIELD_T;
 
+
 const wxString TEMPLATE_FIELDNAME::GetDefaultFieldName( int aFieldNdx )
 {
-    // Fixed values for the first few default fields used by EESCHEMA
-    // (mandatory fields)
-    switch( aFieldNdx )
+    static void* locale = nullptr;
+    static wxString referenceDefault;
+    static wxString valueDefault;
+    static wxString footprintDefault;
+    static wxString datasheetDefault;
+    static wxString fieldDefault;
+
+    // Fetching translations can take a surprising amount of time when loading libraries,
+    // so only do it when necessary.
+    if( Pgm().GetLocale() != locale )
     {
-    case  REFERENCE:
-        return _( "Reference" );   // The component reference, R1, C1, etc.
-
-    case  VALUE:
-        return _( "Value" );       // The component value + name
-
-    case  FOOTPRINT:
-        return _( "Footprint" );   // The footprint for use with Pcbnew
-
-    case  DATASHEET:
-        return _( "Datasheet" );   // Link to a datasheet for component
-
-    default:
-        break;
+        referenceDefault = _( "Reference" );
+        valueDefault     = _( "Value" );
+        footprintDefault = _( "Footprint" );
+        datasheetDefault = _( "Datasheet" );
+        fieldDefault     = _( "Field%d" );
+        locale = Pgm().GetLocale();
     }
 
-    // Other fields are use fields, give a default name:
-    wxString fieldName = _( "Field" );
-    fieldName << aFieldNdx;
-    return fieldName;
+    // Fixed values for the mandatory fields
+    switch( aFieldNdx )
+    {
+    case  REFERENCE: return referenceDefault;   // The component reference, R1, C1, etc.
+    case  VALUE:     return valueDefault;       // The component value + name
+    case  FOOTPRINT: return footprintDefault;   // The footprint for use with Pcbnew
+    case  DATASHEET: return datasheetDefault;   // Link to a datasheet for component
+    default:         return wxString::Format( fieldDefault, aFieldNdx );
+    }
 }
 
 void TEMPLATE_FIELDNAME::Format( OUTPUTFORMATTER* out, int nestLevel ) const
 {
     out->Print( nestLevel, "(field (name %s)",  out->Quotew( m_Name ).c_str() );
 
-    if( !m_Value.IsEmpty() )
-        out->Print( 0, "(value %s)", out->Quotew( m_Value ).c_str() );
-
     if( m_Visible )
         out->Print( 0, " visible" );
+
+    if( m_URL )
+        out->Print( 0, " url" );
 
     out->Print( 0, ")\n" );
 }
@@ -95,8 +101,8 @@ void TEMPLATE_FIELDNAME::Parse( TEMPLATE_FIELDNAMES_LEXER* in )
         switch( tok )
         {
         case T_value:
+            // older format; silently skip
             in->NeedSYMBOLorNUMBER();
-            m_Value = FROM_UTF8( in->CurText() );
             in->NeedRIGHT();
             break;
 
@@ -104,28 +110,34 @@ void TEMPLATE_FIELDNAME::Parse( TEMPLATE_FIELDNAMES_LEXER* in )
             m_Visible = true;
             break;
 
+        case T_url:
+            m_URL = true;
+            break;
+
         default:
-            in->Expecting( "value|visible" );
+            in->Expecting( "value|url|visible" );
             break;
         }
     }
 }
 
 
-void TEMPLATES::Format( OUTPUTFORMATTER* out, int nestLevel ) const
+void TEMPLATES::Format( OUTPUTFORMATTER* out, int nestLevel, bool aGlobal ) const
 {
     // We'll keep this general, and include the \n, even though the only known
     // use at this time will not want the newlines or the indentation.
     out->Print( nestLevel, "(templatefields" );
 
-    for( unsigned i=0;  i<m_Fields.size();  ++i )
-        m_Fields[i].Format( out, nestLevel+1 );
+    const TEMPLATE_FIELDNAMES& source = aGlobal ? m_globals : m_project;
+
+    for( const TEMPLATE_FIELDNAME& temp : source )
+        temp.Format( out, nestLevel+1 );
 
     out->Print( 0, ")\n" );
 }
 
 
-void TEMPLATES::Parse( TEMPLATE_FIELDNAMES_LEXER* in )
+void TEMPLATES::Parse( TEMPLATE_FIELDNAMES_LEXER* in, bool aGlobal )
 {
     T  tok;
 
@@ -152,7 +164,7 @@ void TEMPLATES::Parse( TEMPLATE_FIELDNAMES_LEXER* in )
                 field.Parse( in );
 
                 // add the field
-                AddTemplateFieldName( field );
+                AddTemplateFieldName( field, aGlobal );
             }
             break;
 
@@ -164,27 +176,50 @@ void TEMPLATES::Parse( TEMPLATE_FIELDNAMES_LEXER* in )
 }
 
 
-int TEMPLATES::AddTemplateFieldName( const TEMPLATE_FIELDNAME& aFieldName )
+void TEMPLATES::resolveTemplates()
+{
+    m_resolved = m_project;
+
+    // Note: order N^2 algorithm.  Would need changing if fieldname template sets ever
+    // get large.
+
+    for( const TEMPLATE_FIELDNAME& global : m_globals )
+    {
+        for( const TEMPLATE_FIELDNAME& project : m_project )
+        {
+            if( global.m_Name == project.m_Name )
+                continue;
+        }
+
+        m_resolved.push_back( global );
+    }
+
+    m_resolvedDirty = false;
+}
+
+
+void TEMPLATES::AddTemplateFieldName( const TEMPLATE_FIELDNAME& aFieldName, bool aGlobal )
 {
     // Ensure that the template fieldname does not match a fixed fieldname.
     for( int i=0;  i<MANDATORY_FIELDS;  ++i )
     {
         if( TEMPLATE_FIELDNAME::GetDefaultFieldName( i ) == aFieldName.m_Name )
-        {
-            return -1;
-        }
+            return;
     }
 
+    TEMPLATE_FIELDNAMES& target = aGlobal ? m_globals : m_project;
+
     // ensure uniqueness, overwrite any template fieldname by the same name.
-    for( unsigned i=0; i<m_Fields.size();  ++i )
+    for( TEMPLATE_FIELDNAME& temp : target )
     {
-        if( m_Fields[i].m_Name == aFieldName.m_Name )
+        if( temp.m_Name == aFieldName.m_Name )
         {
             // DBG( printf( "inserting template fieldname:'%s' at %d\n",
             //            TO_UTF8( aFieldName.m_Name ), i ); )
 
-            m_Fields[i] = aFieldName;
-            return i;   // return the container index
+            temp = aFieldName;
+            m_resolvedDirty = true;
+            return;
         }
     }
 
@@ -192,20 +227,57 @@ int TEMPLATES::AddTemplateFieldName( const TEMPLATE_FIELDNAME& aFieldName )
 
     // the name is legal and not previously added to the config container, append
     // it and return its index within the container.
-    m_Fields.push_back( aFieldName );
-
-    return m_Fields.size() - 1; // return the index of insertion.
+    target.push_back( aFieldName );
+    m_resolvedDirty = true;
 }
 
 
-bool TEMPLATES::HasFieldName( const wxString& aName ) const
+void TEMPLATES::DeleteAllFieldNameTemplates( bool aGlobal )
 {
-    for( size_t i=0; i<m_Fields.size();  ++i )
+    if( aGlobal )
     {
-        if( m_Fields[i].m_Name == aName )
-            return true;
+        m_globals.clear();
+        m_resolved = m_project;
+    }
+    else
+    {
+        m_project.clear();
+        m_resolved = m_globals;
     }
 
-    return false;
+    m_resolvedDirty = false;
+}
+
+
+const TEMPLATE_FIELDNAMES& TEMPLATES::GetTemplateFieldNames()
+{
+    if( m_resolvedDirty )
+        resolveTemplates();
+
+    return m_resolved;
+}
+
+
+const TEMPLATE_FIELDNAMES& TEMPLATES::GetTemplateFieldNames( bool aGlobal )
+{
+    if( aGlobal )
+        return m_globals;
+    else
+        return m_project;
+}
+
+
+const TEMPLATE_FIELDNAME* TEMPLATES::GetFieldName( const wxString& aName )
+{
+    if( m_resolvedDirty )
+        resolveTemplates();
+
+    for( const TEMPLATE_FIELDNAME& field : m_resolved )
+    {
+        if( field.m_Name == aName )
+            return &field;
+    }
+
+    return nullptr;
 }
 

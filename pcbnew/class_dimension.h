@@ -36,13 +36,12 @@
 
 
 class LINE_READER;
-class EDA_DRAW_PANEL;
 class TEXTE_PCB;
 class MSG_PANEL_ITEM;
 
 
 /**
- * Class DIMENSION
+ * DIMENSION
  *
  * For better understanding of the points that make a dimension:
  *
@@ -63,7 +62,8 @@ class DIMENSION : public BOARD_ITEM
 {
     int         m_Width;        ///< Line width
     int         m_Shape;        ///< Currently always 0.
-    EDA_UNITS_T m_Unit;         ///< 0 = inches, 1 = mm
+    EDA_UNITS   m_Unit;         ///< 0 = inches, 1 = mm
+    bool        m_UseMils;      ///< If inches, use mils.
     int         m_Value;        ///< value of PCB dimensions.
     int         m_Height;       ///< length of feature lines
     TEXTE_PCB   m_Text;
@@ -83,11 +83,16 @@ public:
 
     ~DIMENSION();
 
+    static inline bool ClassOf( const EDA_ITEM* aItem )
+    {
+        return aItem && PCB_DIMENSION_T == aItem->Type();
+    }
+
     void SetValue( int aValue ) { m_Value = aValue; }
 
     int GetValue() const { return m_Value; }
 
-    const wxPoint&  GetPosition() const override;
+    const wxPoint GetPosition() const override;
 
     void            SetPosition( const wxPoint& aPos ) override;
 
@@ -108,8 +113,9 @@ public:
      * Function SetOrigin
      * Sets a new origin of the crossbar line. All remaining lines are adjusted after that.
      * @param aOrigin is the new point to be used as the new origin of the crossbar line.
+     * @param aPrecision number of decimal places for mils (scaled appropriately for other units).
      */
-    void SetOrigin( const wxPoint& aOrigin );
+    void SetOrigin( const wxPoint& aOrigin, int aPrecision );
 
     /**
      * Function GetOrigin
@@ -124,8 +130,9 @@ public:
      * Function SetEnd
      * Sets a new end of the crossbar line. All remaining lines are adjusted after that.
      * @param aEnd is the new point to be used as the new end of the crossbar line.
+     * @param aPrecision number of decimal places for mils (scaled appropriately for other units).
      */
-    void SetEnd( const wxPoint& aEnd );
+    void SetEnd( const wxPoint& aEnd, int aPrecision );
 
     /**
      * Function GetEnd
@@ -140,8 +147,9 @@ public:
      * Function SetHeight
      * Sets the length of feature lines.
      * @param aHeight is the new height.
+     * @param aPrecision number of decimal places for mils (scaled appropriately for other units).
      */
-    void SetHeight( int aHeight );
+    void SetHeight( int aHeight, int aPrecision );
 
     /**
      * Function GetHeight
@@ -173,9 +181,21 @@ public:
     /**
      * Function AdjustDimensionDetails
      * Calculate coordinates of segments used to draw the dimension.
-     * @param aDoNotChangeText (bool) if false, the dimension text is initialized
+     * @param aPrecision number of decimal places for mils (scaled appropriately for other units).
      */
-    void            AdjustDimensionDetails( bool aDoNotChangeText = false );
+    void AdjustDimensionDetails( int aPrecision );
+
+    void GetUnits( EDA_UNITS& aUnits, bool& aUseMils ) const
+    {
+        aUnits = m_Unit;
+        aUseMils = m_UseMils;
+    }
+
+    void SetUnits( EDA_UNITS aUnits, bool aUseMils )
+    {
+        m_Unit = aUnits;
+        m_UseMils = aUseMils;
+    }
 
     void            SetText( const wxString& NewText );
     const wxString  GetText() const;
@@ -183,18 +203,15 @@ public:
     TEXTE_PCB&      Text()  { return m_Text; }
     TEXTE_PCB&      Text() const  { return *(const_cast<TEXTE_PCB*> (&m_Text)); }
 
-    void            Draw( EDA_DRAW_PANEL* panel, wxDC* DC,
-                          GR_DRAWMODE aColorMode, const wxPoint& offset = ZeroOffset ) override;
+    void Print( PCB_BASE_FRAME* aFrame, wxDC* DC, const wxPoint& offset = ZeroOffset ) override;
 
     /**
      * Function Move
      * @param offset : moving vector
      */
     void            Move( const wxPoint& offset ) override;
-
     void            Rotate( const wxPoint& aRotCentre, double aAngle ) override;
-
-    void            Flip( const wxPoint& aCentre ) override;
+    void            Flip( const wxPoint& aCentre, bool aFlipLeftRight ) override;
 
     /**
      * Function Mirror
@@ -203,13 +220,12 @@ public:
      * the layer is not changed
      * @param axis_pos : vertical axis position
      */
-    void            Mirror( const wxPoint& axis_pos );
+    void Mirror( const wxPoint& axis_pos, bool aMirrorLeftRight = false );
 
-    void            GetMsgPanelInfo( std::vector< MSG_PANEL_ITEM >& aList ) override;
+    void GetMsgPanelInfo( EDA_UNITS aUnits, std::vector<MSG_PANEL_ITEM>& aList ) override;
 
-    bool            HitTest( const wxPoint& aPosition ) const override;
-
-    bool HitTest( const EDA_RECT& aRect, bool aContained = true, int aAccuracy = 0 ) const override;
+    bool HitTest( const wxPoint& aPosition, int aAccuracy ) const override;
+    bool HitTest( const EDA_RECT& aRect, bool aContained, int aAccuracy = 0 ) const override;
 
     wxString GetClass() const override
     {
@@ -217,15 +233,17 @@ public:
     }
 
     // Virtual function
-    const EDA_RECT    GetBoundingBox() const override;
+    const EDA_RECT GetBoundingBox() const override;
 
-    wxString    GetSelectMenuText() const override;
+    wxString GetSelectMenuText( EDA_UNITS aUnits ) const override;
 
     BITMAP_DEF GetMenuImage() const override;
 
-    EDA_ITEM*   Clone() const override;
+    EDA_ITEM* Clone() const override;
 
     virtual const BOX2I ViewBBox() const override;
+
+    virtual void SwapData( BOARD_ITEM* aImage ) override;
 
 #if defined(DEBUG)
     virtual void Show( int nestLevel, std::ostream& os ) const override { ShowDummy( os ); }

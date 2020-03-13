@@ -1,7 +1,7 @@
 /*
  * This program source code file is part of KiCad, a free EDA CAD application.
  *
- * Copyright (C) 2004-2012 KiCad Developers, see change_log.txt for contributors.
+ * Copyright (C) 2004-2020 KiCad Developers, see AUTHORS.txt for contributors.
  *
  * This program is free software; you can redistribute it and/or
  * modify it under the terms of the GNU General Public License
@@ -21,25 +21,20 @@
  * 51 Franklin Street, Fifth Floor, Boston, MA  02110-1301, USA
  */
 
-/**
- * @file lib_bezier.cpp
- */
-
 #include <fctsys.h>
 #include <gr_basic.h>
 #include <macros.h>
-#include <class_drawpanel.h>
-#include <plot_common.h>
+#include <sch_draw_panel.h>
+#include <plotter.h>
 #include <trigo.h>
-#include <wxstruct.h>
 #include <bezier_curves.h>
-#include <richio.h>
 #include <base_units.h>
 #include <msgpanel.h>
 
 #include <general.h>
 #include <lib_bezier.h>
 #include <transform.h>
+#include <settings/color_settings.h>
 
 
 LIB_BEZIER::LIB_BEZIER( LIB_PART* aParent ) :
@@ -48,83 +43,6 @@ LIB_BEZIER::LIB_BEZIER( LIB_PART* aParent ) :
     m_Fill       = NO_FILL;
     m_Width      = 0;
     m_isFillable = true;
-    m_typeName   = _( "Bezier" );
-}
-
-
-bool LIB_BEZIER::Save( OUTPUTFORMATTER& aFormatter )
-{
-    aFormatter.Print( 0, "B %lu %d %d %d", (long unsigned)m_BezierPoints.size(),
-                      m_Unit, m_Convert, m_Width );
-
-    for( const auto& pt : m_BezierPoints )
-        aFormatter.Print( 0, " %d %d", pt.x, pt.y );
-
-    aFormatter.Print( 0, " %c\n", fill_tab[m_Fill] );
-
-    return true;
-}
-
-
-bool LIB_BEZIER::Load( LINE_READER& aLineReader, wxString& aErrorMsg )
-{
-    char*   p;
-    int     i, ccount = 0;
-    wxPoint pt;
-    char*   line = (char*) aLineReader;
-
-    i = sscanf( line + 2, "%d %d %d %d", &ccount, &m_Unit, &m_Convert, &m_Width );
-
-    if( i !=4 )
-    {
-        aErrorMsg.Printf( _( "Bezier only had %d parameters of the required 4" ), i );
-        return false;
-    }
-
-    if( ccount <= 0 )
-    {
-        aErrorMsg.Printf( _( "Bezier count parameter %d is invalid" ), ccount );
-        return false;
-    }
-
-    strtok( line + 2, " \t\n" );     // Skip field
-    strtok( NULL, " \t\n" );         // Skip field
-    strtok( NULL, " \t\n" );         // Skip field
-    strtok( NULL, " \t\n" );
-
-    for( i = 0; i < ccount; i++ )
-    {
-        p = strtok( NULL, " \t\n" );
-
-        if( sscanf( p, "%d", &pt.x ) != 1 )
-        {
-            aErrorMsg.Printf( _( "Bezier point %d X position not defined" ), i );
-            return false;
-        }
-
-        p = strtok( NULL, " \t\n" );
-
-        if( sscanf( p, "%d", &pt.y ) != 1 )
-        {
-            aErrorMsg.Printf( _( "Bezier point %d Y position not defined" ), i );
-            return false;
-        }
-
-        m_BezierPoints.push_back( pt );
-    }
-
-    m_Fill = NO_FILL;
-
-    if( ( p = strtok( NULL, " \t\n" ) ) != NULL )
-    {
-        if( p[0] == 'F' )
-            m_Fill = FILLED_SHAPE;
-
-        if( p[0] == 'f' )
-            m_Fill = FILLED_WITH_BG_BODYCOLOR;
-    }
-
-    return true;
 }
 
 
@@ -134,9 +52,14 @@ EDA_ITEM* LIB_BEZIER::Clone() const
 }
 
 
-int LIB_BEZIER::compare( const LIB_ITEM& aOther ) const
+int LIB_BEZIER::compare( const LIB_ITEM& aOther, LIB_ITEM::COMPARE_FLAGS aCompareFlags ) const
 {
     wxASSERT( aOther.Type() == LIB_BEZIER_T );
+
+    int retv = LIB_ITEM::compare( aOther );
+
+    if( retv )
+        return retv;
 
     const LIB_BEZIER* tmp = ( LIB_BEZIER* ) &aOther;
 
@@ -156,7 +79,7 @@ int LIB_BEZIER::compare( const LIB_ITEM& aOther ) const
 }
 
 
-void LIB_BEZIER::SetOffset( const wxPoint& aOffset )
+void LIB_BEZIER::Offset( const wxPoint& aOffset )
 {
     size_t i;
 
@@ -180,11 +103,21 @@ bool LIB_BEZIER::Inside( EDA_RECT& aRect ) const
 }
 
 
-void LIB_BEZIER::Move( const wxPoint& aPosition )
+void LIB_BEZIER::MoveTo( const wxPoint& aPosition )
 {
-    SetOffset( aPosition - m_PolyPoints[0] );
+    if ( !m_PolyPoints.size() )
+        m_PolyPoints.emplace_back(0, 0 );
+
+    Offset( aPosition - m_PolyPoints[ 0 ] );
 }
 
+const wxPoint LIB_BEZIER::GetOffset() const
+{
+    if ( !m_PolyPoints.size() )
+        return wxPoint(0, 0);
+
+    return m_PolyPoints[0];
+}
 
 void LIB_BEZIER::MirrorHorizontal( const wxPoint& aCenter )
 {
@@ -232,19 +165,11 @@ void LIB_BEZIER::Rotate( const wxPoint& aCenter, bool aRotateCCW )
 {
     int rot_angle = aRotateCCW ? -900 : 900;
 
-    size_t i, imax = m_PolyPoints.size();
+    for( wxPoint& point : m_PolyPoints )
+        RotatePoint( &point, aCenter, rot_angle );
 
-    for( i = 0; i < imax; i++ )
-    {
-        RotatePoint( &m_PolyPoints[i], aCenter, rot_angle );
-    }
-
-    imax = m_BezierPoints.size();
-
-    for( i = 0; i < imax; i++ )
-    {
-        RotatePoint( &m_BezierPoints[i], aCenter, rot_angle );
-    }
+    for( wxPoint& bezierPoint : m_BezierPoints )
+        RotatePoint( &bezierPoint, aCenter, rot_angle );
 }
 
 
@@ -256,112 +181,128 @@ void LIB_BEZIER::Plot( PLOTTER* aPlotter, const wxPoint& aOffset, bool aFill,
     static std::vector< wxPoint > cornerList;
     cornerList.clear();
 
-    for( unsigned ii = 0; ii < m_PolyPoints.size(); ii++ )
+    for( wxPoint pos : m_PolyPoints )
     {
-        wxPoint pos = m_PolyPoints[ii];
         pos = aTransform.TransformCoordinate( pos ) + aOffset;
         cornerList.push_back( pos );
     }
 
     if( aFill && m_Fill == FILLED_WITH_BG_BODYCOLOR )
     {
-        aPlotter->SetColor( GetLayerColor( LAYER_DEVICE_BACKGROUND ) );
+        aPlotter->SetColor( aPlotter->ColorSettings()->GetColor( LAYER_DEVICE_BACKGROUND ) );
         aPlotter->PlotPoly( cornerList, FILLED_WITH_BG_BODYCOLOR, 0 );
     }
 
     bool already_filled = m_Fill == FILLED_WITH_BG_BODYCOLOR;
-    aPlotter->SetColor( GetLayerColor( LAYER_DEVICE ) );
-    aPlotter->PlotPoly( cornerList, already_filled ? NO_FILL : m_Fill, GetPenSize() );
+    auto pen_size = GetPenSize();
+
+    if( !already_filled || pen_size > 0 )
+    {
+        pen_size = std::max( 0, pen_size );
+        aPlotter->SetColor( aPlotter->ColorSettings()->GetColor( LAYER_DEVICE ) );
+        aPlotter->PlotPoly( cornerList, already_filled ? NO_FILL : m_Fill, pen_size );
+    }
 }
 
 
 int LIB_BEZIER::GetPenSize() const
 {
-    return ( m_Width == 0 ) ? GetDefaultLineThickness() : m_Width;
+    if( m_Width > 0 )
+        return m_Width;
+
+    if( m_Width == 0 )
+       return GetDefaultLineThickness();
+
+    return -1;   // a value to use a minimal pen size
 }
 
 
-void LIB_BEZIER::drawGraphic( EDA_DRAW_PANEL* aPanel, wxDC* aDC, const wxPoint& aOffset,
-                              COLOR4D aColor, GR_DRAWMODE aDrawMode, void* aData,
-                              const TRANSFORM& aTransform )
+void LIB_BEZIER::print( wxDC* aDC, const wxPoint& aOffset, void* aData,
+                        const TRANSFORM& aTransform )
 {
     std::vector<wxPoint> PolyPointsTraslated;
 
-    COLOR4D color = GetLayerColor( LAYER_DEVICE );
+    COLOR4D color   = GetLayerColor( LAYER_DEVICE );
+    COLOR4D bgColor = GetLayerColor( LAYER_DEVICE_BACKGROUND );
     BEZIER_POLY converter( m_BezierPoints );
     converter.GetPoly( m_PolyPoints );
 
     PolyPointsTraslated.clear();
 
-    for( unsigned int i = 0; i < m_PolyPoints.size() ; i++ )
-        PolyPointsTraslated.push_back( aTransform.TransformCoordinate( m_PolyPoints[i] ) +
-                                       aOffset );
-
-    if( aColor == COLOR4D::UNSPECIFIED )                // Used normal color or selected color
-    {
-        if( IsSelected() )
-            color = GetItemSelectedColor();
-    }
-    else
-    {
-        color = aColor;
-    }
+    for( wxPoint& point : m_PolyPoints )
+        PolyPointsTraslated.push_back( aTransform.TransformCoordinate( point ) + aOffset );
 
     FILL_T fill = aData ? NO_FILL : m_Fill;
 
-    if( aColor != COLOR4D::UNSPECIFIED )
-        fill = NO_FILL;
-
-    GRSetDrawMode( aDC, aDrawMode );
-    EDA_RECT* const clipbox  = aPanel? aPanel->GetClipBox() : NULL;
-
     if( fill == FILLED_WITH_BG_BODYCOLOR )
-        GRPoly( clipbox, aDC, m_PolyPoints.size(),
-                &PolyPointsTraslated[0], 1, GetPenSize(),
-                (m_Flags & IS_MOVED) ? color : GetLayerColor( LAYER_DEVICE_BACKGROUND ),
-                GetLayerColor( LAYER_DEVICE_BACKGROUND ) );
+    {
+        GRPoly( nullptr, aDC, m_PolyPoints.size(), &PolyPointsTraslated[0], true, GetPenSize(),
+                bgColor, bgColor );
+    }
     else if( fill == FILLED_SHAPE  )
-        GRPoly( clipbox, aDC, m_PolyPoints.size(),
-                &PolyPointsTraslated[0], 1, GetPenSize(), color, color );
+    {
+        GRPoly( nullptr, aDC, m_PolyPoints.size(), &PolyPointsTraslated[0], true, GetPenSize(),
+                color, color );
+    }
     else
-        GRPoly( clipbox, aDC, m_PolyPoints.size(),
-                &PolyPointsTraslated[0], 0, GetPenSize(), color, color );
-
-    /* Set to one (1) to draw bounding box around bezier curve to validate
-     * bounding box calculation. */
-#if 0
-    EDA_RECT bBox = GetBoundingBox();
-    GRRect( aPanel->GetClipBox(), aDC, bBox.GetOrigin().x, bBox.GetOrigin().y,
-            bBox.GetEnd().x, bBox.GetEnd().y, 0, LIGHTMAGENTA );
-#endif
+    {
+        GRPoly( nullptr, aDC, m_PolyPoints.size(), &PolyPointsTraslated[0], false, GetPenSize(),
+                color, color );
+    }
 }
 
 
-bool LIB_BEZIER::HitTest( const wxPoint& aRefPos ) const
+bool LIB_BEZIER::HitTest( const wxPoint& aRefPos, int aAccuracy ) const
 {
-    int mindist = GetPenSize() / 2;
-
-    // Have a minimal tolerance for hit test
-    if ( mindist < MINIMUM_SELECTION_DISTANCE )
-        mindist = MINIMUM_SELECTION_DISTANCE;
-
-    return HitTest( aRefPos, mindist, DefaultTransform );
-}
-
-
-bool LIB_BEZIER::HitTest( const wxPoint &aPosRef, int aThreshold, const TRANSFORM& aTransform ) const
-{
+    int     mindist = std::max( aAccuracy + GetPenSize() / 2,
+                                Mils2iu( MINIMUM_SELECTION_DISTANCE ) );
     wxPoint start, end;
-
-    if( aThreshold < 0 )
-        aThreshold = GetPenSize() / 2;
 
     for( unsigned ii = 1; ii < GetCornerCount(); ii++ )
     {
-        start = aTransform.TransformCoordinate( m_PolyPoints[ii - 1] );
-        end   = aTransform.TransformCoordinate( m_PolyPoints[ii] );
+        start = DefaultTransform.TransformCoordinate( m_PolyPoints[ii - 1] );
+        end   = DefaultTransform.TransformCoordinate( m_PolyPoints[ii] );
 
-        if ( TestSegmentHit( aPosRef, start, end, aThreshold ) )
+        if ( TestSegmentHit( aRefPos, start, end, mindist ) )
+            return true;
+    }
+
+    return false;
+}
+
+
+bool LIB_BEZIER::HitTest( const EDA_RECT& aRect, bool aContained, int aAccuracy ) const
+{
+    if( m_Flags & ( STRUCT_DELETED | SKIP_STRUCT ) )
+        return false;
+
+    EDA_RECT sel = aRect;
+
+    if ( aAccuracy )
+        sel.Inflate( aAccuracy );
+
+    if( aContained )
+        return sel.Contains( GetBoundingBox() );
+
+    // Fast test: if aRect is outside the polygon bounding box, rectangles cannot intersect
+    if( !sel.Intersects( GetBoundingBox() ) )
+        return false;
+
+    // Account for the width of the line
+    sel.Inflate( GetWidth() / 2 );
+    unsigned count = m_BezierPoints.size();
+
+    for( unsigned ii = 1; ii < count; ii++ )
+    {
+        wxPoint vertex = DefaultTransform.TransformCoordinate( m_BezierPoints[ii-1] );
+        wxPoint vertexNext = DefaultTransform.TransformCoordinate( m_BezierPoints[ii] );
+
+        // Test if the point is within aRect
+        if( sel.Contains( vertex ) )
+            return true;
+
+        // Test if this edge intersects aRect
+        if( sel.Intersects( vertex, vertexNext ) )
             return true;
     }
 
@@ -398,19 +339,30 @@ const EDA_RECT LIB_BEZIER::GetBoundingBox() const
 }
 
 
-void LIB_BEZIER::GetMsgPanelInfo( std::vector< MSG_PANEL_ITEM >& aList )
+void LIB_BEZIER::GetMsgPanelInfo( EDA_UNITS aUnits, std::vector<MSG_PANEL_ITEM>& aList )
 {
     wxString msg;
     EDA_RECT bBox = GetBoundingBox();
 
-    LIB_ITEM::GetMsgPanelInfo( aList );
+    LIB_ITEM::GetMsgPanelInfo( aUnits, aList );
 
-    msg = StringFromValue( g_UserUnit, m_Width, true );
+    msg = MessageTextFromValue( aUnits, m_Width, true );
 
-    aList.push_back( MSG_PANEL_ITEM( _( "Line Width" ), msg, BLUE ) );
+    aList.emplace_back( _( "Line Width" ), msg, BLUE );
 
-    msg.Printf( wxT( "(%d, %d, %d, %d)" ), bBox.GetOrigin().x,
-                bBox.GetOrigin().y, bBox.GetEnd().x, bBox.GetEnd().y );
+    msg.Printf( wxT( "(%d, %d, %d, %d)" ),
+                bBox.GetOrigin().x,
+                bBox.GetOrigin().y,
+                bBox.GetEnd().x,
+                bBox.GetEnd().y );
 
-    aList.push_back( MSG_PANEL_ITEM( _( "Bounding Box" ), msg, BROWN ) );
+    aList.emplace_back( _( "Bounding Box" ), msg, BROWN );
+}
+
+wxPoint LIB_BEZIER::GetPosition() const
+{
+    if( !m_PolyPoints.size() )
+        return wxPoint(0, 0);
+
+    return m_PolyPoints[0];
 }

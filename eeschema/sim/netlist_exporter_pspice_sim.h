@@ -2,6 +2,8 @@
  * This program source code file is part of KiCad, a free EDA CAD application.
  *
  * Copyright (C) 2016 CERN
+ * Copyright (C) 2017 KiCad Developers, see AUTHORS.txt for contributors.
+ *
  * @author Maciej Suminski <maciej.suminski@cern.ch>
  *
  * This program is free software; you can redistribute it and/or
@@ -29,14 +31,23 @@
 #include <vector>
 
 #include "sim_types.h"
+#include "spice_value.h"
 
-/// Special netlist exporter flavor that allows to override simulation commands
+
+struct SPICE_DC_PARAMS
+{
+    wxString m_source;
+    SPICE_VALUE m_vstart;
+    SPICE_VALUE m_vend;
+    SPICE_VALUE m_vincrement;
+};
+
+/// Special netlist exporter flavor that allows one to override simulation commands
 class NETLIST_EXPORTER_PSPICE_SIM : public NETLIST_EXPORTER_PSPICE
 {
 public:
-    NETLIST_EXPORTER_PSPICE_SIM( NETLIST_OBJECT_LIST* aMasterList, PART_LIBS* aLibs,
-            SEARCH_STACK* aPaths = NULL ) :
-        NETLIST_EXPORTER_PSPICE( aMasterList, aLibs, aPaths )
+    NETLIST_EXPORTER_PSPICE_SIM( NETLIST_OBJECT_LIST* aMasterList, PROJECT* aProject = nullptr ) :
+        NETLIST_EXPORTER_PSPICE( aMasterList, aProject )
     {
     }
 
@@ -51,13 +62,6 @@ public:
      */
     wxString GetSpiceVector( const wxString& aName, SIM_PLOT_TYPE aType,
             const wxString& aParam = wxEmptyString ) const;
-
-    /**
-     * @brief Returns name of Spice device corresponding to a schematic component.
-     * @param aComponent is the component reference.
-     * @return Spice device name or empty string if there is no such component in the netlist.
-     */
-    wxString GetSpiceDevice( const wxString& aComponent ) const;
 
     /**
      * @brief Returns a list of currents that can be probed in a Spice primitive.
@@ -89,6 +93,12 @@ public:
     }
 
     /**
+     * Returns the command directive that is in use (either from the sheet or from m_simCommand
+     * @return
+     */
+    wxString GetUsedSimCommand();
+
+    /**
      * @brief Returns simulation type basing on the simulation command directives.
      * Simulation directives set using SetSimCommand() have priority over the ones placed in
      * schematic sheets.
@@ -99,6 +109,15 @@ public:
      * @brief Returns simulation command directives placed in schematic sheets (if any).
      */
     wxString GetSheetSimCommand();
+
+    /**
+     * Parses a two-source .dc command directive into its components
+     *
+     * @param aCmd is the input command string
+     * @return true if the command was parsed successfully
+     */
+    bool ParseDCCommand( const wxString& aCmd, SPICE_DC_PARAMS* aSource1,
+                         SPICE_DC_PARAMS* aSource2 );
 
     /**
      * @brief Determines if a directive is a simulation command.

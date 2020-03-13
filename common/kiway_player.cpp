@@ -37,20 +37,16 @@
 BEGIN_EVENT_TABLE( KIWAY_PLAYER, EDA_BASE_FRAME )
     EVT_KIWAY_EXPRESS( KIWAY_PLAYER::kiway_express )
     EVT_MENU_RANGE( ID_LANGUAGE_CHOICE, ID_LANGUAGE_CHOICE_END, KIWAY_PLAYER::language_change )
-    EVT_MENU_RANGE( ID_KICAD_SELECT_ICONS_OPTIONS, ID_KICAD_SELECT_ICON_OPTIONS_END,
-                    KIWAY_PLAYER::OnChangeIconsOptions )
 END_EVENT_TABLE()
 
 
 KIWAY_PLAYER::KIWAY_PLAYER( KIWAY* aKiway, wxWindow* aParent, FRAME_T aFrameType,
         const wxString& aTitle, const wxPoint& aPos, const wxSize& aSize,
         long aStyle, const wxString& aWdoName ) :
-    EDA_BASE_FRAME( aParent, aFrameType, aTitle, aPos, aSize, aStyle, aWdoName ),
-    KIWAY_HOLDER( aKiway ),
+    EDA_BASE_FRAME( aParent, aFrameType, aTitle, aPos, aSize, aStyle, aWdoName, aKiway ),
     m_modal( false ),
     m_modal_loop( 0 ), m_modal_resultant_parent( 0 )
 {
-    // DBG( printf("KIWAY_EXPRESS::wxEVENT_ID:%d\n", KIWAY_EXPRESS::wxEVENT_ID );)
     m_modal_ret_val = 0;
 }
 
@@ -58,14 +54,12 @@ KIWAY_PLAYER::KIWAY_PLAYER( KIWAY* aKiway, wxWindow* aParent, FRAME_T aFrameType
 KIWAY_PLAYER::KIWAY_PLAYER( wxWindow* aParent, wxWindowID aId, const wxString& aTitle,
         const wxPoint& aPos, const wxSize& aSize, long aStyle,
         const wxString& aWdoName ) :
-    EDA_BASE_FRAME( aParent, (FRAME_T) aId, aTitle, aPos, aSize, aStyle, aWdoName ),
-    KIWAY_HOLDER( 0 ),
+    EDA_BASE_FRAME( aParent, (FRAME_T) aId, aTitle, aPos, aSize, aStyle, aWdoName, nullptr ),
     m_modal( false ),
     m_modal_loop( 0 ),
     m_modal_resultant_parent( 0 ),
     m_modal_ret_val( false )
 {
-    // DBG( printf("KIWAY_EXPRESS::wxEVENT_ID:%d\n", KIWAY_EXPRESS::wxEVENT_ID );)
 }
 
 
@@ -114,7 +108,7 @@ bool KIWAY_PLAYER::ShowModal( wxString* aResult, wxWindow* aResultantFocusWindow
         // We do not want to disable top level windows which are child of the modal one,
         // if they are enabled.
         // An example is an aui toolbar which was moved
-        // or a dialog or an other frame or miniframe opened by the modal one.
+        // or a dialog or another frame or miniframe opened by the modal one.
         wxWindowList wlist = GetChildren();
         std::vector<wxWindow*> enabledTopLevelWindows;
 
@@ -139,9 +133,6 @@ bool KIWAY_PLAYER::ShowModal( wxString* aResult, wxWindow* aResultantFocusWindow
     if( aResult )
         *aResult = m_modal_string;
 
-    DBG(printf( "~%s: aResult:'%s'  ret:%d\n",
-            __func__, TO_UTF8( m_modal_string ), m_modal_ret_val );)
-
     if( aResultantFocusWindow )
     {
         aResultantFocusWindow->Raise();
@@ -162,11 +153,7 @@ bool KIWAY_PLAYER::Destroy()
 
 bool KIWAY_PLAYER::IsDismissed()
 {
-    bool ret = !m_modal_loop;
-
-    DBG(printf( "%s: ret:%d\n", __func__, ret );)
-
-    return ret;
+    return !m_modal_loop;
 }
 
 
@@ -188,13 +175,6 @@ void KIWAY_PLAYER::DismissModal( bool aRetVal, const wxString& aResult )
 void KIWAY_PLAYER::kiway_express( KIWAY_EXPRESS& aEvent )
 {
     // logging support
-#if defined(DEBUG)
-    const char* class_name = typeid( this ).name();
-
-    printf( "%s: received cmd:%d  pay:'%s'\n", class_name,
-        aEvent.Command(), aEvent.GetPayload().c_str() );
-#endif
-
     KiwayMailIn( aEvent );     // call the virtual, override in derived.
 }
 
@@ -208,8 +188,3 @@ void KIWAY_PLAYER::language_change( wxCommandEvent& event )
 }
 
 
-void KIWAY_PLAYER::OnChangeIconsOptions( wxCommandEvent& event )
-{
-    EDA_BASE_FRAME::OnChangeIconsOptions( event );
-    Kiway().ShowChangedIcons();
-}

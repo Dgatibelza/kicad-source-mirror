@@ -36,6 +36,7 @@
 #include <iomanip>
 #include <cmath>
 #include <vrml_layer.h>
+#include <trigo.h>
 
 #ifndef CALLBACK
 #define CALLBACK
@@ -317,9 +318,6 @@ int VRML_LAYER::NewContour(  bool aPlatedHole )
 
     std::list<int>* contour = new std::list<int>;
 
-    if( !contour )
-        return -1;
-
     contours.push_back( contour );
     areas.push_back( 0.0 );
 
@@ -347,13 +345,6 @@ bool VRML_LAYER::AddVertex( int aContourID, double aXpos, double aYpos )
     }
 
     VERTEX_3D* vertex = new VERTEX_3D;
-
-    if( !vertex )
-    {
-        error = "AddVertex(): a new vertex could not be allocated";
-        return false;
-    }
-
     vertex->x   = aXpos;
     vertex->y   = aYpos;
     vertex->i   = idx++;
@@ -576,6 +567,31 @@ bool VRML_LAYER::AddSlot( double aCenterX, double aCenterY,
     }
 
     return !fail;
+}
+
+
+bool VRML_LAYER::AddPolygon( const std::vector< wxRealPoint >& aPolySet, double aCenterX,
+        double aCenterY, double aAngle )
+{
+    int pad = NewContour( false );
+
+    if( pad < 0 )
+    {
+        error = "AddPolygon(): failed to add a contour";
+        return false;
+    }
+
+    for( auto corner : aPolySet )
+    {
+        // The sense of polygon rotations is reversed
+        RotatePoint( &corner.x, &corner.y, -aAngle );
+        AddVertex( pad, aCenterX + corner.x, aCenterY + corner.y );
+    }
+
+    if( !EnsureWinding( pad, false ) )
+        return false;
+
+    return true;
 }
 
 
@@ -1372,7 +1388,7 @@ bool VRML_LAYER::addTriplet( VERTEX_3D* p0, VERTEX_3D* p1, VERTEX_3D* p2 )
     if( ( dx2 + dy2 ) < err )
         return false;
 
-    triplets.push_back( TRIPLET_3D( p0->o, p1->o, p2->o ) );
+    triplets.emplace_back( p0->o, p1->o, p2->o );
 
     return true;
 }
@@ -1382,12 +1398,6 @@ bool VRML_LAYER::addTriplet( VERTEX_3D* p0, VERTEX_3D* p1, VERTEX_3D* p2 )
 VERTEX_3D* VRML_LAYER::AddExtraVertex( double aXpos, double aYpos, bool aPlatedHole )
 {
     VERTEX_3D* vertex = new VERTEX_3D;
-
-    if( !vertex )
-    {
-        error = "AddExtraVertex(): could not allocate a new vertex";
-        return NULL;
-    }
 
     if( eidx == 0 )
         eidx = idx + hidx;
@@ -1436,9 +1446,6 @@ void VRML_LAYER::glEnd( void )
         {
             // add the loop to the list of outlines
             std::list<int>* loop = new std::list<int>;
-
-            if( !loop )
-                break;
 
             double firstX = 0.0;
             double firstY = 0.0;

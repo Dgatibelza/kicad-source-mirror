@@ -30,6 +30,8 @@
 #define STROKE_FONT_H_
 
 #include <deque>
+#include <algorithm>
+
 #include <utf8.h>
 
 #include <eda_text.h>
@@ -40,8 +42,8 @@ namespace KIGFX
 {
 class GAL;
 
-typedef std::deque< std::deque<VECTOR2D> > GLYPH;
-typedef std::vector<GLYPH>                 GLYPH_LIST;
+typedef std::vector<std::vector<VECTOR2D>*> GLYPH;
+typedef std::vector<GLYPH*>                 GLYPH_LIST;
 
 /**
  * @brief Class STROKE_FONT implements stroke font drawing.
@@ -70,9 +72,12 @@ public:
      *
      * @param aText is the text to be drawn.
      * @param aPosition is the text position in world coordinates.
-     * @param aRotationAngle is the text rotation angle.
+     * @param aRotationAngle is the text rotation angle in radians.
+     * @param markupFlags a flagset of MARKUP_FLAG enums indicating which markup tokens should
+     *                    be processed
      */
-    void Draw( const UTF8& aText, const VECTOR2D& aPosition, double aRotationAngle );
+    void Draw( const UTF8& aText, const VECTOR2D& aPosition, double aRotationAngle,
+               int markupFlags );
 
     /**
      * Function SetGAL
@@ -85,24 +90,15 @@ public:
     }
 
     /**
-     * Compute the boundary limits of aText (the bbox of all shapes).
-     * The overbar is not taken in account, by ~ are skipped.
-     * @return a VECTOR2D giving the h size of line, and the V glyph size
-     * and ( if aTopLimit or aBottomLimit not NULL ) the top and bottom
-     * limits of the text.
-     */
-    VECTOR2D ComputeStringBoundaryLimits( const UTF8& aText, VECTOR2D aGlyphSize,
-                                          double aGlyphThickness,
-                                          double* aTopLimit = NULL, double* aBottomLimit = NULL ) const;
-
-    /**
-     * @brief Compute the X and Y size of a given text. The text is expected to be
-     * a only one line text.
+     * Compute the boundary limits of aText (the bounding box of all shapes).
+     * The overbar and alignment are not taken in account, '~' characters are skipped.
      *
-     * @param aText is the text string (one line).
-     * @return the text size.
+     * @param markupFlags a flagset of MARKUP_FLAG enums indicating which markup tokens should
+     *                    be processed
+     * @return a VECTOR2D giving the width and height of text.
      */
-    VECTOR2D ComputeTextLineSize( const UTF8& aText ) const;
+    VECTOR2D ComputeStringBoundaryLimits( const UTF8& aText, const VECTOR2D& aGlyphSize,
+                                          double aGlyphThickness, int markupFlags ) const;
 
     /**
      * Compute the vertical position of an overbar, sometimes used in texts.
@@ -117,26 +113,26 @@ public:
      * @brief Compute the distance (interline) between 2 lines of text (for multiline texts).
      *
      * @param aGlyphHeight is the height (vertical size) of the text.
-     * @param aGlyphThickness is the thickness of the lines used to draw the text.
      * @return the interline.
      */
-    static double GetInterline( double aGlyphHeight, double aGlyphThickness );
+    static double GetInterline( double aGlyphHeight );
 
 
 
 private:
-    GAL*                m_gal;                  ///< Pointer to the GAL
-    GLYPH_LIST          m_glyphs;               ///< Glyph list
-    std::vector<BOX2D>  m_glyphBoundingBoxes;   ///< Bounding boxes of the glyphs
+    GAL*                      m_gal;                  ///< Pointer to the GAL
+    const GLYPH_LIST*         m_glyphs;               ///< Glyph list
+    const std::vector<BOX2D>* m_glyphBoundingBoxes;   ///< Bounding boxes of the glyphs
 
     /**
      * @brief Compute the X and Y size of a given text. The text is expected to be
      * a only one line text.
      *
      * @param aText is the text string (one line).
+     * @param aMarkupFlags a bitset of TEXT_MARKUP_FLAGS.
      * @return the text size.
      */
-    VECTOR2D computeTextLineSize( const UTF8& aText ) const;
+    VECTOR2D computeTextLineSize( const UTF8& aText, int aMarkupFlags ) const;
 
     /**
      * Compute the vertical position of an overbar, sometimes used in texts.
@@ -146,20 +142,13 @@ private:
     double computeOverbarVerticalPosition() const;
 
     /**
-     * @brief Returns a single line height using current settings.
-     *
-     * @return The line height.
-     */
-    int getInterline() const;
-
-    /**
      * @brief Compute the bounding box of a given glyph.
      *
      * @param aGlyph is the glyph.
-     * @param aGlyphBoundingX is the x-component of the bounding box size.
+     * @param aGlyphWidth is the x-component of the bounding box size.
      * @return is the complete bounding box size.
      */
-    BOX2D computeBoundingBox( const GLYPH& aGlyph, const VECTOR2D& aGlyphBoundingX ) const;
+    BOX2D computeBoundingBox( const GLYPH* aGlyph, double aGlyphWidth ) const;
 
     /**
      * @brief Draws a single line of text. Multiline texts should be split before using the
@@ -167,7 +156,7 @@ private:
      *
      * @param aText is the text to be drawn.
      */
-    void drawSingleLineText( const UTF8& aText );
+    void drawSingleLineText( const UTF8& aText, int markupFlags );
 
     /**
      * @brief Returns number of lines for a given text.

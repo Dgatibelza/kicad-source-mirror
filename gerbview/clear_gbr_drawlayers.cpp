@@ -28,14 +28,13 @@
  */
 
 #include <fctsys.h>
-#include <class_drawpanel.h>
 #include <confirm.h>
-
 #include <gerbview_frame.h>
-#include <class_gerber_file_image.h>
-#include <class_gerber_file_image_list.h>
-#include <class_gerbview_layer_widget.h>
+#include <gerber_file_image.h>
+#include <gerber_file_image_list.h>
+#include <gerbview_layer_widget.h>
 #include <view/view.h>
+#include <tool/tool_manager.h>
 
 bool GERBVIEW_FRAME::Clear_DrawLayers( bool query )
 {
@@ -48,9 +47,15 @@ bool GERBVIEW_FRAME::Clear_DrawLayers( bool query )
             return false;
     }
 
-    if( auto canvas = GetGalCanvas() )
+    if( GetCanvas() )
     {
-        canvas->GetView()->Clear();
+        if( m_toolManager )
+            m_toolManager->ResetTools( TOOL_BASE::MODEL_RELOAD );
+
+        GetCanvas()->GetView()->Clear();
+
+        // Reinit the worksheet view, cleared by GetView()->Clear():
+        SetPageSettings( GetPageSettings() );
     }
 
     GetImagesList()->DeleteAllImages();
@@ -74,11 +79,12 @@ void GERBVIEW_FRAME::Erase_Current_DrawLayer( bool query )
     if( query && !IsOK( this, msg ) )
         return;
 
-    SetCurItem( NULL );
+    if( m_toolManager )
+        m_toolManager->ResetTools( TOOL_BASE::MODEL_RELOAD );
 
     GetImagesList()->DeleteImage( layer );
 
     ReFillLayerWidget();
     syncLayerBox();
-    m_canvas->Refresh();
+    GetCanvas()->Refresh();
 }

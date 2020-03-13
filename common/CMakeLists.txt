@@ -3,6 +3,8 @@ if( COMPILER_SUPPORTS_WSHADOW )
     set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} ${WSHADOW_FLAGS}")
 endif()
 
+add_subdirectory( libeval )
+
 include_directories( BEFORE ${INC_BEFORE} )
 include_directories(
     ./dialogs
@@ -13,10 +15,12 @@ include_directories(
     ${GLEW_INCLUDE_DIR}
     ${GLM_INCLUDE_DIR}
     ${CURL_INCLUDE_DIRS}
-    ../3d-viewer
-    ../pcbnew
-    ../polygon
+    ${CMAKE_SOURCE_DIR}/3d-viewer
+    ${CMAKE_SOURCE_DIR}/pcbnew
     ${INC_AFTER}
+    ${OCE_INCLUDE_DIRS}
+    ${OCC_INCLUDE_DIR}
+    ${OPENSSL_INCLUDE_DIR}
     )
 
 
@@ -28,18 +32,19 @@ set( GAL_SRCS
     # Common part
     basic_gal.cpp
     draw_panel_gal.cpp
-    painter.cpp
-    newstroke_font.cpp
-    worksheet_viewitem.cpp
-    origin_viewitem.cpp
     gl_context_mgr.cpp
+    newstroke_font.cpp
+    painter.cpp
+    gal/color4d.cpp
     gal/gal_display_options.cpp
     gal/graphics_abstraction_layer.cpp
+    gal/hidpi_gl_canvas.cpp
     gal/stroke_font.cpp
-    gal/color4d.cpp
+
     view/view_controls.cpp
+    view/view_overlay.cpp
     view/wx_view_controls.cpp
-    geometry/hetriang.cpp
+    view/zoom_controller.cpp
 
     # OpenGL GAL
     gal/opengl/opengl_gal.cpp
@@ -61,17 +66,25 @@ set( GAL_SRCS
     # Cairo GAL
     gal/cairo/cairo_gal.cpp
     gal/cairo/cairo_compositor.cpp
+    gal/cairo/cairo_print.cpp
     )
 
 add_library( gal STATIC ${GAL_SRCS} )
-add_dependencies( gal lib-dependencies )
 
 target_link_libraries( gal
+    ttl
+    kimath
+    bitmaps
     ${GLEW_LIBRARIES}
     ${CAIRO_LIBRARIES}
     ${PIXMAN_LIBRARIES}
     ${OPENGL_LIBRARIES}
+    ${GDI_PLUS_LIBRARIES}
 )
+
+target_include_directories( gal PRIVATE
+    $<TARGET_PROPERTY:nlohmann_json,INTERFACE_INCLUDE_DIRECTORIES>
+    )
 
 
 # Only for win32 cross compilation using MXE
@@ -101,7 +114,6 @@ add_library( singletop STATIC EXCLUDE_FROM_ALL
 # as APIEXPORT
 set( LIB_KICAD_SRCS
     colors.cpp
-    dlist.cpp
     string.cpp
     )
 
@@ -121,10 +133,10 @@ install( TARGETS lib_kicad
 endif()
 
 
-# KiCad build version string defaults to "no-vcs-found" which forces the build version header
-# command to look for git to create the version string header when the .git path is found in
-# the source path.
-set( KICAD_BRANCH_NAME "" CACHE STRING "KiCad repository name." )
+# The build version string defaults to the value in the KiCadVersion.cmake file.
+# If being built inside a git repository, the git tag and commit hash are used to create
+# a new version string instead. The user can supply an additional string to be appended
+# to the end inside the KICAD_VERSION_EXTRA variable
 set( KICAD_VERSION_EXTRA "" CACHE STRING
     "User defined configuration string to append to KiCad version." )
 
@@ -132,8 +144,6 @@ set( KICAD_VERSION_EXTRA "" CACHE STRING
 add_custom_target(
     version_header ALL
     COMMAND ${CMAKE_COMMAND}
-        -DKICAD_VERSION=${KICAD_VERSION}
-        -DKICAD_BRANCH_NAME=${KICAD_BRANCH_NAME}
         -DKICAD_VERSION_EXTRA=${KICAD_VERSION_EXTRA}
         -DOUTPUT_FILE=${CMAKE_BINARY_DIR}/kicad_build_version.h
         -DSRC_PATH=${PROJECT_SOURCE_DIR}
@@ -150,57 +160,97 @@ set( COMMON_ABOUT_DLG_SRCS
     )
 
 set( COMMON_DLG_SRCS
+    dialogs/dialog_color_picker.cpp
+    dialogs/dialog_color_picker_base.cpp
+    dialogs/dialog_configure_paths.cpp
+    dialogs/dialog_configure_paths_base.cpp
     dialogs/dialog_display_info_HTML_base.cpp
-    dialogs/dialog_exit_base.cpp
+    dialogs/dialog_edit_library_tables.cpp
+    dialogs/dialog_global_lib_table_config.cpp
+    dialogs/dialog_global_lib_table_config_base.cpp
+    dialogs/dialog_hotkey_list.cpp
     dialogs/dialog_image_editor.cpp
     dialogs/dialog_image_editor_base.cpp
-    dialogs/dialog_get_component.cpp
-    dialogs/dialog_get_component_base.cpp
-    dialogs/dialog_hotkeys_editor.cpp
-    dialogs/dialog_hotkeys_editor_base.cpp
     dialogs/dialog_list_selector_base.cpp
+    dialogs/dialog_migrate_settings.cpp
+    dialogs/dialog_migrate_settings_base.cpp
     dialogs/dialog_page_settings_base.cpp
-    dialogs/dialog_env_var_config_base.cpp
-    dialogs/dialog_env_var_config.cpp
-    dialogs/wx_html_report_panel_base.cpp
+    dialogs/dialog_text_entry_base.cpp
+    dialogs/dialog_print_generic.cpp
+    dialogs/dialog_print_generic_base.cpp
+    dialogs/dialog_text_entry.cpp
+    dialogs/panel_color_settings_base.cpp
+    dialogs/panel_color_settings.cpp
+    dialogs/panel_common_settings.cpp
+    dialogs/panel_common_settings_base.cpp
+    dialogs/panel_hotkeys_editor.cpp
     dialogs/wx_html_report_panel.cpp
+    dialogs/wx_html_report_panel_base.cpp
     )
 
 set( COMMON_WIDGET_SRCS
+    widgets/button_row_panel.cpp
     widgets/color_swatch.cpp
-    widgets/color4Dpickerdlg_base.cpp
-    widgets/color4Dpickerdlg.cpp
-    widgets/gal_options_panel.cpp
-    widgets/mathplot.cpp
-    widgets/widget_hotkey_list.cpp
-    widgets/two_column_tree_list.cpp
+    widgets/footprint_choice.cpp
     widgets/footprint_preview_widget.cpp
     widgets/footprint_select_widget.cpp
-    widgets/footprint_choice.cpp
+    widgets/gal_options_panel.cpp
+    widgets/grid_combobox.cpp
+    widgets/grid_icon_text_helpers.cpp
+    widgets/grid_text_button_helpers.cpp
     widgets/indicator_icon.cpp
+    widgets/layer_box_selector.cpp
+    widgets/lib_tree.cpp
+    widgets/mathplot.cpp
+    widgets/paged_dialog.cpp
+    widgets/progress_reporter.cpp
+    widgets/split_button.cpp
+    widgets/stepped_slider.cpp
+    widgets/text_ctrl_eval.cpp
+    widgets/two_column_tree_list.cpp
+    widgets/ui_common.cpp
+    widgets/unit_binder.cpp
+    widgets/widget_save_restore.cpp
+    widgets/widget_hotkey_list.cpp
+    widgets/wx_busy_indicator.cpp
+    widgets/wx_grid.cpp
+    widgets/wx_angle_text.cpp
     )
 
 set( COMMON_PAGE_LAYOUT_SRCS
-    page_layout/title_block_shapes.cpp
-    page_layout/class_worksheet_dataitem.cpp
-    page_layout/class_worksheet_layout.cpp
+    page_layout/ws_data_item.cpp
+    page_layout/ws_data_model.cpp
+    page_layout/ws_data_model_io.cpp
     page_layout/page_layout_default_description.cpp
-    page_layout/page_layout_graphic_items.cpp
-    page_layout/page_layout_reader_keywords.cpp
+    page_layout/ws_draw_item.cpp
+    page_layout/ws_proxy_undo_item.cpp
+    page_layout/ws_proxy_view_item.cpp
     page_layout/page_layout_reader.cpp
     )
 
 set( COMMON_PREVIEW_ITEMS_SRCS
     preview_items/arc_assistant.cpp
     preview_items/arc_geom_manager.cpp
-    preview_items/centreline_rect_item.cpp
-    preview_items/preview_utils.cpp
-    preview_items/ruler_item.cpp
-    preview_items/simple_overlay_item.cpp
-    preview_items/selection_area.cpp
     preview_items/bright_box.cpp
+    preview_items/centreline_rect_item.cpp
+    preview_items/draw_context.cpp
     preview_items/polygon_geom_manager.cpp
     preview_items/polygon_item.cpp
+    preview_items/preview_utils.cpp
+    preview_items/ruler_item.cpp
+    preview_items/selection_area.cpp
+    preview_items/simple_overlay_item.cpp
+    )
+
+set( PLOTTERS_CONTROL_SRCS
+    plotters/plotter.cpp
+    plotters/DXF_plotter.cpp
+    plotters/GERBER_plotter.cpp
+    plotters/HPGL_plotter.cpp
+    plotters/PDF_plotter.cpp
+    plotters/PS_plotter.cpp
+    plotters/SVG_plotter.cpp
+    plotters/common_plot_functions.cpp
     )
 
 set( COMMON_SRCS
@@ -210,92 +260,88 @@ set( COMMON_SRCS
     ${COMMON_WIDGET_SRCS}
     ${COMMON_PAGE_LAYOUT_SRCS}
     ${COMMON_PREVIEW_ITEMS_SRCS}
+    ${PLOTTERS_CONTROL_SRCS}
+    advanced_config.cpp
+    array_axis.cpp
+    array_options.cpp
+    base64.cpp
     base_struct.cpp
-    basicframe.cpp
-    bezier_curves.cpp
     bin_mod.cpp
     bitmap.cpp
-    block_commande.cpp
+    bitmap_base.cpp
+    board_printout.cpp
     build_version.cpp
-    class_bitmap_base.cpp
-    class_colors_design_settings.cpp
-    class_layer_box_selector.cpp
-    class_marker_base.cpp
-    class_plotter.cpp
-    class_undoredo_container.cpp
     colors.cpp
     commit.cpp
     common.cpp
-    common_plot_functions.cpp
-    common_plotHPGL_functions.cpp
-    common_plotPS_functions.cpp
-    common_plotPDF_functions.cpp
-    common_plotGERBER_functions.cpp
-    common_plotDXF_functions.cpp
-    common_plotSVG_functions.cpp
     config_params.cpp
     confirm.cpp
-    copy_to_clipboard.cpp
-    convert_basic_shapes_to_polygon.cpp
+    cursor_store.cpp
     dialog_shim.cpp
     displlst.cpp
-    draw_frame.cpp
-    draw_panel.cpp
-    drawtxt.cpp
+    dpi_scaling.cpp
+    gr_text.cpp
     dsnlexer.cpp
     eagle_parser.cpp
+    eda_base_frame.cpp
     eda_dde.cpp
     eda_doc.cpp
+    eda_draw_frame.cpp
     eda_pattern_match.cpp
+    eda_size_ctrl.cpp
+    env_paths.cpp
+    env_vars.cpp
     exceptions.cpp
     executable_names.cpp
+    filename_resolver.cpp
+    filehistory.cpp
     filter_reader.cpp
-    footprint_info.cpp
     footprint_filter.cpp
-    hash_eda.cpp
-    lib_id.cpp
-    lib_table_keywords.cpp
-#    findkicadhelppath.cpp.notused      deprecated, use searchhelpfilefullpath.cpp
+    footprint_info.cpp
     gbr_metadata.cpp
     gestfich.cpp
     getrunningmicrosecs.cpp
-    grid_tricks.cpp
     gr_basic.cpp
+    grid_tricks.cpp
+    hotkey_store.cpp
     hotkeys_basic.cpp
     html_messagebox.cpp
-    incremental_text_ctrl.cpp
     kiface_i.cpp
     kiway.cpp
     kiway_express.cpp
     kiway_holder.cpp
     kiway_player.cpp
+    languages_menu.cpp
+    launch_ext.cpp
+    layer_id.cpp
+    lib_id.cpp
     lib_table_base.cpp
+    lib_tree_model.cpp
+    lib_tree_model_adapter.cpp
     lockfile.cpp
+    marker_base.cpp
     msgpanel.cpp
-    netlist_keywords.cpp
     observable.cpp
     prependpath.cpp
+    printout.cpp
     project.cpp
     properties.cpp
     ptree.cpp
+    refdes_utils.cpp
     reporter.cpp
     richio.cpp
-    searchhelpfilefullpath.cpp
     search_stack.cpp
-    selcolor.cpp
-    settings.cpp
+    searchhelpfilefullpath.cpp
+    status_popup.cpp
     systemdirsappend.cpp
-    trigo.cpp
+    trace_helpers.cpp
+    undo_redo_container.cpp
     utf8.cpp
     validators.cpp
     wildcards_and_files_ext.cpp
-    worksheet.cpp
-    wxwineda.cpp
+    page_layout/ws_painter.cpp
     wxdataviewctrl_helpers.cpp
-    wx_unit_binder.cpp
-    wx_status_popup.cpp
     xnode.cpp
-    zoom.cpp
     )
 
 if( TRUE OR NOT USE_KIWAY_DLLS )
@@ -309,115 +355,142 @@ if( NOT HAVE_STRTOKR )
     list( APPEND COMMON_SRCS strtok_r.c )
 endif()
 
+list( APPEND COMMON_SRCS
+    kicad_curl/kicad_curl.cpp
+    kicad_curl/kicad_curl_easy.cpp
+)
 
 set( COMMON_SRCS
     ${COMMON_SRCS}
-    system/libcontext.cpp
-
-    kicad_curl/kicad_curl.cpp
-    kicad_curl/kicad_curl_easy.cpp
 
     view/view.cpp
     view/view_item.cpp
     view/view_group.cpp
 
-    math/math_util.cpp
-
+    tool/action_manager.cpp
+    tool/action_menu.cpp
+    tool/action_toolbar.cpp
+    tool/actions.cpp
+    tool/common_control.cpp
+    tool/common_tools.cpp
+    tool/conditional_menu.cpp
+    tool/edit_constraints.cpp
+    tool/edit_points.cpp
+    tool/grid_menu.cpp
+    tool/picker_tool.cpp
+    tool/selection_conditions.cpp
     tool/tool_action.cpp
     tool/tool_base.cpp
-    tool/tool_manager.cpp
     tool/tool_dispatcher.cpp
     tool/tool_event.cpp
     tool/tool_interactive.cpp
-    tool/action_manager.cpp
-    tool/context_menu.cpp
-    tool/actions.cpp
-    tool/common_tools.cpp
-    tool/grid_menu.cpp
-    tool/zoom_menu.cpp
+    tool/tool_manager.cpp
     tool/tool_menu.cpp
-    tool/conditional_menu.cpp
-    tool/selection_conditions.cpp
+    tool/zoom_menu.cpp
     tool/zoom_tool.cpp
 
-    geometry/seg.cpp
-    geometry/shape.cpp
-    geometry/shape_line_chain.cpp
-    geometry/shape_poly_set.cpp
-    geometry/shape_collisions.cpp
-    geometry/shape_file_io.cpp
-    geometry/convex_hull.cpp
+    settings/app_settings.cpp
+    settings/color_settings.cpp
+    settings/common_settings.cpp
+    settings/json_settings.cpp
+    settings/nested_settings.cpp
+    settings/settings_manager.cpp
+
+    libeval/numeric_evaluator.cpp
     )
-add_library( common STATIC ${COMMON_SRCS} )
-add_dependencies( common lib-dependencies )
+
+add_library( common STATIC
+    ${COMMON_SRCS}
+    $<TARGET_OBJECTS:libcontext>
+    )
+
+target_include_directories( common PRIVATE
+    $<TARGET_PROPERTY:libcontext,INTERFACE_INCLUDE_DIRECTORIES>
+    )
+
+add_dependencies( common libcontext )
 add_dependencies( common version_header )
+
 target_link_libraries( common
+    kimath
+    bitmaps
     gal
     ${Boost_LIBRARIES}
     ${CURL_LIBRARIES}
     ${OPENSSL_LIBRARIES}        # empty on Apple
+    ${wxWidgets_LIBRARIES}
+    ${EXTRA_LIBS}
+    )
+
+target_include_directories( common PUBLIC
+    $<TARGET_PROPERTY:nlohmann_json,INTERFACE_INCLUDE_DIRECTORIES>
     )
 
 
 set( PCB_COMMON_SRCS
     base_screen.cpp
     eda_text.cpp
-    class_page_info.cpp
-    lset.cpp
-    ../pcbnew/basepcbframe.cpp
-    ../pcbnew/class_board.cpp
-    ../pcbnew/class_board_connected_item.cpp
-    ../pcbnew/class_board_design_settings.cpp
-    ../pcbnew/class_board_item.cpp
-    ../pcbnew/class_dimension.cpp
-    ../pcbnew/class_drawsegment.cpp
-    ../pcbnew/class_drc_item.cpp
-    ../pcbnew/class_edge_mod.cpp
-    ../pcbnew/class_netclass.cpp
-    ../pcbnew/class_netinfo_item.cpp
-    ../pcbnew/class_netinfolist.cpp
-    ../pcbnew/class_marker_pcb.cpp
-    ../pcbnew/class_mire.cpp
-    ../pcbnew/class_module.cpp
-    ../pcbnew/class_pad.cpp
-    ../pcbnew/class_pad_custom_shape_functions.cpp
-    ../pcbnew/class_pad_draw_functions.cpp
-    ../pcbnew/class_pcb_text.cpp
-    ../pcbnew/class_text_mod.cpp
-    ../pcbnew/class_track.cpp
-    ../pcbnew/class_zone.cpp
-    ../pcbnew/class_zone_settings.cpp
-    ../pcbnew/classpcb.cpp
-    ../pcbnew/connectivity.cpp
-    ../pcbnew/connectivity_algo.cpp
-    ../pcbnew/convert_drawsegment_list_to_polygon.cpp
-    ../pcbnew/ratsnest_data.cpp
-    ../pcbnew/ratsnest_viewitem.cpp
-    ../pcbnew/collectors.cpp
-    ../pcbnew/netlist_reader.cpp
-    ../pcbnew/legacy_netlist_reader.cpp
-    ../pcbnew/kicad_netlist_reader.cpp
-    ../pcbnew/sel_layer.cpp
-    ../pcbnew/pcb_plot_params.cpp
-    ../pcbnew/io_mgr.cpp
-    ../pcbnew/plugin.cpp
-    ../pcbnew/eagle_plugin.cpp
-    ../pcbnew/legacy_plugin.cpp
-    ../pcbnew/kicad_plugin.cpp
-    ../pcbnew/kicad_clipboard.cpp
-    ../pcbnew/gpcb_plugin.cpp
-    ../pcbnew/pcb_netlist.cpp
-    widgets/widget_net_selector.cpp
-    pcb_plot_params_keywords.cpp
-    pcb_keywords.cpp
-    ../pcbnew/pcb_parser.cpp
     fp_lib_table.cpp
+    hash_eda.cpp
+    lset.cpp
+    origin_viewitem.cpp
+    page_info.cpp
+    ${CMAKE_SOURCE_DIR}/pcbnew/pcb_base_frame.cpp
+    ${CMAKE_SOURCE_DIR}/pcbnew/board_commit.cpp
+    ${CMAKE_SOURCE_DIR}/pcbnew/board_connected_item.cpp
+    ${CMAKE_SOURCE_DIR}/pcbnew/board_design_settings.cpp
+    ${CMAKE_SOURCE_DIR}/pcbnew/board_items_to_polygon_shape_transform.cpp
+    ${CMAKE_SOURCE_DIR}/pcbnew/class_board.cpp
+    ${CMAKE_SOURCE_DIR}/pcbnew/class_board_item.cpp
+    ${CMAKE_SOURCE_DIR}/pcbnew/class_dimension.cpp
+    ${CMAKE_SOURCE_DIR}/pcbnew/class_drawsegment.cpp
+    ${CMAKE_SOURCE_DIR}/pcbnew/class_edge_mod.cpp
+    ${CMAKE_SOURCE_DIR}/pcbnew/class_marker_pcb.cpp
+    ${CMAKE_SOURCE_DIR}/pcbnew/class_module.cpp
+    ${CMAKE_SOURCE_DIR}/pcbnew/netclass.cpp
+    ${CMAKE_SOURCE_DIR}/pcbnew/netinfo_item.cpp
+    ${CMAKE_SOURCE_DIR}/pcbnew/netinfo_list.cpp
+    ${CMAKE_SOURCE_DIR}/pcbnew/class_pad.cpp
+    ${CMAKE_SOURCE_DIR}/pcbnew/class_pcb_target.cpp
+    ${CMAKE_SOURCE_DIR}/pcbnew/class_pcb_text.cpp
+    ${CMAKE_SOURCE_DIR}/pcbnew/board_stackup_manager/class_board_stackup.cpp
+    ${CMAKE_SOURCE_DIR}/pcbnew/class_text_mod.cpp
+    ${CMAKE_SOURCE_DIR}/pcbnew/class_track.cpp
+    ${CMAKE_SOURCE_DIR}/pcbnew/class_zone.cpp
+    ${CMAKE_SOURCE_DIR}/pcbnew/collectors.cpp
+    ${CMAKE_SOURCE_DIR}/pcbnew/connectivity/connectivity_algo.cpp
+    ${CMAKE_SOURCE_DIR}/pcbnew/connectivity/connectivity_items.cpp
+    ${CMAKE_SOURCE_DIR}/pcbnew/connectivity/connectivity_data.cpp
+    ${CMAKE_SOURCE_DIR}/pcbnew/convert_drawsegment_list_to_polygon.cpp
+    ${CMAKE_SOURCE_DIR}/pcbnew/drc/drc_item.cpp
+    ${CMAKE_SOURCE_DIR}/pcbnew/eagle_plugin.cpp
+    ${CMAKE_SOURCE_DIR}/pcbnew/footprint_editor_settings.cpp
+    ${CMAKE_SOURCE_DIR}/pcbnew/gpcb_plugin.cpp
+    ${CMAKE_SOURCE_DIR}/pcbnew/io_mgr.cpp
+    ${CMAKE_SOURCE_DIR}/pcbnew/kicad_clipboard.cpp
+    ${CMAKE_SOURCE_DIR}/pcbnew/netlist_reader/kicad_netlist_reader.cpp
+    ${CMAKE_SOURCE_DIR}/pcbnew/kicad_plugin.cpp
+    ${CMAKE_SOURCE_DIR}/pcbnew/netlist_reader/legacy_netlist_reader.cpp
+    ${CMAKE_SOURCE_DIR}/pcbnew/legacy_plugin.cpp
+    ${CMAKE_SOURCE_DIR}/pcbnew/netlist_reader/netlist_reader.cpp
+    ${CMAKE_SOURCE_DIR}/pcbnew/pad_custom_shape_functions.cpp
+    ${CMAKE_SOURCE_DIR}/pcbnew/pad_print_functions.cpp
+    ${CMAKE_SOURCE_DIR}/pcbnew/pcb_display_options.cpp
+    ${CMAKE_SOURCE_DIR}/pcbnew/pcb_draw_panel_gal.cpp
+    ${CMAKE_SOURCE_DIR}/pcbnew/netlist_reader/pcb_netlist.cpp
+    ${CMAKE_SOURCE_DIR}/pcbnew/pcb_painter.cpp
+    ${CMAKE_SOURCE_DIR}/pcbnew/pcb_parser.cpp
+    ${CMAKE_SOURCE_DIR}/pcbnew/pcb_plot_params.cpp
+    ${CMAKE_SOURCE_DIR}/pcbnew/pcb_screen.cpp
+    ${CMAKE_SOURCE_DIR}/pcbnew/pcb_view.cpp
+    ${CMAKE_SOURCE_DIR}/pcbnew/pcbnew_settings.cpp
+    ${CMAKE_SOURCE_DIR}/pcbnew/plugin.cpp
+    ${CMAKE_SOURCE_DIR}/pcbnew/ratsnest_data.cpp
+    ${CMAKE_SOURCE_DIR}/pcbnew/ratsnest_viewitem.cpp
+    ${CMAKE_SOURCE_DIR}/pcbnew/sel_layer.cpp
+    ${CMAKE_SOURCE_DIR}/pcbnew/zone_settings.cpp
+    widgets/net_selector.cpp
 )
-
-set( PCB_COMMON_SRCS
-    ${PCB_COMMON_SRCS}
-    ../pcbnew/pcb_painter.cpp
-    )
 
 # add -DPCBNEW to compilation of these PCBNEW sources
 set_source_files_properties( ${PCB_COMMON_SRCS} PROPERTIES
@@ -425,114 +498,68 @@ set_source_files_properties( ${PCB_COMMON_SRCS} PROPERTIES
     )
 
 add_library( pcbcommon STATIC ${PCB_COMMON_SRCS} )
-add_dependencies( pcbcommon lib-dependencies )
+
+target_include_directories( pcbcommon PUBLIC
+)
+
+target_link_libraries( pcbcommon PUBLIC
+    common
+    kimath
+)
 
 
 # auto-generate netlist_lexer.h and netlist_keywords.cpp
 make_lexer(
-    ${CMAKE_CURRENT_SOURCE_DIR}/netlist.keywords
-    ${PROJECT_SOURCE_DIR}/include/netlist_lexer.h
-    ${CMAKE_CURRENT_SOURCE_DIR}/netlist_keywords.cpp
+    common
+    netlist.keywords
+    netlist_lexer.h
+    netlist_keywords.cpp
     NL_T
-
-    # Pass header file with dependency on *_lexer.h as extra_arg
-    ${CMAKE_PROJECT_SOURCE_DIR}/pcbnew/netlist_reader.h
     )
-
-add_custom_target(
-    netlist_lexer_source_files ALL
-    DEPENDS
-        ${PROJECT_SOURCE_DIR}/include/netlist_lexer.h
-        ${CMAKE_CURRENT_SOURCE_DIR}/netlist_keywords.cpp
-    )
-
-add_dependencies( common netlist_lexer_source_files )
-add_dependencies( pcbcommon netlist_lexer_source_files )
 
 # auto-generate pcb_plot_params_lexer.h and pcb_plot_params_keywords.cpp
 make_lexer(
-    ${CMAKE_CURRENT_SOURCE_DIR}/pcb_plot_params.keywords
-    ${PROJECT_SOURCE_DIR}/include/pcb_plot_params_lexer.h
-    ${CMAKE_CURRENT_SOURCE_DIR}/pcb_plot_params_keywords.cpp
+    pcbcommon
+    pcb_plot_params.keywords
+    pcb_plot_params_lexer.h
+    pcb_plot_params_keywords.cpp
     PCBPLOTPARAMS_T
-
-    # Pass header file with dependencies on *_lexer.h as extra_arg
-    ${PROJECT_SOURCE_DIR}/pcbnew/pcb_plot_params.h
     )
-
-add_custom_target(
-    pcb_plot_lexer_source_files ALL
-    DEPENDS
-        ${PROJECT_SOURCE_DIR}/include/pcb_plot_params_lexer.h
-        ${CMAKE_CURRENT_SOURCE_DIR}/pcb_plot_params_keywords.cpp
-    )
-
-add_dependencies( pcbcommon pcb_plot_lexer_source_files )
 
 # auto-generate pcbnew_sexpr.h and pcbnew_sexpr.cpp
 make_lexer(
-    ${CMAKE_CURRENT_SOURCE_DIR}/pcb.keywords
-    ${PROJECT_SOURCE_DIR}/include/pcb_lexer.h
-    ${CMAKE_CURRENT_SOURCE_DIR}/pcb_keywords.cpp
+    pcbcommon
+    pcb.keywords
+    pcb_lexer.h
+    pcb_keywords.cpp
     PCB_KEYS_T
-
-    # Pass header file with dependency on *_lexer.h as extra_arg
-    ${PROJECT_SOURCE_DIR}/pcbnew/pcb_parser.h
     )
-
-add_custom_target(
-    pcb_lexer_source_files ALL
-    DEPENDS
-        ${PROJECT_SOURCE_DIR}/include/pcb_lexer.h
-        ${CMAKE_CURRENT_SOURCE_DIR}/pcb_keywords.cpp
-    )
-
-add_dependencies( pcbcommon pcb_lexer_source_files )
 
 # auto-generate s-expression library table code.
 make_lexer(
-    ${CMAKE_CURRENT_SOURCE_DIR}/lib_table.keywords
-    ${PROJECT_SOURCE_DIR}/include/lib_table_lexer.h
-    ${CMAKE_CURRENT_SOURCE_DIR}/lib_table_keywords.cpp
+    common
+    lib_table.keywords
+    lib_table_lexer.h
+    lib_table_keywords.cpp
     LIB_TABLE_T
     )
-
-add_custom_target(
-    lib_table_lexer_source_files ALL
-    DEPENDS
-        ${PROJECT_SOURCE_DIR}/include/lib_table_lexer.h
-        ${CMAKE_CURRENT_SOURCE_DIR}/lib_table_keywords.cpp
-    )
-
-add_dependencies( common lib_table_lexer_source_files )
-add_dependencies( pcbcommon lib_table_lexer_source_files )
 
 # auto-generate page layout reader s-expression page_layout_reader_lexer.h
 # and title_block_reader_keywords.cpp.
 make_lexer(
-    ${CMAKE_CURRENT_SOURCE_DIR}/page_layout/page_layout_reader.keywords
-    ${PROJECT_SOURCE_DIR}/include/page_layout_reader_lexer.h
-    ${CMAKE_CURRENT_SOURCE_DIR}/page_layout/page_layout_reader_keywords.cpp
+    common
+    page_layout/page_layout_reader.keywords
+    page_layout/page_layout_reader_lexer.h
+    page_layout/page_layout_reader_keywords.cpp
     TB_READER_T
     )
-
-add_custom_target(
-    page_layout_lexer_source_files ALL
-    DEPENDS
-        ${PROJECT_SOURCE_DIR}/include/page_layout_reader_lexer.h
-        ${CMAKE_CURRENT_SOURCE_DIR}/page_layout/page_layout_reader_keywords.cpp
-    )
-
-add_dependencies( common page_layout_lexer_source_files )
 
 # This one gets made only when testing.
 # to build it, first enable #define STAND_ALONE at top of dsnlexer.cpp
 add_executable( dsntest EXCLUDE_FROM_ALL dsnlexer.cpp )
 target_link_libraries( dsntest common ${wxWidgets_LIBRARIES} rt )
 
-add_dependencies( dsntest lib-dependencies )
-
-target_link_libraries( pcbcommon 3d-viewer )
+target_link_libraries( pcbcommon PUBLIC bitmaps )
 
 
 # _kiway.so
@@ -560,13 +587,13 @@ if( false ) # future
 
     include_directories( BEFORE ${INC_BEFORE} )
     include_directories(
-        ../common
+        ${CMAKE_SOURCE_DIR}/common
         ${INC_AFTER}
         )
 
     set( SWIG_MODULE_kiway_EXTRA_DEPS
-        ../common/swig/ki_exception.i
-        ../common/swig/kicad.i
+        ${CMAKE_SOURCE_DIR}/common/swig/ki_exception.i
+        ${CMAKE_SOURCE_DIR}/common/swig/kicad.i
         )
 
     swig_add_module( kiway python
@@ -575,7 +602,6 @@ if( false ) # future
 
     swig_link_libraries( kiway
         common
-        bitmaps
         ${wxWidgets_LIBRARIES}
         ${PYTHON_LIBRARIES}
         )
@@ -588,7 +614,7 @@ if( false ) # future
 
     if( MAKE_LINK_MAPS )
         set_target_properties( _kiway PROPERTIES
-            LINK_FLAGS "${TO_LINKER},-cref ${TO_LINKER},-Map=_kiway.so.map"
+            LINK_FLAGS "-Wl,-cref,-Map=_kiway.so.map"
             )
     endif()
 

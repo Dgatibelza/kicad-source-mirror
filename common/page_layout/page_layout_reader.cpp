@@ -8,7 +8,7 @@
  * This program source code file is part of KiCad, a free EDA CAD application.
  *
  * Copyright (C) 1992-2013 Jean-Pierre Charras <jp.charras at wanadoo.fr>.
- * Copyright (C) 1992-2013 KiCad Developers, see change_log.txt for contributors.
+ * Copyright (C) 1992-2018 KiCad Developers, see AUTHORS.txt for contributors.
  *
  *
  * This program is free software; you can redistribute it and/or
@@ -31,24 +31,27 @@
 
 #include <fctsys.h>
 #include <base_struct.h>
-#include <worksheet.h>
-#include <worksheet_shape_builder.h>
-#include <class_worksheet_dataitem.h>
-#include <page_layout_reader_lexer.h>
+#include <ws_painter.h>
+#include <ws_draw_item.h>
+#include <ws_data_model.h>
+#include <page_layout/page_layout_reader_lexer.h>
+
+#include <wx/file.h>
+#include <wx/mstream.h>
 
 
 using namespace TB_READER_T;
 
 /**
- * Class PAGE_LAYOUT_READER_PARSER
+ * PAGE_LAYOUT_READER_PARSER
  * holds data and functions pertinent to parsing a S-expression file
- * for a WORKSHEET_LAYOUT.
+ * for a WS_DATA_MODEL.
  */
 class PAGE_LAYOUT_READER_PARSER : public PAGE_LAYOUT_READER_LEXER
 {
 public:
     PAGE_LAYOUT_READER_PARSER( const char* aLine, const wxString& aSource );
-    void Parse( WORKSHEET_LAYOUT* aLayout );
+    void Parse( WS_DATA_MODEL* aLayout );
 
 private:
 
@@ -68,38 +71,38 @@ private:
      */
     double parseDouble();
 
-    void parseSetup( WORKSHEET_LAYOUT* aLayout );
+    void parseSetup( WS_DATA_MODEL* aLayout );
 
     /**
      * parse a graphic item starting by "(line" or "(rect" and read parameters.
      */
-    void parseGraphic( WORKSHEET_DATAITEM * aItem );
+    void parseGraphic( WS_DATA_ITEM * aItem );
 
     /**
      * parse a text item starting by "(tbtext" and read parameters.
      */
-    void parseText( WORKSHEET_DATAITEM_TEXT * aItem );
+    void parseText( WS_DATA_ITEM_TEXT * aItem );
 
     /**
      * parse a polygon item starting by "( polygon" and read parameters.
      * the list of corners included in this description is read by parsePolyOutline
      */
-    void parsePolygon( WORKSHEET_DATAITEM_POLYPOLYGON * aItem );
+    void parsePolygon( WS_DATA_ITEM_POLYGONS * aItem );
 
     /**
      * parse a list of corners starting by "( pts" and read coordinates.
      */
-    void parsePolyOutline( WORKSHEET_DATAITEM_POLYPOLYGON * aItem );
+    void parsePolyOutline( WS_DATA_ITEM_POLYGONS * aItem );
 
 
     /**
      * parse a bitmap item starting by "( bitmap" and read parameters.
      */
-    void parseBitmap( WORKSHEET_DATAITEM_BITMAP * aItem );
+    void parseBitmap( WS_DATA_ITEM_BITMAP * aItem );
 
     void parseCoordinate( POINT_COORD& aCoord);
-    void readOption( WORKSHEET_DATAITEM * aItem );
-    void readPngdata( WORKSHEET_DATAITEM_BITMAP * aItem );
+    void readOption( WS_DATA_ITEM * aItem );
+    void readPngdata( WS_DATA_ITEM_BITMAP * aItem );
 };
 
 // PCB_PLOT_PARAMS_PARSER
@@ -110,18 +113,13 @@ PAGE_LAYOUT_READER_PARSER::PAGE_LAYOUT_READER_PARSER( const char* aLine, const w
 }
 
 
-void PAGE_LAYOUT_READER_PARSER::Parse( WORKSHEET_LAYOUT* aLayout )
+void PAGE_LAYOUT_READER_PARSER::Parse( WS_DATA_MODEL* aLayout )
 {
-    T token;
-    WORKSHEET_DATAITEM * item;
+    WS_DATA_ITEM* item;
+    LOCALE_IO     toggle;
 
-    LOCALE_IO toggle;
-
-    while( ( token = NextTok() ) != T_RIGHT )
+    for( T token = NextTok(); token != T_RIGHT && token != EOF; token = NextTok() )
     {
-        if( token == T_EOF)
-           break;
-
         if( token == T_LEFT )
             token = NextTok();
 
@@ -135,33 +133,33 @@ void PAGE_LAYOUT_READER_PARSER::Parse( WORKSHEET_LAYOUT* aLayout )
             break;
 
         case T_line:
-            item = new WORKSHEET_DATAITEM( WORKSHEET_DATAITEM::WS_SEGMENT );
+            item = new WS_DATA_ITEM( WS_DATA_ITEM::WS_SEGMENT );
             parseGraphic( item );
             aLayout->Append( item );
             break;
 
         case T_rect:
-            item = new WORKSHEET_DATAITEM( WORKSHEET_DATAITEM::WS_RECT );
+            item = new WS_DATA_ITEM( WS_DATA_ITEM::WS_RECT );
             parseGraphic( item );
             aLayout->Append( item );
             break;
 
         case T_polygon:
-            item = new WORKSHEET_DATAITEM_POLYPOLYGON();
-            parsePolygon(  (WORKSHEET_DATAITEM_POLYPOLYGON*) item );
+            item = new WS_DATA_ITEM_POLYGONS();
+            parsePolygon(  (WS_DATA_ITEM_POLYGONS*) item );
             aLayout->Append( item );
             break;
 
         case T_bitmap:
-            item = new WORKSHEET_DATAITEM_BITMAP( NULL );
-            parseBitmap( (WORKSHEET_DATAITEM_BITMAP*) item );
+            item = new WS_DATA_ITEM_BITMAP( NULL );
+            parseBitmap( (WS_DATA_ITEM_BITMAP*) item );
             aLayout->Append( item );
             break;
 
         case T_tbtext:
             NeedSYMBOLorNUMBER();
-            item = new WORKSHEET_DATAITEM_TEXT( FromUTF8() );
-            parseText( (WORKSHEET_DATAITEM_TEXT*) item );
+            item = new WS_DATA_ITEM_TEXT( FromUTF8() );
+            parseText( (WS_DATA_ITEM_TEXT*) item );
             aLayout->Append( item );
             break;
 
@@ -172,32 +170,28 @@ void PAGE_LAYOUT_READER_PARSER::Parse( WORKSHEET_LAYOUT* aLayout )
     }
 }
 
-void PAGE_LAYOUT_READER_PARSER::parseSetup( WORKSHEET_LAYOUT* aLayout )
+void PAGE_LAYOUT_READER_PARSER::parseSetup( WS_DATA_MODEL* aLayout )
 {
-    T token;
-    while( ( token = NextTok() ) != T_RIGHT )
+    for( T token = NextTok(); token != T_RIGHT && token != EOF; token = NextTok() )
     {
-        if( token == T_EOF)
-           break;
-
         switch( token )
         {
         case T_LEFT:
             break;
 
         case T_linewidth:
-            WORKSHEET_DATAITEM::m_DefaultLineWidth = parseDouble();
+            aLayout->m_DefaultLineWidth = parseDouble();
             NeedRIGHT();
             break;
 
         case T_textsize:
-            WORKSHEET_DATAITEM::m_DefaultTextSize.x = parseDouble();
-            WORKSHEET_DATAITEM::m_DefaultTextSize.y = parseDouble();
+            aLayout->m_DefaultTextSize.x = parseDouble();
+            aLayout->m_DefaultTextSize.y = parseDouble();
             NeedRIGHT();
             break;
 
         case T_textlinewidth:
-            WORKSHEET_DATAITEM::m_DefaultTextThickness = parseDouble();
+            aLayout->m_DefaultTextThickness = parseDouble();
             NeedRIGHT();
             break;
 
@@ -226,17 +220,17 @@ void PAGE_LAYOUT_READER_PARSER::parseSetup( WORKSHEET_LAYOUT* aLayout )
             break;
         }
     }
+
+    // The file is well-formed.  If it has no further items, then that's the way the
+    // user wants it.
+    aLayout->AllowVoidList( true );
 }
 
-void PAGE_LAYOUT_READER_PARSER::parsePolygon( WORKSHEET_DATAITEM_POLYPOLYGON * aItem )
+
+void PAGE_LAYOUT_READER_PARSER::parsePolygon( WS_DATA_ITEM_POLYGONS * aItem )
 {
-    T token;
-
-    while( ( token = NextTok() ) != T_RIGHT )
+    for( T token = NextTok(); token != T_RIGHT && token != EOF; token = NextTok() )
     {
-        if( token == T_EOF)
-           break;
-
         if( token == T_LEFT )
             token = NextTok();
 
@@ -301,16 +295,12 @@ void PAGE_LAYOUT_READER_PARSER::parsePolygon( WORKSHEET_DATAITEM_POLYPOLYGON * a
     aItem->SetBoundingBox();
 }
 
-void PAGE_LAYOUT_READER_PARSER::parsePolyOutline( WORKSHEET_DATAITEM_POLYPOLYGON * aItem )
+void PAGE_LAYOUT_READER_PARSER::parsePolyOutline( WS_DATA_ITEM_POLYGONS * aItem )
 {
     DPOINT corner;
-    T token;
 
-    while( ( token = NextTok() ) != T_RIGHT )
+    for( T token = NextTok(); token != T_RIGHT && token != EOF; token = NextTok() )
     {
-        if( token == T_EOF)
-           break;
-
         if( token == T_LEFT )
             token = NextTok();
 
@@ -330,18 +320,14 @@ void PAGE_LAYOUT_READER_PARSER::parsePolyOutline( WORKSHEET_DATAITEM_POLYPOLYGON
     }
 }
 
-#include <wx/mstream.h>
-void PAGE_LAYOUT_READER_PARSER::parseBitmap( WORKSHEET_DATAITEM_BITMAP * aItem )
+
+void PAGE_LAYOUT_READER_PARSER::parseBitmap( WS_DATA_ITEM_BITMAP * aItem )
 {
-    T token;
     BITMAP_BASE* image = new BITMAP_BASE;
     aItem->m_ImageBitmap = image;
 
-    while( ( token = NextTok() ) != T_RIGHT )
+    for( T token = NextTok(); token != T_RIGHT && token != EOF; token = NextTok() )
     {
-        if( token == T_EOF)
-           break;
-
         if( token == T_LEFT )
             token = NextTok();
 
@@ -397,31 +383,27 @@ void PAGE_LAYOUT_READER_PARSER::parseBitmap( WORKSHEET_DATAITEM_BITMAP * aItem )
     }
 }
 
-void PAGE_LAYOUT_READER_PARSER::readPngdata( WORKSHEET_DATAITEM_BITMAP * aItem )
+void PAGE_LAYOUT_READER_PARSER::readPngdata( WS_DATA_ITEM_BITMAP * aItem )
 {
     std::string tmp;
-    T token;
 
-    while( ( token = NextTok() ) != T_RIGHT )
+    for( T token = NextTok(); token != T_RIGHT && token != EOF; token = NextTok() )
     {
-        if( token == T_EOF)
-           break;
-
         if( token == T_LEFT )
             token = NextTok();
 
         switch( token )
         {
-            case T_data:
-                NeedSYMBOLorNUMBER();
-                tmp += CurStr();
-                tmp += "\n";
-                NeedRIGHT();
-                break;
+        case T_data:
+            NeedSYMBOLorNUMBER();
+            tmp += CurStr();
+            tmp += "\n";
+            NeedRIGHT();
+            break;
 
-            default:
-                Unexpected( CurText() );
-                break;
+        default:
+            Unexpected( CurText() );
+            break;
         }
     }
 
@@ -431,53 +413,33 @@ void PAGE_LAYOUT_READER_PARSER::readPngdata( WORKSHEET_DATAITEM_BITMAP * aItem )
     STRING_LINE_READER str_reader( tmp, wxT("Png kicad_wks data") );
 
     if( ! aItem->m_ImageBitmap->LoadData( str_reader, msg ) )
-    {
         wxLogMessage(msg);
-    }
 }
 
 
-void PAGE_LAYOUT_READER_PARSER::readOption( WORKSHEET_DATAITEM * aItem )
+void PAGE_LAYOUT_READER_PARSER::readOption( WS_DATA_ITEM * aItem )
 {
-    T token;
-
-    while( ( token = NextTok() ) != T_RIGHT )
+    for( T token = NextTok(); token != T_RIGHT && token != EOF; token = NextTok() )
     {
-        if( token == T_EOF)
-           break;
-
         switch( token )
         {
-        case T_page1only:
-            aItem->SetPage1Option( 1 );
-            break;
-
-        case T_notonpage1:
-            aItem->SetPage1Option( -1 );
-            break;
-
-        default:
-            Unexpected( CurText() );
-            break;
+        case T_page1only:  aItem->SetPage1Option( FIRST_PAGE_ONLY );  break;
+        case T_notonpage1: aItem->SetPage1Option( SUBSEQUENT_PAGES ); break;
+        default:           Unexpected( CurText() ); break;
         }
     }
 }
 
 
-void PAGE_LAYOUT_READER_PARSER::parseGraphic( WORKSHEET_DATAITEM * aItem )
+void PAGE_LAYOUT_READER_PARSER::parseGraphic( WS_DATA_ITEM * aItem )
 {
-    T token;
-
-    while( ( token = NextTok() ) != T_RIGHT )
+    for( T token = NextTok(); token != T_RIGHT && token != EOF; token = NextTok() )
     {
-        if( token == T_EOF)
-           break;
-
         if( token == T_LEFT )
             token = NextTok();
         else
         {
-            // If an other token than T_LEFT is read here, this is an error
+            // If another token than T_LEFT is read here, this is an error
             // however, due to a old bug in kicad, the token T_end can be found
             // without T_LEFT in a very few .wks files (perhaps only one in a demo).
             // So this ugly hack disables the error detection.
@@ -539,15 +501,10 @@ void PAGE_LAYOUT_READER_PARSER::parseGraphic( WORKSHEET_DATAITEM * aItem )
 }
 
 
-void PAGE_LAYOUT_READER_PARSER::parseText( WORKSHEET_DATAITEM_TEXT* aItem )
+void PAGE_LAYOUT_READER_PARSER::parseText( WS_DATA_ITEM_TEXT* aItem )
 {
-    T token;
-
-    while( ( token = NextTok() ) != T_RIGHT )
+    for( T token = NextTok(); token != T_RIGHT && token != EOF; token = NextTok() )
     {
-        if( token == T_EOF)
-           break;
-
         if( token == T_LEFT )
             token = NextTok();
 
@@ -604,22 +561,19 @@ void PAGE_LAYOUT_READER_PARSER::parseText( WORKSHEET_DATAITEM_TEXT* aItem )
             break;
 
         case T_font:
-            while( ( token = NextTok() ) != T_RIGHT )
+            for( token = NextTok(); token != T_RIGHT && token != EOF; token = NextTok() )
             {
-                if( token == T_EOF)
-                   break;
-
                 switch( token )
                 {
                 case T_LEFT:
                     break;
 
                 case T_bold:
-                    aItem->SetBold( true );
+                    aItem->m_Bold = true;
                     break;
 
                 case T_italic:
-                    aItem->SetItalic( true );
+                    aItem->m_Italic = true;
                     break;
 
                 case T_size:
@@ -641,11 +595,8 @@ void PAGE_LAYOUT_READER_PARSER::parseText( WORKSHEET_DATAITEM_TEXT* aItem )
             break;
 
         case T_justify:
-            while( ( token = NextTok() ) != T_RIGHT )
+            for( token = NextTok(); token != T_RIGHT && token != EOF; token = NextTok() )
             {
-                if( token == T_EOF)
-                   break;
-
                 switch( token )
                 {
                 case T_center:
@@ -691,34 +642,18 @@ void PAGE_LAYOUT_READER_PARSER::parseText( WORKSHEET_DATAITEM_TEXT* aItem )
 // parse an expression like " 25 1 ltcorner)"
 void PAGE_LAYOUT_READER_PARSER::parseCoordinate( POINT_COORD& aCoord)
 {
-    T token;
-
     aCoord.m_Pos.x = parseDouble();
     aCoord.m_Pos.y = parseDouble();
 
-    while( ( token = NextTok() ) != T_RIGHT )
+    for( T token = NextTok(); token != T_RIGHT && token != EOF; token = NextTok() )
     {
         switch( token )
         {
-            case T_ltcorner:
-                aCoord.m_Anchor = LT_CORNER;   // left top corner
-                break;
-
-            case T_lbcorner:
-                aCoord.m_Anchor = LB_CORNER;      // left bottom corner
-                break;
-
-            case T_rbcorner:
-                aCoord.m_Anchor = RB_CORNER;      // right bottom corner
-                break;
-
-            case T_rtcorner:
-                aCoord.m_Anchor = RT_CORNER;      // right top corner
-                break;
-
-            default:
-                Unexpected( CurText() );
-                break;
+        case T_ltcorner: aCoord.m_Anchor = LT_CORNER; break;
+        case T_lbcorner: aCoord.m_Anchor = LB_CORNER; break;
+        case T_rbcorner: aCoord.m_Anchor = RB_CORNER; break;
+        case T_rtcorner: aCoord.m_Anchor = RT_CORNER; break;
+        default:         Unexpected( CurText() ); break;
         }
     }
 }
@@ -758,26 +693,36 @@ double PAGE_LAYOUT_READER_PARSER::parseDouble()
 // see page_layout_default_shape.cpp
 extern const char defaultPageLayout[];
 
-void WORKSHEET_LAYOUT::SetDefaultLayout()
+void WS_DATA_MODEL::SetDefaultLayout()
 {
-    ClearList();
-    PAGE_LAYOUT_READER_PARSER lp_parser( defaultPageLayout, wxT( "default page" ) );
-
-    try
-    {
-        lp_parser.Parse( this );
-    }
-    catch( const IO_ERROR& ioe )
-    {
-        wxLogMessage( ioe.What() );
-    }
+    SetPageLayout( defaultPageLayout, false, wxT( "default page" ) );
 }
 
-/**
- * Populates the list from a S expr description stored in a string
- * @param aPageLayout = the S expr string
- */
-void WORKSHEET_LAYOUT::SetPageLayout( const char* aPageLayout, bool Append )
+// Returns defaultPageLayout as a string;
+wxString WS_DATA_MODEL::DefaultLayout()
+{
+    return wxString( defaultPageLayout );
+}
+
+// emptyPageLayout is a "empty" page layout description
+// there is a 0 length line to fool something somewhere.
+// using the S expr.
+// see page_layout_empty_description.cpp
+extern const char emptyPageLayout[];
+
+void WS_DATA_MODEL::SetEmptyLayout()
+{
+    SetPageLayout( emptyPageLayout, false, wxT( "empty page" ) );
+}
+
+
+wxString WS_DATA_MODEL::EmptyLayout()
+{
+    return wxString( emptyPageLayout );
+}
+
+
+void WS_DATA_MODEL::SetPageLayout( const char* aPageLayout, bool Append, const wxString& aSource )
 {
     if( ! Append )
         ClearList();
@@ -794,13 +739,8 @@ void WORKSHEET_LAYOUT::SetPageLayout( const char* aPageLayout, bool Append )
     }
 }
 
-#include <wx/file.h>
 
-// SetLayout() try to load the aFullFileName custom layout file,
-// if aFullFileName is empty, try the filename defined by the
-// environment variable KICAD_WKSFILE (a *.kicad_wks filename).
-// if does not exists, loads the default page layout.
-void WORKSHEET_LAYOUT::SetPageLayout( const wxString& aFullFileName, bool Append )
+void WS_DATA_MODEL::SetPageLayout( const wxString& aFullFileName, bool Append )
 {
     wxString fullFileName = aFullFileName;
 
@@ -813,10 +753,7 @@ void WORKSHEET_LAYOUT::SetPageLayout( const wxString& aFullFileName, bool Append
         {
             #if 0
             if( !fullFileName.IsEmpty() )
-            {
-                wxLogMessage( wxT("Page layout file <%s> not found"),
-                              fullFileName.GetData() );
-            }
+                wxLogMessage( wxT( "Page layout file <%s> not found" ), fullFileName.GetData() );
             #endif
             SetDefaultLayout();
             return;
@@ -836,8 +773,7 @@ void WORKSHEET_LAYOUT::SetPageLayout( const wxString& aFullFileName, bool Append
     char * buffer = new char[filelen+10];
 
     if( wksFile.Read( buffer, filelen ) != filelen )
-        wxLogMessage( _("The file <%s> was not fully read"),
-                      fullFileName.GetData() );
+        wxLogMessage( _("The file \"%s\" was not fully read"), fullFileName.GetData() );
     else
     {
         buffer[filelen]=0;
@@ -859,4 +795,3 @@ void WORKSHEET_LAYOUT::SetPageLayout( const wxString& aFullFileName, bool Append
 
     delete[] buffer;
 }
-

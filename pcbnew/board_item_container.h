@@ -28,8 +28,13 @@
 #define BOARD_ITEM_CONTAINER_H
 
 #include <class_board_item.h>
+#include <zone_settings.h>
 
-enum ADD_MODE { ADD_INSERT, ADD_APPEND };
+enum class ADD_MODE
+{
+    INSERT,
+    APPEND
+};
 
 /**
  * @brief Abstract interface for BOARD_ITEMs capable of storing other items inside.
@@ -44,32 +49,45 @@ public:
     {
     }
 
-    virtual ~BOARD_ITEM_CONTAINER()
-    {
-    }
-
     /**
      * @brief Adds an item to the container.
-     * @param aItem is an item to be added.
      * @param aMode decides whether the item is added in the beginning or at the end of the list.
      */
-    virtual void Add( BOARD_ITEM* aItem, ADD_MODE aMode = ADD_INSERT ) = 0;
+    virtual void Add( BOARD_ITEM* aItem, ADD_MODE aMode = ADD_MODE::INSERT ) = 0;
 
     /**
      * @brief Removes an item from the container.
-     * @param aItem is an item to be removed.
      */
     virtual void Remove( BOARD_ITEM* aItem ) = 0;
 
     /**
-     * @brief Removes an item from the containter and deletes it.
-     * @param aItem is an item to be deleted.
+     * @brief Removes an item from the container and deletes it.
      */
     virtual void Delete( BOARD_ITEM* aItem )
     {
         Remove( aItem );
         delete aItem;
     }
+
+    /**
+     * @brief Fetch the zone settings for this container
+     */
+    const ZONE_SETTINGS& GetZoneSettings() const
+    {
+        return m_zoneSettings;
+    }
+
+    /**
+     * @brief Set the zone settings for this container
+     * @param aSettings new Zone settings for this container
+     */
+    void SetZoneSettings( const ZONE_SETTINGS& aSettings )
+    {
+        m_zoneSettings = aSettings;
+    }
+
+private:
+    ZONE_SETTINGS m_zoneSettings;
 };
 
 #endif /* BOARD_ITEM_CONTAINER_H */

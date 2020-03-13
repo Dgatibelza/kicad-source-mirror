@@ -38,7 +38,7 @@ namespace PNS {
 class DIFF_PAIR;
 
 /**
- * Class DP_GATEWAY
+ * DP_GATEWAY
  *
  * Defines a "gateway" for routing a differential pair - e.g. a pair of points (anchors) with certain
  * orientation, spacing and (optionally) predefined entry paths. The routing algorithm connects such
@@ -129,7 +129,7 @@ private:
 };
 
 /**
- * Class DP_PRIMITIVE_PAIR
+ * DP_PRIMITIVE_PAIR
  *
  * Stores staring/ending primitives (pads, vias or segments) for a differential pair.
  **/
@@ -170,7 +170,7 @@ public:
     }
 
 private:
-    DIRECTION_45 anchorDirection( ITEM* aItem, const VECTOR2I& aP ) const;
+    DIRECTION_45 anchorDirection( const ITEM* aItem, const VECTOR2I& aP ) const;
 
     ITEM* m_primP;
     ITEM* m_primN;
@@ -178,7 +178,7 @@ private:
 };
 
 /**
- * Class DP_GATEWAYS
+ * DP_GATEWAYS
  *
  * A set of gateways calculated for the cursor or starting/ending primitive pair.
  **/
@@ -219,7 +219,7 @@ class DP_GATEWAYS
         void BuildForCursor( const VECTOR2I& aCursorPos );
         void BuildOrthoProjections( DP_GATEWAYS &aEntries, const VECTOR2I& aCursorPos, int aOrthoScore );
         void BuildGeneric( const VECTOR2I& p0_p, const VECTOR2I& p0_n, bool aBuildEntries = false, bool aViaMode = false );
-        void BuildFromPrimitivePair( DP_PRIMITIVE_PAIR aPair, bool aPreferDiagonal );
+        void BuildFromPrimitivePair( const DP_PRIMITIVE_PAIR& aPair, bool aPreferDiagonal );
 
         bool FitGateways( DP_GATEWAYS& aEntry, DP_GATEWAYS& aTarget, bool aPrefDiagonal, DIFF_PAIR& aDp );
 
@@ -244,7 +244,7 @@ class DP_GATEWAYS
         };
 
         bool checkDiagonalAlignment( const VECTOR2I& a, const VECTOR2I& b ) const;
-        void buildDpContinuation( DP_PRIMITIVE_PAIR aPair, bool aIsDiagonal );
+        void buildDpContinuation( const DP_PRIMITIVE_PAIR& aPair, bool aIsDiagonal );
         void buildEntries( const VECTOR2I& p0_p, const VECTOR2I& p0_n );
 
         int m_gap;
@@ -257,7 +257,7 @@ class DP_GATEWAYS
 
 
 /**
- * Class DIFF_PAIR
+ * DIFF_PAIR
  *
  * Basic class for a differential pair. Stores two PNS_LINEs (for positive and negative nets, respectively),
  * the gap and coupling constraints.

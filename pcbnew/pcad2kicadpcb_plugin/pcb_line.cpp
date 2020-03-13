@@ -28,7 +28,6 @@
  */
 
 #include <wx/wx.h>
-#include <wx/config.h>
 
 #include <common.h>
 
@@ -51,10 +50,10 @@ PCB_LINE::~PCB_LINE()
 }
 
 
-void PCB_LINE::Parse( XNODE*        aNode,
-                      int           aLayer,
-                      wxString      aDefaultMeasurementUnit,
-                      wxString      aActualConversion )
+void PCB_LINE::Parse( XNODE*          aNode,
+                      int             aLayer,
+                      const wxString& aDefaultMeasurementUnit,
+                      const wxString& aActualConversion )
 {
     XNODE*      lNode;
     wxString    propValue;
@@ -120,7 +119,7 @@ void PCB_LINE::AddToModule( MODULE* aModule )
     if( IsNonCopperLayer( m_KiCadLayer ) )
     {
         EDGE_MODULE* segment = new EDGE_MODULE( aModule, S_SEGMENT );
-        aModule->GraphicalItemsList().PushBack( segment );
+        aModule->Add( segment );
 
         segment->m_Start0   = wxPoint( m_positionX, m_positionY );
         segment->m_End0     = wxPoint( m_toX, m_toY );
@@ -138,9 +137,7 @@ void PCB_LINE::AddToBoard()
     if( IsCopperLayer( m_KiCadLayer ) )
     {
         TRACK* track = new TRACK( m_board );
-        m_board->m_Track.Append( track );
-
-        track->SetTimeStamp( m_timestamp );
+        m_board->Add( track );
 
         track->SetPosition( wxPoint( m_positionX, m_positionY ) );
         track->SetEnd( wxPoint( m_toX, m_toY ) );
@@ -153,9 +150,8 @@ void PCB_LINE::AddToBoard()
     else
     {
         DRAWSEGMENT* dseg = new DRAWSEGMENT( m_board );
-        m_board->Add( dseg, ADD_APPEND );
+        m_board->Add( dseg, ADD_MODE::APPEND );
 
-        dseg->SetTimeStamp( m_timestamp );
         dseg->SetLayer( m_KiCadLayer );
         dseg->SetStart( wxPoint( m_positionX, m_positionY ) );
         dseg->SetEnd( wxPoint( m_toX, m_toY ) );

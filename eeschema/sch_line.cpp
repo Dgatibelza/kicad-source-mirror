@@ -1,8 +1,8 @@
 /*
  * This program source code file is part of KiCad, a free EDA CAD application.
  *
- * Copyright (C) 2015 Jean-Pierre Charras, jaen-pierre.charras@gipsa-lab.inpg.com
- * Copyright (C) 1992-2016 KiCad Developers, see AUTHORS.txt for contributors.
+ * Copyright (C) 2015 Jean-Pierre Charras, jp.charras at wanadoo.fr
+ * Copyright (C) 1992-2019 KiCad Developers, see AUTHORS.txt for contributors.
  *
  * This program is free software; you can redistribute it and/or
  * modify it under the terms of the GNU General Public License
@@ -30,22 +30,47 @@
 #include <fctsys.h>
 #include <gr_basic.h>
 #include <macros.h>
-#include <class_drawpanel.h>
-#include <plot_common.h>
+#include <sch_draw_panel.h>
+#include <plotter.h>
 #include <base_units.h>
 #include <eeschema_config.h>
 #include <general.h>
-#include <protos.h>
 #include <sch_line.h>
-#include <class_netlist_object.h>
+#include <sch_edit_frame.h>
+#include <settings/color_settings.h>
+#include <netlist_object.h>
+#include <sch_view.h>
+
+
+static wxPenStyle getwxPenStyle( PLOT_DASH_TYPE aType )
+{
+    switch( aType )
+    {
+    case PLOT_DASH_TYPE::DEFAULT:
+    case PLOT_DASH_TYPE::SOLID:
+        return wxPENSTYLE_SOLID;
+    case PLOT_DASH_TYPE::DASH:
+        return wxPENSTYLE_SHORT_DASH;
+    case PLOT_DASH_TYPE::DOT:
+        return wxPENSTYLE_DOT;
+    case PLOT_DASH_TYPE::DASHDOT:
+        return wxPENSTYLE_DOT_DASH;
+    default:
+        wxFAIL_MSG( "Unhandled PlotDashType" );
+        return wxPENSTYLE_SOLID;
+    }
+}
 
 
 SCH_LINE::SCH_LINE( const wxPoint& pos, int layer ) :
     SCH_ITEM( NULL, SCH_LINE_T )
 {
-    m_start = pos;
-    m_end   = pos;
+    m_start           = pos;
+    m_end             = pos;
     m_startIsDangling = m_endIsDangling = false;
+    m_size                              = 0;
+    m_style                             = PLOT_DASH_TYPE::DEFAULT;
+    m_color                             = COLOR4D::UNSPECIFIED;
 
     switch( layer )
     {
@@ -69,7 +94,11 @@ SCH_LINE::SCH_LINE( const SCH_LINE& aLine ) :
 {
     m_start = aLine.m_start;
     m_end = aLine.m_end;
-    m_startIsDangling = m_endIsDangling = false;
+    m_size = aLine.m_size;
+    m_style = aLine.m_style;
+    m_color = aLine.m_color;
+    m_startIsDangling = aLine.m_startIsDangling;
+    m_endIsDangling = aLine.m_endIsDangling;
 }
 
 
@@ -79,15 +108,66 @@ EDA_ITEM* SCH_LINE::Clone() const
 }
 
 
+/*
+ * Conversion between PLOT_DASH_TYPE values and style names displayed
+ */
+const std::map<PLOT_DASH_TYPE, const char*> lineStyleNames{
+    { PLOT_DASH_TYPE::SOLID, "solid" },
+    { PLOT_DASH_TYPE::DASH, "dashed" },
+    { PLOT_DASH_TYPE::DASHDOT, "dash_dot" },
+    { PLOT_DASH_TYPE::DOT, "dotted" },
+};
+
+
+const char* SCH_LINE::GetLineStyleName( PLOT_DASH_TYPE aStyle )
+{
+    auto resultIt = lineStyleNames.find( aStyle );
+
+    //legacy behavior is to default to dash if there is no name
+    return resultIt == lineStyleNames.end() ? lineStyleNames.find( PLOT_DASH_TYPE::DASH )->second :
+                                              resultIt->second;
+}
+
+
+PLOT_DASH_TYPE SCH_LINE::GetLineStyleByName( const wxString& aStyleName )
+{
+    PLOT_DASH_TYPE id = PLOT_DASH_TYPE::DEFAULT; // Default style id
+
+    //find the name by value
+    auto resultIt = std::find_if( lineStyleNames.begin(), lineStyleNames.end(),
+            [aStyleName]( const auto& it ) { return it.second == aStyleName; } );
+
+    if( resultIt != lineStyleNames.end() )
+        id = resultIt->first;
+
+    return id;
+}
+
+
 void SCH_LINE::Move( const wxPoint& aOffset )
 {
-    if( (m_Flags & STARTPOINT) == 0 && aOffset != wxPoint( 0, 0 ) )
+    if( aOffset != wxPoint( 0, 0 ) )
+    {
+        m_start += aOffset;
+        m_end += aOffset;
+        SetModified();
+    }
+}
+
+
+void SCH_LINE::MoveStart( const wxPoint& aOffset )
+{
+    if( aOffset != wxPoint( 0, 0 ) )
     {
         m_start += aOffset;
         SetModified();
     }
+}
 
-    if( (m_Flags & ENDPOINT) == 0 && aOffset != wxPoint( 0, 0 ) )
+
+void SCH_LINE::MoveEnd( const wxPoint& aOffset )
+{
+    if( aOffset != wxPoint( 0, 0 ) )
     {
         m_end += aOffset;
         SetModified();
@@ -112,18 +192,26 @@ void SCH_LINE::Show( int nestLevel, std::ostream& os ) const
 #endif
 
 
+void SCH_LINE::ViewGetLayers( int aLayers[], int& aCount ) const
+{
+    aCount     = 2;
+    aLayers[0] = m_Layer;
+    aLayers[1] = LAYER_SELECTION_SHADOWS;
+}
+
+
 const EDA_RECT SCH_LINE::GetBoundingBox() const
 {
-    int      width = 25;
+    int      width = m_size / 2;
+    int      extra = m_size & 0x1;
 
     int      xmin = std::min( m_start.x, m_end.x ) - width;
     int      ymin = std::min( m_start.y, m_end.y ) - width;
 
-    int      xmax = std::max( m_start.x, m_end.x ) + width;
-    int      ymax = std::max( m_start.y, m_end.y ) + width;
+    int      xmax = std::max( m_start.x, m_end.x ) + width + extra;
+    int      ymax = std::max( m_start.y, m_end.y ) + width + extra;
 
-    // return a rectangle which is [pos,dim) in nature.  therefore the +1
-    EDA_RECT ret( wxPoint( xmin, ymin ), wxSize( xmax - xmin + 1, ymax - ymin + 1 ) );
+    EDA_RECT ret( wxPoint( xmin, ymin ), wxSize( xmax - xmin, ymax - ymin ) );
 
     return ret;
 }
@@ -135,114 +223,104 @@ double SCH_LINE::GetLength() const
 }
 
 
-bool SCH_LINE::Save( FILE* aFile ) const
+void SCH_LINE::SetLineColor( const COLOR4D aColor )
 {
-    bool        success = true;
-
-    const char* layer = "Notes";
-    const char* width = "Line";
-
-    if( GetLayer() == LAYER_WIRE )
-        layer = "Wire";
-
-    if( GetLayer() == LAYER_BUS )
-        layer = "Bus";
-
-    if( fprintf( aFile, "Wire %s %s\n", layer, width ) == EOF )
-    {
-        success = false;
-    }
-
-    if( fprintf( aFile, "\t%-4d %-4d %-4d %-4d\n", m_start.x, m_start.y,
-                 m_end.x, m_end.y ) == EOF )
-    {
-        success = false;
-    }
-
-    return success;
+    m_color = aColor;
 }
 
 
-bool SCH_LINE::Load( LINE_READER& aLine, wxString& aErrorMsg )
+void SCH_LINE::SetLineColor( const double r, const double g, const double b, const double a )
 {
-    char  Name1[256];
-    char  Name2[256];
-    char* line = (char*) aLine;
+    COLOR4D newColor(r, g, b, a);
 
-    while( (*line != ' ' ) && *line )
-        line++;
-
-    if( sscanf( line, "%255s %255s", Name1, Name2 ) != 2  )
+    if( newColor == COLOR4D::UNSPECIFIED )
+        m_color = COLOR4D::UNSPECIFIED;
+    else
     {
-        aErrorMsg.Printf( wxT( "Eeschema file segment error at line %d, aborted" ),
-                          aLine.LineNumber() );
-        aErrorMsg << wxT( "\n" ) << FROM_UTF8( (char*) aLine );
-        return false;
+        // Eeschema does not allow alpha channel in colors
+        newColor.a = 1.0;
+        m_color = newColor;
     }
-
-    m_Layer = LAYER_NOTES;
-
-    if( Name1[0] == 'W' )
-        m_Layer = LAYER_WIRE;
-
-    if( Name1[0] == 'B' )
-        m_Layer = LAYER_BUS;
-
-    if( !aLine.ReadLine() || sscanf( (char*) aLine, "%d %d %d %d ",
-                                      &m_start.x, &m_start.y, &m_end.x, &m_end.y ) != 4 )
-    {
-        aErrorMsg.Printf( wxT( "Eeschema file Segment struct error at line %d, aborted" ),
-                          aLine.LineNumber() );
-        aErrorMsg << wxT( "\n" ) << FROM_UTF8( (char*) aLine );
-        return false;
-    }
-
-    return true;
 }
 
 
-int SCH_LINE::GetPenSize() const
+COLOR4D SCH_LINE::GetLineColor() const
 {
+    return m_color;
+}
 
+
+PLOT_DASH_TYPE SCH_LINE::GetDefaultStyle() const
+{
+    if( IsGraphicLine() )
+        return PLOT_DASH_TYPE::DASH;
+
+    return PLOT_DASH_TYPE::SOLID;
+}
+
+
+void SCH_LINE::SetLineStyle( const int aStyleId )
+{
+    SetLineStyle( static_cast<PLOT_DASH_TYPE>( aStyleId ) );
+}
+
+
+void SCH_LINE::SetLineStyle( const PLOT_DASH_TYPE aStyle )
+{
+    if( aStyle == GetDefaultStyle() )
+        m_style = PLOT_DASH_TYPE::DEFAULT;
+    else
+        m_style = aStyle;
+}
+
+
+PLOT_DASH_TYPE SCH_LINE::GetLineStyle() const
+{
+    if( m_style != PLOT_DASH_TYPE::DEFAULT )
+        return m_style;
+
+    return GetDefaultStyle();
+}
+
+
+int SCH_LINE::GetDefaultWidth() const
+{
     if( m_Layer == LAYER_BUS )
         return GetDefaultBusThickness();
+    else if( m_Layer == LAYER_WIRE )
+        return GetDefaultWireThickness();
 
     return GetDefaultLineThickness();
 }
 
 
-void SCH_LINE::Draw( EDA_DRAW_PANEL* panel, wxDC* DC, const wxPoint& offset,
-                     GR_DRAWMODE DrawMode, COLOR4D Color )
+void SCH_LINE::SetLineWidth( const int aSize )
 {
-    COLOR4D color;
-    int width = GetPenSize();
-
-    if( Color != COLOR4D::UNSPECIFIED )
-        color = Color;
+    if( aSize == GetDefaultWidth() )
+        m_size = 0;
     else
-        color = GetLayerColor( GetState( BRIGHTENED ) ? LAYER_BRIGHTENED : m_Layer );
+        m_size = aSize;
+}
 
-    GRSetDrawMode( DC, DrawMode );
 
+int SCH_LINE::GetPenSize() const
+{
+    if( m_size > 0 )
+        return m_size;
+
+    return GetDefaultWidth();
+}
+
+
+void SCH_LINE::Print( wxDC* DC, const wxPoint& offset )
+{
+    COLOR4D color = ( m_color != COLOR4D::UNSPECIFIED ) ? m_color : GetLayerColor( m_Layer );
+    int     width = GetPenSize();
     wxPoint start = m_start;
     wxPoint end = m_end;
 
-    if( ( m_Flags & STARTPOINT ) == 0 )
-        start += offset;
-
-    if( ( m_Flags & ENDPOINT ) == 0 )
-        end += offset;
-
-    if( m_Layer == LAYER_NOTES )
-        GRDashedLine( panel->GetClipBox(), DC, start.x, start.y, end.x, end.y, width, color );
-    else
-        GRLine( panel->GetClipBox(), DC, start, end, width, color );
-
-    if( m_startIsDangling )
-        DrawDanglingSymbol( panel, DC, start, color );
-
-    if( m_endIsDangling )
-        DrawDanglingSymbol( panel, DC, end, color );
+    GRLine( nullptr, DC, start.x, start.y, end.x, end.y, width, color,
+            getwxPenStyle( (PLOT_DASH_TYPE) GetLineStyle() ) );
 }
 
 
@@ -267,93 +345,170 @@ void SCH_LINE::Rotate( wxPoint aPosition )
 }
 
 
-/*
- * MergeOverlap try to merge 2 lines that are colinear.
- * this function expects these 2 lines have at least a common end
- */
-bool SCH_LINE::MergeOverlap( SCH_LINE* aLine )
+void SCH_LINE::RotateStart( wxPoint aPosition )
+{
+    RotatePoint( &m_start, aPosition, 900 );
+}
+
+
+void SCH_LINE::RotateEnd( wxPoint aPosition )
+{
+    RotatePoint( &m_end, aPosition, 900 );
+}
+
+
+bool SCH_LINE::IsSameQuadrant( SCH_LINE* aLine, const wxPoint& aPosition )
+{
+    wxPoint first;
+    wxPoint second;
+
+    if( m_start == aPosition )
+        first = m_end - aPosition;
+    else if( m_end == aPosition )
+        first = m_start - aPosition;
+    else
+        return false;
+
+    if( aLine->m_start == aPosition )
+        second = aLine->m_end - aPosition;
+    else if( aLine->m_end == aPosition )
+        second = aLine->m_start - aPosition;
+    else
+        return false;
+
+    return ( sign( first.x ) == sign( second.x ) && sign( first.y ) == sign( second.y ) );
+}
+
+
+bool SCH_LINE::IsParallel( SCH_LINE* aLine )
 {
     wxCHECK_MSG( aLine != NULL && aLine->Type() == SCH_LINE_T, false,
                  wxT( "Cannot test line segment for overlap." ) );
 
+    wxPoint firstSeg   = m_end - m_start;
+    wxPoint secondSeg = aLine->m_end - aLine->m_start;
+
+    // Use long long here to avoid overflow in calculations
+    return !( (long long) firstSeg.x * secondSeg.y - (long long) firstSeg.y * secondSeg.x );
+}
+
+
+SCH_LINE* SCH_LINE::MergeOverlap( SCH_LINE* aLine )
+{
+    auto less = []( const wxPoint& lhs, const wxPoint& rhs ) -> bool
+    {
+        if( lhs.x == rhs.x )
+            return lhs.y < rhs.y;
+        return lhs.x < rhs.x;
+    };
+
+    wxCHECK_MSG( aLine != NULL && aLine->Type() == SCH_LINE_T, NULL,
+                 wxT( "Cannot test line segment for overlap." ) );
+
     if( this == aLine || GetLayer() != aLine->GetLayer() )
-        return false;
+        return nullptr;
+
+    auto leftmost_start = aLine->m_start;
+    auto leftmost_end = aLine->m_end;
+
+    auto rightmost_start = m_start;
+    auto rightmost_end = m_end;
+
+    // We place the start to the left and below the end of both lines
+    if( leftmost_start != std::min( { leftmost_start, leftmost_end }, less ) )
+        std::swap( leftmost_start, leftmost_end );
+    if( rightmost_start != std::min( { rightmost_start, rightmost_end }, less ) )
+        std::swap( rightmost_start, rightmost_end );
+
+    // -leftmost is the line that starts farthest to the left
+    // -other is the line that is _not_ leftmost
+    // -rightmost is the line that ends farthest to the right.  This may or
+    //   may not be 'other' as the second line may be completely covered by
+    //   the first.
+    if( less( rightmost_start, leftmost_start ) )
+    {
+        std::swap( leftmost_start, rightmost_start );
+        std::swap( leftmost_end, rightmost_end );
+    }
+
+    auto other_start = rightmost_start;
+    auto other_end = rightmost_end;
+
+    if( less( rightmost_end, leftmost_end ) )
+    {
+        rightmost_start = leftmost_start;
+        rightmost_end = leftmost_end;
+    }
+
+    // If we end one before the beginning of the other, no overlap is possible
+    if( less( leftmost_end, other_start ) )
+    {
+        return nullptr;
+    }
 
     // Search for a common end:
-    if( m_start == aLine->m_start )
+    if( ( leftmost_start == other_start ) && ( leftmost_end == other_end ) )  // Trivial case
     {
-        if( m_end == aLine->m_end )     // Trivial case
-            return true;
-    }
-    else if( m_start == aLine->m_end )
-    {
-        if( m_end == aLine->m_start )     // Trivial case
-            return true;
-    }
-    else if( m_end == aLine->m_end )
-    {
-        std::swap( aLine->m_start, aLine->m_end );
-    }
-    else if( m_end != aLine->m_start )
-    {
-        // No common end point, segments cannot be merged.
-        return false;
+        auto ret = new SCH_LINE( *aLine );
+        ret->SetStartPoint( leftmost_start );
+        ret->SetEndPoint( leftmost_end );
+
+        if( IsSelected() || aLine->IsSelected() )
+            ret->SetSelected();
+
+        return ret;
     }
 
     bool colinear = false;
 
     /* Test alignment: */
-    if( m_start.y == m_end.y )       // Horizontal segment
+    if( ( leftmost_start.y == leftmost_end.y ) &&
+        ( other_start.y == other_end.y ) )       // Horizontal segment
     {
-        if( aLine->m_start.y == aLine->m_end.y )
-        {
-            colinear = true;
-        }
+        colinear = ( leftmost_start.y == other_start.y );
     }
-    else if( m_start.x == m_end.x )  // Vertical segment
+    else if( ( leftmost_start.x == leftmost_end.x ) &&
+             ( other_start.x == other_end.x ) )  // Vertical segment
     {
-        if( aLine->m_start.x == aLine->m_end.x )
-        {
-            colinear = true;
-        }
+        colinear = ( leftmost_start.x == other_start.x );
     }
     else
     {
-        if( atan2( (double) ( m_start.x - m_end.x ), (double) ( m_start.y - m_end.y ) )
-            == atan2( (double) ( aLine->m_start.x - aLine->m_end.x ),
-                      (double) ( aLine->m_start.y - aLine->m_end.y ) ) )
-        {
-            colinear = true;
-        }
+        // We use long long here to avoid overflow -- it enforces promotion
+        // Don't use double as we need to make a direct comparison
+        // The slope of the left-most line is dy/dx.  Then we check that the slope
+        // from the left most start to the right most start is the same as well as
+        // the slope from the left most start to right most end.
+        long long dx = leftmost_end.x - leftmost_start.x;
+        long long dy = leftmost_end.y - leftmost_start.y;
+        colinear = ( ( ( other_start.y - leftmost_start.y ) * dx ==
+                       ( other_start.x - leftmost_start.x ) * dy ) &&
+                     ( ( other_end.y - leftmost_start.y ) * dx ==
+                       ( other_end.x - leftmost_start.x ) * dy ) );
     }
 
-    // Make a segment which merge the 2 segments
-    // we must find the extremums
-    // i.e. the more to the left and to the right points, or
-    // for horizontal segments the uppermost and the lowest point
+    // Make a new segment that merges the 2 segments
     if( colinear )
     {
-        auto less = []( const wxPoint& lhs, const wxPoint& rhs ) -> bool
-        {
-            if( lhs.x == rhs.x )
-                return lhs.y < rhs.y;
-            return lhs.x < rhs.x;
-        };
+        leftmost_end = rightmost_end;
 
-        wxPoint top_left = std::min( { m_start, m_end, aLine->m_start, aLine->m_end }, less );
-        wxPoint bottom_right = std::max( { m_start, m_end, aLine->m_start, aLine->m_end }, less );
+        auto ret = new SCH_LINE( *aLine );
+        ret->SetStartPoint( leftmost_start );
+        ret->SetEndPoint( leftmost_end );
 
-        m_start = top_left;
-        m_end = bottom_right;
-        return true;
+        if( IsSelected() || aLine->IsSelected() )
+            ret->SetSelected();
+
+        return ret;
     }
-    return false;
+
+    return nullptr;
 }
 
 
 void SCH_LINE::GetEndPoints( std::vector <DANGLING_END_ITEM>& aItemList )
 {
-    if( GetLayer() == LAYER_NOTES )
+    if( IsGraphicLine() )
         return;
 
     if( ( GetLayer() == LAYER_BUS ) || ( GetLayer() == LAYER_WIRE ) )
@@ -369,7 +524,8 @@ void SCH_LINE::GetEndPoints( std::vector <DANGLING_END_ITEM>& aItemList )
 }
 
 
-bool SCH_LINE::IsDanglingStateChanged( std::vector< DANGLING_END_ITEM >& aItemList )
+bool SCH_LINE::UpdateDanglingState( std::vector<DANGLING_END_ITEM>& aItemList,
+                                    const SCH_SHEET_PATH* aPath )
 {
     bool previousStartState = m_startIsDangling;
     bool previousEndState = m_endIsDangling;
@@ -383,7 +539,9 @@ bool SCH_LINE::IsDanglingStateChanged( std::vector< DANGLING_END_ITEM >& aItemLi
             if( item.GetItem() == this )
                 continue;
 
-            if( item.GetType() == NO_CONNECT_END )
+            if(     item.GetType() == BUS_START_END ||
+                    item.GetType() == BUS_END_END  ||
+                    item.GetType() == BUS_ENTRY_END )
                 continue;
 
             if( m_start == item.GetPosition() )
@@ -392,45 +550,17 @@ bool SCH_LINE::IsDanglingStateChanged( std::vector< DANGLING_END_ITEM >& aItemLi
             if( m_end == item.GetPosition() )
                 m_endIsDangling = false;
 
-            if( (m_startIsDangling == false) && (m_endIsDangling == false) )
+            if( !m_startIsDangling && !m_endIsDangling )
                 break;
         }
     }
-    else if( GetLayer() == LAYER_BUS || GetLayer() == LAYER_NOTES )
+    else if( GetLayer() == LAYER_BUS || IsGraphicLine() )
     {
         // Lines on the notes layer and the bus layer cannot be tested for dangling ends.
         previousStartState = previousEndState = m_startIsDangling = m_endIsDangling = false;
     }
 
     return ( previousStartState != m_startIsDangling ) || ( previousEndState != m_endIsDangling );
-}
-
-
-bool SCH_LINE::IsSelectStateChanged( const wxRect& aRect )
-{
-    bool previousState = IsSelected();
-
-    if( aRect.Contains( m_start ) && aRect.Contains( m_end ) )
-    {
-        SetFlags( SELECTED );
-        ClearFlags( STARTPOINT | ENDPOINT );
-    }
-    else if( aRect.Contains( m_start ) )
-    {
-        ClearFlags( STARTPOINT );
-        SetFlags( SELECTED | ENDPOINT );
-    }
-    else if( aRect.Contains( m_end ) )
-    {
-        ClearFlags( ENDPOINT );
-        SetFlags( SELECTED | STARTPOINT );
-    }
-    else
-    {
-        ClearFlags( SELECTED | STARTPOINT | ENDPOINT );
-    }
-
-    return previousState != IsSelected();
 }
 
 
@@ -443,6 +573,27 @@ bool SCH_LINE::IsConnectable() const
 }
 
 
+bool SCH_LINE::CanConnect( const SCH_ITEM* aItem ) const
+{
+    switch( aItem->Type() )
+    {
+    case SCH_JUNCTION_T:
+    case SCH_NO_CONNECT_T:
+    case SCH_LABEL_T:
+    case SCH_GLOBAL_LABEL_T:
+    case SCH_HIER_LABEL_T:
+    case SCH_BUS_WIRE_ENTRY_T:
+    case SCH_COMPONENT_T:
+    case SCH_SHEET_T:
+    case SCH_SHEET_PIN_T:
+        return true;
+
+    default:
+        return aItem->GetLayer() == m_Layer;
+    }
+}
+
+
 void SCH_LINE::GetConnectionPoints( std::vector< wxPoint >& aPoints ) const
 {
     aPoints.push_back( m_start );
@@ -450,40 +601,39 @@ void SCH_LINE::GetConnectionPoints( std::vector< wxPoint >& aPoints ) const
 }
 
 
-wxString SCH_LINE::GetSelectMenuText() const
+void SCH_LINE::GetSelectedPoints( std::vector< wxPoint >& aPoints ) const
 {
-    wxString menuText, txtfmt, orient;
+    if( m_Flags & STARTPOINT )
+        aPoints.push_back( m_start );
+
+    if( m_Flags & ENDPOINT )
+        aPoints.push_back( m_end );
+}
+
+
+wxString SCH_LINE::GetSelectMenuText( EDA_UNITS aUnits ) const
+{
+    wxString txtfmt, orient;
 
     if( m_start.x == m_end.x )
-        orient = _("Vert.");
+        orient = _( "Vertical" );
     else if( m_start.y == m_end.y )
-        orient = _("Horiz.");
+        orient = _( "Horizontal" );
 
     switch( m_Layer )
     {
-    case LAYER_NOTES:
-        txtfmt = _( "%s Graphic Line from (%s,%s) to (%s,%s)" );
-        break;
-
-    case LAYER_WIRE:
-        txtfmt = _( "%s Wire from (%s,%s) to (%s,%s)" );
-        break;
-
-    case LAYER_BUS:
-        txtfmt = _( "%s Bus from (%s,%s) to (%s,%s)" );
-        break;
-
-    default:
-        txtfmt += _( "%s Line on Unknown Layer from (%s,%s) to (%s,%s)" );
+    case LAYER_NOTES: txtfmt = _( "%s Graphic Line from (%s, %s) to (%s, %s)" );          break;
+    case LAYER_WIRE:  txtfmt = _( "%s Wire from (%s, %s) to (%s, %s)" );                  break;
+    case LAYER_BUS:   txtfmt = _( "%s Bus from (%s, %s) to (%s, %s)" );                   break;
+    default:          txtfmt = _( "%s Line on Unknown Layer from (%s, %s) to (%s, %s)" ); break;
     }
 
-    menuText.Printf( txtfmt, GetChars( orient ),
-                     GetChars( CoordinateToString( m_start.x ) ),
-                     GetChars( CoordinateToString( m_start.y ) ),
-                     GetChars( CoordinateToString( m_end.x ) ),
-                     GetChars( CoordinateToString( m_end.y ) ) );
-
-    return menuText;
+    return wxString::Format( txtfmt,
+                             orient,
+                             MessageTextFromValue( aUnits, m_start.x ),
+                             MessageTextFromValue( aUnits, m_start.y ),
+                             MessageTextFromValue( aUnits, m_end.x ),
+                             MessageTextFromValue( aUnits, m_end.y ) );
 }
 
 
@@ -502,7 +652,7 @@ void SCH_LINE::GetNetListItem( NETLIST_OBJECT_LIST& aNetListItems,
                                SCH_SHEET_PATH*      aSheetPath )
 {
     // Net list item not required for graphic lines.
-    if( (GetLayer() != LAYER_BUS) && (GetLayer() != LAYER_WIRE) )
+    if( IsGraphicLine() )
         return;
 
     NETLIST_OBJECT* item = new NETLIST_OBJECT();
@@ -514,11 +664,11 @@ void SCH_LINE::GetNetListItem( NETLIST_OBJECT_LIST& aNetListItems,
 
     if( GetLayer() == LAYER_BUS )
     {
-        item->m_Type = NET_BUS;
+        item->m_Type = NETLIST_ITEM::BUS;
     }
     else            /* WIRE */
     {
-        item->m_Type = NET_SEGMENT;
+        item->m_Type = NETLIST_ITEM::SEGMENT;
     }
 
     aNetListItems.push_back( item );
@@ -530,23 +680,34 @@ bool SCH_LINE::operator <( const SCH_ITEM& aItem ) const
     if( Type() != aItem.Type() )
         return Type() < aItem.Type();
 
-    SCH_LINE* line = (SCH_LINE*) &aItem;
+    auto line = static_cast<const SCH_LINE*>( &aItem );
 
-    if( GetLength() != line->GetLength() )
-        return GetLength() < line->GetLength();
+    if( GetLayer() != line->GetLayer() )
+        return GetLayer() < line->GetLayer();
 
-    if( m_start.x != line->m_start.x )
-        return m_start.x < line->m_start.x;
+    if( GetStartPoint().x != line->GetStartPoint().x )
+        return GetStartPoint().x < line->GetStartPoint().x;
 
-    if( m_start.y != line->m_start.y )
-        return m_start.y < line->m_start.y;
+    if( GetStartPoint().y != line->GetStartPoint().y )
+        return GetStartPoint().y < line->GetStartPoint().y;
 
-    return false;
+    if( GetEndPoint().x != line->GetEndPoint().x )
+        return GetEndPoint().x < line->GetEndPoint().x;
+
+    return GetEndPoint().y < line->GetEndPoint().y;
 }
 
 
 bool SCH_LINE::HitTest( const wxPoint& aPosition, int aAccuracy ) const
 {
+    // Performance enhancement for connection-building
+    if( aPosition == m_start || aPosition == m_end )
+        return true;
+
+    // Insure minimum accuracy
+    if( aAccuracy == 0 )
+        aAccuracy = ( GetPenSize() / 2 ) + 4;
+
     return TestSegmentHit( aPosition, m_start, m_end, aAccuracy );
 }
 
@@ -568,6 +729,22 @@ bool SCH_LINE::HitTest( const EDA_RECT& aRect, bool aContained, int aAccuracy ) 
 }
 
 
+void SCH_LINE::SwapData( SCH_ITEM* aItem )
+{
+    SCH_LINE* item = (SCH_LINE*) aItem;
+
+    std::swap( m_Layer, item->m_Layer );
+
+    std::swap( m_start, item->m_start );
+    std::swap( m_end, item->m_end );
+    std::swap( m_startIsDangling, item->m_startIsDangling );
+    std::swap( m_endIsDangling, item->m_endIsDangling );
+    std::swap( m_style, item->m_style );
+    std::swap( m_size, item->m_size );
+    std::swap( m_color, item->m_color );
+}
+
+
 bool SCH_LINE::doIsConnected( const wxPoint& aPosition ) const
 {
     if( m_Layer != LAYER_WIRE && m_Layer != LAYER_BUS )
@@ -579,17 +756,19 @@ bool SCH_LINE::doIsConnected( const wxPoint& aPosition ) const
 
 void SCH_LINE::Plot( PLOTTER* aPlotter )
 {
-    aPlotter->SetColor( GetLayerColor( GetLayer() ) );
+    if( m_color != COLOR4D::UNSPECIFIED )
+        aPlotter->SetColor( m_color );
+    else
+        aPlotter->SetColor( aPlotter->ColorSettings()->GetColor( GetLayer() ) );
+
     aPlotter->SetCurrentLineWidth( GetPenSize() );
 
-    if( m_Layer == LAYER_NOTES )
-        aPlotter->SetDash( true );
+    aPlotter->SetDash( GetLineStyle() );
 
     aPlotter->MoveTo( m_start );
     aPlotter->FinishTo( m_end );
 
-    if( m_Layer == LAYER_NOTES )
-        aPlotter->SetDash( false );
+    aPlotter->SetDash( PLOT_DASH_TYPE::SOLID );
 }
 
 
@@ -600,7 +779,34 @@ void SCH_LINE::SetPosition( const wxPoint& aPosition )
 }
 
 
-wxPoint SCH_LINE::MidPoint()
+void SCH_LINE::GetMsgPanelInfo( EDA_UNITS aUnits, MSG_PANEL_ITEMS& aList )
 {
-    return wxPoint( ( m_start.x + m_end.x ) / 2, ( m_start.y + m_end.y ) / 2 );
+    wxString msg;
+
+    switch( GetLayer() )
+    {
+    case LAYER_WIRE: msg = _( "Net Wire" );  break;
+    case LAYER_BUS:  msg = _( "Bus Wire" );  break;
+    default:         msg = _( "Graphical" ); return;
+    }
+
+    aList.push_back( MSG_PANEL_ITEM( _( "Line Type" ), msg, DARKCYAN ) );
+
+    if( auto conn = Connection( *g_CurrentSheet ) )
+    {
+#if defined(DEBUG)
+        conn->AppendDebugInfoToMsgPanel( aList );
+
+        msg.Printf( "%zu", m_connected_items.size() );
+        aList.push_back( MSG_PANEL_ITEM( _( "Connections" ), msg, BROWN ) );
+#else
+        conn->AppendInfoToMsgPanel( aList );
+#endif
+    }
+}
+
+
+bool SCH_LINE::IsGraphicLine() const
+{
+    return ( GetLayer() == LAYER_NOTES );
 }

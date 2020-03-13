@@ -40,10 +40,38 @@ class SHOVE;
 class OPTIMIZER;
 class VIA;
 class SIZES_SETTINGS;
+class NODE;
 
+class FIXED_TAIL {
+public:
+    FIXED_TAIL ( int aLineCount = 1);
+    ~FIXED_TAIL();
+
+    struct FIX_POINT
+    {
+        int layer;
+        bool placingVias;
+        VECTOR2I p;
+        DIRECTION_45 direction;
+    };
+
+    struct STAGE {
+        NODE *commit;
+        std::vector<FIX_POINT> pts;
+    };
+
+    void Clear();
+    void AddStage( VECTOR2I aStart, int aLayer, bool placingVias, DIRECTION_45 direction, NODE *aNode );
+    bool PopStage( STAGE& aStage );
+    int StageCount() const;
+
+private:
+
+    std::vector<STAGE> m_stages;
+};
 
 /**
- * Class LINE_PLACER
+ * LINE_PLACER
  *
  * Single track placement algorithm. Interactively routes a track.
  * Applies shove and walkaround algorithms when needed.
@@ -81,7 +109,15 @@ public:
      * result is violating design rules - in such case, the track is only committed
      * if Settings.CanViolateDRC() is on.
      */
-    bool FixRoute( const VECTOR2I& aP, ITEM* aEndItem ) override;
+    bool FixRoute( const VECTOR2I& aP, ITEM* aEndItem, bool aForceFinish ) override;
+
+    bool UnfixRoute() override;
+
+    bool CommitPlacement() override;
+
+    bool AbortPlacement() override;
+
+    bool HasPlacedAnything() const override;
 
     /**
      * Function ToggleVia()
@@ -186,8 +222,6 @@ public:
     bool IsPlacingVia() const override { return m_placingVia; }
 
     void GetModifiedNets( std::vector<int>& aNets ) const override;
-
-    LOGGER* Logger() override;
 
     /**
      * Function SplitAdjacentSegments()
@@ -398,6 +432,9 @@ private:
     bool m_idle;
     bool m_chainedPlacement;
     bool m_orthoMode;
+    bool m_placementCorrect;
+
+    FIXED_TAIL m_fixedTail;
 };
 
 }

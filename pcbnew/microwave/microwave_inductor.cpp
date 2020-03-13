@@ -26,12 +26,15 @@
 #include <wx/wx.h>
 
 #include <base_units.h>
+#include <dialog_text_entry.h>
+#include <geometry/geometry_utils.h>
+#include <pcb_edit_frame.h>
 #include <validators.h>
-#include <wxPcbStruct.h>
 
 #include <class_pad.h>
 #include <class_edge_mod.h>
 #include <class_module.h>
+#include <math/util.h>      // for KiROUND
 
 
 using namespace MWAVE;
@@ -51,12 +54,9 @@ static void gen_arc( std::vector <wxPoint>& aBuffer,
                      const wxPoint&         aCenter,
                      int                     a_ArcAngle )
 {
-    const int SEGM_COUNT_PER_360DEG = 16;
-    auto    first_point = aStartPoint - aCenter;
-    int     seg_count   = ( ( abs( a_ArcAngle ) ) * SEGM_COUNT_PER_360DEG ) / 3600;
-
-    if( seg_count == 0 )
-        seg_count = 1;
+    auto first_point = aStartPoint - aCenter;
+    auto radius = KiROUND( EuclideanNorm( first_point ) );
+    int  seg_count = std::max( GetArcToSegmentCount( radius, ARC_HIGH_DEF, a_ArcAngle / 10.0 ), 3 );
 
     double increment_angle = (double) a_ArcAngle * M_PI / 1800 / seg_count;
 
@@ -78,6 +78,15 @@ static void gen_arc( std::vector <wxPoint>& aBuffer,
 }
 
 
+enum class INDUCTOR_S_SHAPE_RESULT
+{
+    OK,        /// S-shape constructed
+    TOO_LONG,  /// Requested length too long
+    TOO_SHORT, /// Requested length too short
+    NO_REPR,   /// Requested length can't be represented
+};
+
+
 /**
  * Function BuildCornersList_S_Shape
  * Create a path like a S-shaped coil
@@ -87,10 +96,8 @@ static void gen_arc( std::vector <wxPoint>& aBuffer,
  * @param  aLength = full length of the path
  * @param  aWidth = segment width
  */
-static int BuildCornersList_S_Shape( std::vector <wxPoint>& aBuffer,
-                              const wxPoint& aStartPoint,
-                              const wxPoint& aEndPoint,
-                              int aLength, int aWidth )
+static INDUCTOR_S_SHAPE_RESULT BuildCornersList_S_Shape( std::vector<wxPoint>& aBuffer,
+        const wxPoint& aStartPoint, const wxPoint& aEndPoint, int aLength, int aWidth )
 {
 /* We must determine:
  * segm_count = number of segments perpendicular to the direction
@@ -170,7 +177,7 @@ static int BuildCornersList_S_Shape( std::vector <wxPoint>& aBuffer,
             if( radius < aWidth ) // Radius too small.
             {
                 // Unable to create line: Requested length value is too large for room
-                return 0;
+                return INDUCTOR_S_SHAPE_RESULT::TOO_LONG;
             }
         }
 
@@ -190,6 +197,30 @@ static int BuildCornersList_S_Shape( std::vector <wxPoint>& aBuffer,
 
     // reduce len of the segm_count segments + 2 half size segments (= 1 full size segment)
     segm_len -= delta_size / (segm_count + 1);
+
+    // at this point, it could still be that the requested length is too
+    // short (because 4 quarter-circles are too long)
+    // to fix this is a relatively complex numerical problem which probably
+    // needs a refactor in this area. For now, just reject these cases:
+    {
+        const int min_total_length = 2 * stubs_len + 2 * M_PI * ADJUST_SIZE * radius;
+        if( min_total_length > aLength )
+        {
+            // we can't express this inductor with 90-deg arcs of this radius
+            return INDUCTOR_S_SHAPE_RESULT::TOO_SHORT;
+        }
+    }
+
+    if( segm_len - 2 * radius < 0 )
+    {
+        // we can't represent this exact requested length with this number
+        // of segments (using the current algorithm). This stems from when
+        // you add a segment, you also add another half-circle, so there's a
+        // little bit of "dead" space.
+        // It's a bit ugly to just reject the input, as it might be possible
+        // to tweak the radius, but, again, that probably needs a refactor.
+        return INDUCTOR_S_SHAPE_RESULT::NO_REPR;
+    }
 
     // Generate first line (the first stub) and first arc (90 deg arc)
     pt = aStartPoint;
@@ -256,7 +287,7 @@ static int BuildCornersList_S_Shape( std::vector <wxPoint>& aBuffer,
     // push last point (end point)
     aBuffer.push_back( aEndPoint );
 
-    return 1;
+    return INDUCTOR_S_SHAPE_RESULT::OK;
 }
 
 
@@ -297,7 +328,6 @@ MODULE* MWAVE::CreateMicrowaveInductor( INDUCTOR_PATTERN& inductorPattern,
      */
 
     D_PAD*   pad;
-    int      ll;
     wxString msg;
 
     auto pt = inductorPattern.m_End - inductorPattern.m_Start;
@@ -305,14 +335,14 @@ MODULE* MWAVE::CreateMicrowaveInductor( INDUCTOR_PATTERN& inductorPattern,
     inductorPattern.m_length = min_len;
 
     // Enter the desired length.
-    msg = StringFromValue( g_UserUnit, inductorPattern.m_length );
-    wxTextEntryDialog dlg( nullptr, wxEmptyString, _( "Length of Trace:" ), msg );
+    msg = StringFromValue( aPcbFrame->GetUserUnits(), inductorPattern.m_length, true );
+    WX_TEXT_ENTRY_DIALOG dlg( aPcbFrame, _( "Length of Trace:" ), wxEmptyString, msg );
 
     if( dlg.ShowModal() != wxID_OK )
         return nullptr; // canceled by user
 
     msg = dlg.GetValue();
-    inductorPattern.m_length = ValueFromString( g_UserUnit, msg );
+    inductorPattern.m_length = ValueFromString( aPcbFrame->GetUserUnits(), msg );
 
     // Control values (ii = minimum length)
     if( inductorPattern.m_length < min_len )
@@ -323,28 +353,36 @@ MODULE* MWAVE::CreateMicrowaveInductor( INDUCTOR_PATTERN& inductorPattern,
 
     // Calculate the elements.
     std::vector <wxPoint> buffer;
-    ll = BuildCornersList_S_Shape( buffer, inductorPattern.m_Start,
-                                   inductorPattern.m_End, inductorPattern.m_length,
-                                   inductorPattern.m_Width );
+    const INDUCTOR_S_SHAPE_RESULT res = BuildCornersList_S_Shape( buffer, inductorPattern.m_Start,
+            inductorPattern.m_End, inductorPattern.m_length, inductorPattern.m_Width );
 
-    if( !ll )
+    switch( res )
     {
+    case INDUCTOR_S_SHAPE_RESULT::TOO_LONG:
         aErrorMessage = _( "Requested length too large" );
         return nullptr;
+    case INDUCTOR_S_SHAPE_RESULT::TOO_SHORT:
+        aErrorMessage = _( "Requested length too small" );
+        return nullptr;
+    case INDUCTOR_S_SHAPE_RESULT::NO_REPR:
+        aErrorMessage = _( "Requested length can't be represented" );
+        return nullptr;
+    case INDUCTOR_S_SHAPE_RESULT::OK:
+        break;
     }
 
     // Generate footprint. the value is also used as footprint name.
     msg = "L";
-    wxTextEntryDialog cmpdlg( nullptr, wxEmptyString, _( "Component Value:" ), msg );
-    cmpdlg.SetTextValidator( FILE_NAME_CHAR_VALIDATOR( &msg ) );
+    WX_TEXT_ENTRY_DIALOG cmpdlg( aPcbFrame, _( "Component Value:" ), wxEmptyString, msg );
+    cmpdlg.SetTextValidator( MODULE_NAME_CHAR_VALIDATOR( &msg ) );
 
     if( ( cmpdlg.ShowModal() != wxID_OK ) || msg.IsEmpty() )
         return nullptr;    //  Aborted by user
 
     MODULE* module = aPcbFrame->CreateNewModule( msg );
+    aPcbFrame->AddModuleToBoard( module );
 
-    // here the module is already in the BOARD, CreateNewModule() does that.
-    module->SetFPID( LIB_ID( wxString( "mw_inductor" ) ) );
+    module->SetFPID( LIB_ID( wxEmptyString, wxT( "mw_inductor" ) ) );
     module->SetAttributes( MOD_VIRTUAL | MOD_CMS );
     module->ClearFlags();
     module->SetPosition( inductorPattern.m_End );
@@ -361,13 +399,13 @@ MODULE* MWAVE::CreateMicrowaveInductor( INDUCTOR_PATTERN& inductorPattern,
         PtSegm->SetShape( S_SEGMENT );
         PtSegm->SetStart0( PtSegm->GetStart() - module->GetPosition() );
         PtSegm->SetEnd0( PtSegm->GetEnd() - module->GetPosition() );
-        module->GraphicalItemsList().PushBack( PtSegm );
+        module->Add( PtSegm );
     }
 
     // Place a pad on each end of coil.
     pad = new D_PAD( module );
 
-    module->PadsList().PushFront( pad );
+    module->Add( pad );
 
     pad->SetName( "1" );
     pad->SetPosition( inductorPattern.m_End );
@@ -381,7 +419,7 @@ MODULE* MWAVE::CreateMicrowaveInductor( INDUCTOR_PATTERN& inductorPattern,
 
     D_PAD* newpad = new D_PAD( *pad );
 
-    module->PadsList().Insert( newpad, pad->Next() );
+    module->Add( newpad );
 
     pad = newpad;
     pad->SetName( "2" );

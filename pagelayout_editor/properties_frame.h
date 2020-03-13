@@ -29,14 +29,13 @@
 #ifndef  _PROPERTIES_FRAME_H
 #define  _PROPERTIES_FRAME_H
 
-#include <wxstruct.h>
 #include <pl_editor_frame.h>
 #include <dialogs/properties_frame_base.h>
 
-class WORKSHEET_DATAITEM;
+class WS_DATA_ITEM;
 
 /**
- * Class PROPERTIES_FRAME display properties of the current item.
+ * PROPERTIES_FRAME display properties of the current item.
  */
 
 class PROPERTIES_FRAME : public PANEL_PROPERTIES_BASE
@@ -48,6 +47,7 @@ public:
     ~PROPERTIES_FRAME();
 
     // Event functions
+    void OnPageChanged( wxNotebookEvent& event ) override;
     void OnAcceptPrms( wxCommandEvent& event ) override;
     void OnSetDefaultValues( wxCommandEvent& event ) override;
 
@@ -59,10 +59,10 @@ public:
     bool CopyPrmsFromPanelToGeneral();
 
     // Data transfert from item to widgets in properties frame
-    void CopyPrmsFromItemToPanel( WORKSHEET_DATAITEM* aItem );
+    void CopyPrmsFromItemToPanel( WS_DATA_ITEM* aItem );
 
     // Data transfert from widgets in properties frame to item
-    bool CopyPrmsFromPanelToItem( WORKSHEET_DATAITEM* aItem );
+    bool CopyPrmsFromPanelToItem( WS_DATA_ITEM* aItem );
 
     wxSize GetMinSize() const override;
 };

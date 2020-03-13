@@ -22,33 +22,15 @@
 */
 
 #include <gal/gal_display_options.h>
-#include <wx/config.h>
+#include <settings/app_settings.h>
+#include <settings/common_settings.h>
+
+#include <wx/log.h>
 
 #include <config_map.h>
+#include <dpi_scaling.h>
 
 using namespace KIGFX;
-
-/*
- * Config option strings
- */
-static const wxString GalGLAntialiasingKeyword( "OpenGLAntialiasingMode" );
-static const wxString GalGridStyleConfig( "GridStyle" );
-static const wxString GalGridLineWidthConfig( "GridLineWidth" );
-static const wxString GalGridMaxDensityConfig( "GridMaxDensity" );
-static const wxString GalGridAxesEnabledConfig( "GridAxesEnabled" );
-static const wxString GalFullscreenCursorConfig( "CursorFullscreen" );
-static const wxString GalForceDisplayCursorConfig( "ForceDisplayCursor" );
-
-
-static const UTIL::CFG_MAP<KIGFX::OPENGL_ANTIALIASING_MODE> aaModeConfigVals =
-{
-    { KIGFX::OPENGL_ANTIALIASING_MODE::NONE,                0 },
-    { KIGFX::OPENGL_ANTIALIASING_MODE::SUBSAMPLE_HIGH,      1 },
-    { KIGFX::OPENGL_ANTIALIASING_MODE::SUBSAMPLE_ULTRA,     2 },
-    { KIGFX::OPENGL_ANTIALIASING_MODE::SUPERSAMPLING_X2,    3 },
-    { KIGFX::OPENGL_ANTIALIASING_MODE::SUPERSAMPLING_X4,    4 },
-};
-
 
 static const UTIL::CFG_MAP<KIGFX::GRID_STYLE> gridStyleConfigVals =
 {
@@ -58,74 +40,97 @@ static const UTIL::CFG_MAP<KIGFX::GRID_STYLE> gridStyleConfigVals =
 };
 
 
+/**
+ * Flag to enable GAL_DISPLAY_OPTIONS logging
+ *
+ * Use "KICAD_GAL_DISPLAY_OPTIONS" to enable.
+ *
+ * @ingroup trace_env_vars
+ */
+static const wxChar* traceGalDispOpts = wxT( "KICAD_GAL_DISPLAY_OPTIONS" );
+
+
 GAL_DISPLAY_OPTIONS::GAL_DISPLAY_OPTIONS()
     : gl_antialiasing_mode( OPENGL_ANTIALIASING_MODE::NONE ),
+      cairo_antialiasing_mode( CAIRO_ANTIALIASING_MODE::NONE ),
+      m_dpi( nullptr, nullptr ),
       m_gridStyle( GRID_STYLE::DOTS ),
-      m_gridLineWidth( 0.5 ),
+      m_gridLineWidth( 1.0 ),
       m_gridMinSpacing( 10.0 ),
       m_axesEnabled( false ),
       m_fullscreenCursor( false ),
-      m_forceDisplayCursor( false )
+      m_forceDisplayCursor( false ),
+      m_scaleFactor( DPI_SCALING::GetDefaultScaleFactor() )
 {}
 
 
-void GAL_DISPLAY_OPTIONS::ReadConfig( wxConfigBase* aCfg, wxString aBaseName )
+void GAL_DISPLAY_OPTIONS::ReadWindowSettings( WINDOW_SETTINGS& aCfg )
 {
-    long readLong; // Temp value buffer
+    wxLogTrace( traceGalDispOpts, "Reading app-specific options" );
 
-    aCfg->Read( aBaseName + GalGLAntialiasingKeyword, &readLong,
-                static_cast<long>( KIGFX::OPENGL_ANTIALIASING_MODE::NONE ) );
-    gl_antialiasing_mode = UTIL::GetValFromConfig( aaModeConfigVals, readLong );
+    m_gridStyle = UTIL::GetValFromConfig( gridStyleConfigVals, aCfg.grid.style );
+    m_gridLineWidth = aCfg.grid.line_width;
+    m_gridMinSpacing = aCfg.grid.min_spacing;
+    m_axesEnabled = aCfg.grid.axes_enabled;
 
-    aCfg->Read( aBaseName + GalGridStyleConfig, &readLong,
-                static_cast<long>( KIGFX::GRID_STYLE::DOTS ) );
-    m_gridStyle = UTIL::GetValFromConfig( gridStyleConfigVals, readLong );
-
-    aCfg->Read( aBaseName + GalGridLineWidthConfig,
-                &m_gridLineWidth, 0.5 );
-
-    aCfg->Read( aBaseName + GalGridMaxDensityConfig,
-                &m_gridMinSpacing, 10 );
-
-    aCfg->Read( aBaseName + GalGridAxesEnabledConfig,
-                &m_axesEnabled, false );
-
-    aCfg->Read( aBaseName + GalFullscreenCursorConfig,
-                &m_fullscreenCursor, false );
-
-    aCfg->Read( aBaseName + GalForceDisplayCursorConfig,
-                &m_forceDisplayCursor, false );
+    m_fullscreenCursor = aCfg.cursor.fullscreen_cursor;
+    m_forceDisplayCursor = aCfg.cursor.always_show_cursor;
 
     NotifyChanged();
 }
 
 
-void GAL_DISPLAY_OPTIONS::WriteConfig( wxConfigBase* aCfg, wxString aBaseName )
+void GAL_DISPLAY_OPTIONS::ReadCommonConfig( COMMON_SETTINGS& aSettings, wxWindow* aWindow )
 {
-    aCfg->Write( aBaseName + GalGLAntialiasingKeyword,
-                 UTIL::GetConfigForVal( aaModeConfigVals, gl_antialiasing_mode ) );
+    wxLogTrace( traceGalDispOpts, "Reading common config" );
 
-    aCfg->Write( aBaseName + GalGridStyleConfig,
-                 UTIL::GetConfigForVal( gridStyleConfigVals, m_gridStyle ) );
+    gl_antialiasing_mode = static_cast<KIGFX::OPENGL_ANTIALIASING_MODE>(
+            aSettings.m_Graphics.opengl_aa_mode );
 
-    aCfg->Write( aBaseName + GalGridLineWidthConfig,
-                 m_gridLineWidth );
+    cairo_antialiasing_mode = static_cast<KIGFX::CAIRO_ANTIALIASING_MODE>(
+            aSettings.m_Graphics.cairo_aa_mode );
 
-    aCfg->Write( aBaseName + GalGridMaxDensityConfig,
-                 m_gridMinSpacing );
+    m_dpi = DPI_SCALING( &aSettings, aWindow );
 
-    aCfg->Write( aBaseName + GalGridAxesEnabledConfig,
-                 m_axesEnabled );
+    // Also calls NotifyChanged
+    UpdateScaleFactor();
+}
 
-    aCfg->Write( aBaseName + GalFullscreenCursorConfig,
-                 m_fullscreenCursor );
 
-    aCfg->Write( aBaseName + GalForceDisplayCursorConfig,
-                 m_forceDisplayCursor );
+void GAL_DISPLAY_OPTIONS::ReadConfig( COMMON_SETTINGS& aCommonConfig,
+                                      WINDOW_SETTINGS& aWindowConfig, wxWindow* aWindow )
+{
+    wxLogTrace( traceGalDispOpts, "Reading common and app config" );
+
+    ReadWindowSettings( aWindowConfig );
+
+    ReadCommonConfig( aCommonConfig, aWindow );
+}
+
+
+void GAL_DISPLAY_OPTIONS::WriteConfig( WINDOW_SETTINGS& aCfg )
+{
+    wxLogTrace( traceGalDispOpts, "Writing window settings" );
+
+    aCfg.grid.style = UTIL::GetConfigForVal( gridStyleConfigVals, m_gridStyle );
+    aCfg.grid.line_width = m_gridLineWidth;
+    aCfg.grid.min_spacing = m_gridMinSpacing;
+    aCfg.grid.axes_enabled = m_axesEnabled;
+    aCfg.cursor.fullscreen_cursor = m_fullscreenCursor;
+    aCfg.cursor.always_show_cursor = m_forceDisplayCursor;
+}
+
+
+void GAL_DISPLAY_OPTIONS::UpdateScaleFactor()
+{
+    m_scaleFactor = m_dpi.GetScaleFactor();
+    NotifyChanged();
 }
 
 
 void GAL_DISPLAY_OPTIONS::NotifyChanged()
 {
+    wxLogTrace( traceGalDispOpts, "Change notification" );
+
     Notify( &GAL_DISPLAY_OPTIONS_OBSERVER::OnGalDisplayOptionsChanged, *this );
 }

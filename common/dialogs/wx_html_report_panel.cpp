@@ -2,7 +2,7 @@
  * This program source code file is part of KiCad, a free EDA CAD application.
  *
  * Copyright (C) 2015 CERN
- * Copyright (C) 2015 KiCad Developers, see change_log.txt for contributors.
+ * Copyright (C) 2015-2018 KiCad Developers, see AUTHORS.txt for contributors.
  * Author: Tomasz Wlostowski <tomasz.wlostowski@cern.ch>
  *
  * This program is free software: you can redistribute it and/or modify it
@@ -19,10 +19,13 @@
  * with this program.  If not, see <http://www.gnu.org/licenses/>.
  */
 
+#include <algorithm>
+
 #include "wx_html_report_panel.h"
 
 #include <wildcards_and_files_ext.h>
-
+#include <gal/color4d.h>
+#include <wx/clipbrd.h>
 
 WX_HTML_REPORT_PANEL::WX_HTML_REPORT_PANEL( wxWindow*      parent,
                                             wxWindowID     id,
@@ -32,11 +35,13 @@ WX_HTML_REPORT_PANEL::WX_HTML_REPORT_PANEL( wxWindow*      parent,
     WX_HTML_REPORT_PANEL_BASE( parent, id, pos, size, style ),
     m_reporter( this ),
     m_severities( -1 ),
-    m_showAll( true ),
     m_lazyUpdate( false )
 {
     syncCheckboxes();
     m_htmlView->SetPage( addHeader( "" ) );
+
+    Connect( wxEVT_COMMAND_MENU_SELECTED,
+            wxMenuEventHandler( WX_HTML_REPORT_PANEL::onMenuEvent ), NULL, this );
 }
 
 
@@ -47,7 +52,7 @@ WX_HTML_REPORT_PANEL::~WX_HTML_REPORT_PANEL()
 
 void WX_HTML_REPORT_PANEL::MsgPanelSetMinSize( const wxSize& aMinSize )
 {
-    m_htmlView->SetMinSize( aMinSize );
+    m_fgSizer->SetMinSize( aMinSize );
     GetSizer()->SetSizeHints( this );
 }
 
@@ -58,15 +63,19 @@ REPORTER& WX_HTML_REPORT_PANEL::Reporter()
 }
 
 
-void WX_HTML_REPORT_PANEL::Report( const wxString& aText, REPORTER::SEVERITY aSeverity )
+void WX_HTML_REPORT_PANEL::Report( const wxString& aText, SEVERITY aSeverity,
+                                   REPORTER::LOCATION aLocation )
 {
     REPORT_LINE line;
     line.message = aText;
     line.severity = aSeverity;
 
-    m_report.push_back( line );
-
-    m_html += generateHtml( line );
+    if( aLocation == REPORTER::LOC_HEAD )
+        m_reportHead.push_back( line );
+    else if( aLocation == REPORTER::LOC_TAIL )
+        m_reportTail.push_back( line );
+    else
+        m_report.push_back( line );
 
     if( !m_lazyUpdate )
     {
@@ -82,9 +91,29 @@ void WX_HTML_REPORT_PANEL::SetLazyUpdate( bool aLazyUpdate )
 }
 
 
-void WX_HTML_REPORT_PANEL::Flush()
+void WX_HTML_REPORT_PANEL::Flush( bool aSort )
 {
-    m_htmlView->SetPage( addHeader( m_html ) );
+    wxString html;
+
+    if( aSort )
+    {
+        std::sort( m_report.begin(), m_report.end(),
+                []( const REPORT_LINE& a, const REPORT_LINE& b)
+                {
+                    return a.severity < b.severity;
+                });
+    }
+
+    for( const auto& line : m_reportHead )
+        html += generateHtml( line );
+
+    for( const auto& line : m_report )
+        html += generateHtml( line );
+
+    for( const auto& line : m_reportTail )
+        html += generateHtml( line );
+
+    m_htmlView->SetPage( addHeader( html ) );
     scrollToBottom();
 }
 
@@ -96,20 +125,18 @@ void WX_HTML_REPORT_PANEL::scrollToBottom()
     m_htmlView->GetVirtualSize( &x, &y );
     m_htmlView->GetScrollPixelsPerUnit( &xUnit, &yUnit );
     m_htmlView->Scroll( 0, y / yUnit );
+
+    updateBadges();
 }
 
 
-void WX_HTML_REPORT_PANEL::refreshView()
+void WX_HTML_REPORT_PANEL::updateBadges()
 {
-    wxString html;
+    int count = Count(RPT_SEVERITY_ERROR );
+    m_errorsBadge->SetBitmap( MakeBadge( RPT_SEVERITY_ERROR, count, m_errorsBadge, 2 ) );
 
-    for( REPORT_LINE l : m_report )
-    {
-        html += generateHtml( l );
-    }
-
-    m_htmlView->SetPage( addHeader( html ) );
-    scrollToBottom();
+    count = Count(RPT_SEVERITY_WARNING );
+    m_warningsBadge->SetBitmap( MakeBadge( RPT_SEVERITY_WARNING, count, m_warningsBadge, 2 ) );
 }
 
 
@@ -117,33 +144,55 @@ wxString WX_HTML_REPORT_PANEL::addHeader( const wxString& aBody )
 {
     wxColour bgcolor = wxSystemSettings::GetColour( wxSYS_COLOUR_WINDOW );
     wxColour fgcolor = wxSystemSettings::GetColour( wxSYS_COLOUR_WINDOWTEXT );
-    wxString s = "<html><body bgcolor=\"" + bgcolor.GetAsString( wxC2S_HTML_SYNTAX ) +
-                 "\" text=\"" + fgcolor.GetAsString( wxC2S_HTML_SYNTAX ) + "\">";
-    s += aBody;
-    s += "</body></html>";
 
-    return s;
+    return wxString::Format( wxT( "<html><body bgcolor='%s' text='%s'>%s</body></html>" ),
+                             bgcolor.GetAsString( wxC2S_HTML_SYNTAX ),
+                             fgcolor.GetAsString( wxC2S_HTML_SYNTAX ),
+                             aBody );
+}
+
+
+int WX_HTML_REPORT_PANEL::Count( int severityMask )
+{
+    int count = 0;
+
+    for( const REPORT_LINE& reportLine : m_report )
+        if( severityMask & reportLine.severity )
+            count++;
+
+    return count;
 }
 
 
 wxString WX_HTML_REPORT_PANEL::generateHtml( const REPORT_LINE& aLine )
 {
-    if( !m_showAll && ! ( m_severities & aLine.severity ) )
-        return wxEmptyString;
+    wxString retv;
+
+    if( !( m_severities & aLine.severity ) )
+        return retv;
 
     switch( aLine.severity )
     {
-    case REPORTER::RPT_ERROR:
-        return wxString( "<font color=\"red\" size=2>" ) + _( "<b>Error: </b></font><font size=2>" ) + aLine.message + wxString( "</font><br>" );
-    case REPORTER::RPT_WARNING:
-        return wxString( "<font color=\"orange\" size=2>" ) + _( "<b>Warning: </b></font><font size=2>" ) + aLine.message + wxString( "</font><br>" );
-    case REPORTER::RPT_INFO:
-        return wxString( "<font color=\"gray\" size=2>" ) + _( "<b>Info: </b>" ) + aLine.message + wxString( "</font><br>" );
-    case REPORTER::RPT_ACTION:
-        return wxString( "<font color=\"darkgreen\" size=2>" ) + aLine.message + wxString( "</font><br>" );
+    case RPT_SEVERITY_ERROR:
+        retv = "<font color=\"red\" size=2><b>" + _( "Error: " ) + "</b></font><font size=2>" +
+               aLine.message + "</font><br>";
+        break;
+    case RPT_SEVERITY_WARNING:
+        retv = "<font color=\"orange\" size=2><b>" + _( "Warning: " ) +
+               "</b></font><font size=2>" + aLine.message + "</font><br>";
+        break;
+    case RPT_SEVERITY_INFO:
+        retv = "<font color=\"dark gray\" size=2><b>" + _( "Info: " ) + "</b>" + aLine.message +
+               "</font><br>";
+        break;
+    case RPT_SEVERITY_ACTION:
+        retv = "<font color=\"dark green\" size=2>" + aLine.message + "</font><br>";
+        break;
     default:
-        return wxString( "<font size=2>" ) + aLine.message + wxString( "</font><br>" );
+        retv = "<font size=2>" + aLine.message + "</font><br>";
     }
+
+    return retv;
 }
 
 
@@ -151,11 +200,11 @@ wxString WX_HTML_REPORT_PANEL::generatePlainText( const REPORT_LINE& aLine )
 {
     switch( aLine.severity )
     {
-    case REPORTER::RPT_ERROR:
+    case RPT_SEVERITY_ERROR:
         return _( "Error: " ) + aLine.message + wxT( "\n" );
-    case REPORTER::RPT_WARNING:
+    case RPT_SEVERITY_WARNING:
         return _( "Warning: " ) + aLine.message + wxT( "\n" );
-    case REPORTER::RPT_INFO:
+    case RPT_SEVERITY_INFO:
         return _( "Info: " ) + aLine.message + wxT( "\n" );
     default:
         return aLine.message + wxT( "\n" );
@@ -163,73 +212,101 @@ wxString WX_HTML_REPORT_PANEL::generatePlainText( const REPORT_LINE& aLine )
 }
 
 
+void WX_HTML_REPORT_PANEL::onRightClick( wxMouseEvent& event )
+{
+    wxMenu popup;
+    popup.Append( wxID_COPY, "Copy" );
+    PopupMenu( &popup );
+}
+
+
+void WX_HTML_REPORT_PANEL::onMenuEvent( wxMenuEvent& event )
+{
+    if( event.GetId() == wxID_COPY )
+    {
+        if( wxTheClipboard->Open() )
+        {
+            bool primarySelection = wxTheClipboard->IsUsingPrimarySelection();
+            wxTheClipboard->UsePrimarySelection( false );   // required to use the main clipboard
+            wxTheClipboard->SetData( new wxTextDataObject( m_htmlView->SelectionToText() ) );
+            wxTheClipboard->Close();
+            wxTheClipboard->UsePrimarySelection( primarySelection );
+        }
+    }
+}
+
+
+// Don't globally define this; different facilities use different definitions of "ALL"
+static int RPT_SEVERITY_ALL = RPT_SEVERITY_WARNING | RPT_SEVERITY_ERROR | RPT_SEVERITY_INFO | RPT_SEVERITY_ACTION;
+
+
 void WX_HTML_REPORT_PANEL::onCheckBoxShowAll( wxCommandEvent& event )
 {
-    if ( event.IsChecked() )
-         m_showAll = true;
-     else
-         m_showAll = false;
+    if( event.IsChecked() )
+        m_severities = RPT_SEVERITY_ALL;
+    else
+        m_severities = RPT_SEVERITY_ERROR;
 
     syncCheckboxes();
-    refreshView();
+    Flush( true );
 }
 
 
 void WX_HTML_REPORT_PANEL::syncCheckboxes()
 {
-    m_checkBoxShowAll->SetValue( m_showAll );
-    m_checkBoxShowWarnings->Enable( !m_showAll );
-    m_checkBoxShowWarnings->SetValue( m_severities & REPORTER::RPT_WARNING );
-    m_checkBoxShowErrors->Enable( !m_showAll );
-    m_checkBoxShowErrors->SetValue( m_severities & REPORTER::RPT_ERROR );
-    m_checkBoxShowInfos->Enable( !m_showAll );
-    m_checkBoxShowInfos->SetValue( m_severities & REPORTER::RPT_INFO );
-    m_checkBoxShowActions->Enable( !m_showAll );
-    m_checkBoxShowActions->SetValue( m_severities & REPORTER::RPT_ACTION );
+    m_checkBoxShowAll->SetValue( m_severities == RPT_SEVERITY_ALL );
+    m_checkBoxShowWarnings->SetValue( m_severities & RPT_SEVERITY_WARNING );
+    m_checkBoxShowErrors->SetValue( m_severities & RPT_SEVERITY_ERROR );
+    m_checkBoxShowInfos->SetValue( m_severities & RPT_SEVERITY_INFO );
+    m_checkBoxShowActions->SetValue( m_severities & RPT_SEVERITY_ACTION );
 }
 
 
 void WX_HTML_REPORT_PANEL::onCheckBoxShowWarnings( wxCommandEvent& event )
 {
-    if ( event.IsChecked() )
-        m_severities |= REPORTER::RPT_WARNING;
+    if( event.IsChecked() )
+        m_severities |= RPT_SEVERITY_WARNING;
     else
-        m_severities &= ~REPORTER::RPT_WARNING;
+        m_severities &= ~RPT_SEVERITY_WARNING;
 
-     refreshView();
+    syncCheckboxes();
+    Flush( true );
 }
 
 
 void WX_HTML_REPORT_PANEL::onCheckBoxShowErrors( wxCommandEvent& event )
 {
-    if ( event.IsChecked() )
-         m_severities |= REPORTER::RPT_ERROR;
-     else
-         m_severities &= ~REPORTER::RPT_ERROR;
+    if( event.IsChecked() )
+        m_severities |= RPT_SEVERITY_ERROR;
+    else
+        m_severities &= ~RPT_SEVERITY_ERROR;
 
-     refreshView();
+    syncCheckboxes();
+    Flush( true );
 }
 
 
 void WX_HTML_REPORT_PANEL::onCheckBoxShowInfos( wxCommandEvent& event )
 {
-    if ( event.IsChecked() )
-         m_severities |= REPORTER::RPT_INFO;
-     else
-         m_severities &= ~REPORTER::RPT_INFO;
+    if( event.IsChecked() )
+        m_severities |= RPT_SEVERITY_INFO;
+    else
+        m_severities &= ~RPT_SEVERITY_INFO;
 
-     refreshView();
+    syncCheckboxes();
+    Flush( true );
 }
 
 
 void WX_HTML_REPORT_PANEL::onCheckBoxShowActions( wxCommandEvent& event )
 {
-    if ( event.IsChecked() )
-         m_severities |= REPORTER::RPT_ACTION;
-     else
-         m_severities &= ~REPORTER::RPT_ACTION;
+    if( event.IsChecked() )
+        m_severities |= RPT_SEVERITY_ACTION;
+    else
+        m_severities &= ~RPT_SEVERITY_ACTION;
 
-     refreshView();
+    syncCheckboxes();
+    Flush( true );
 }
 
 
@@ -237,8 +314,8 @@ void WX_HTML_REPORT_PANEL::onBtnSaveToFile( wxCommandEvent& event )
 {
     wxFileName fn( "./report.txt" );
 
-    wxFileDialog dlg( this, _( "Save report to file" ), fn.GetPath(), fn.GetName(),
-                      TextWildcard, wxFD_SAVE | wxFD_OVERWRITE_PROMPT );
+    wxFileDialog dlg( this, _( "Save Report to File" ), fn.GetPath(), fn.GetFullName(),
+                      TextFileWildcard(), wxFD_SAVE | wxFD_OVERWRITE_PROMPT );
 
     if( dlg.ShowModal() != wxID_OK )
         return;
@@ -246,7 +323,7 @@ void WX_HTML_REPORT_PANEL::onBtnSaveToFile( wxCommandEvent& event )
     fn = dlg.GetPath();
 
     if( fn.GetExt().IsEmpty() )
-        fn.SetExt( wxT( "txt" ) );
+        fn.SetExt( "txt" );
 
     wxFile f( fn.GetFullPath(), wxFile::write );
 
@@ -254,13 +331,13 @@ void WX_HTML_REPORT_PANEL::onBtnSaveToFile( wxCommandEvent& event )
     {
         wxString msg;
 
-        msg.Printf( _( "Cannot write report to file '%s'." ),
+        msg.Printf( _( "Cannot write report to file \"%s\"." ),
                     fn.GetFullPath().GetData() );
         wxMessageBox( msg, _( "File save error" ), wxOK | wxICON_ERROR, this );
         return;
     }
 
-    for( REPORT_LINE l : m_report )
+    for( const REPORT_LINE& l : m_report )
     {
         f.Write( generatePlainText( l ) );
     }
@@ -271,8 +348,9 @@ void WX_HTML_REPORT_PANEL::onBtnSaveToFile( wxCommandEvent& event )
 
 void WX_HTML_REPORT_PANEL::Clear()
 {
-    m_html.clear();
     m_report.clear();
+    m_reportHead.clear();
+    m_reportTail.clear();
 }
 
 
@@ -285,12 +363,9 @@ void WX_HTML_REPORT_PANEL::SetLabel( const wxString& aLabel )
 void WX_HTML_REPORT_PANEL::SetVisibleSeverities( int aSeverities )
 {
     if( aSeverities < 0 )
-        m_showAll = true;
+        m_severities = RPT_SEVERITY_ALL;
     else
-    {
-        m_showAll = false;
         m_severities = aSeverities;
-    }
 
     syncCheckboxes();
 }
@@ -298,5 +373,5 @@ void WX_HTML_REPORT_PANEL::SetVisibleSeverities( int aSeverities )
 
 int WX_HTML_REPORT_PANEL::GetVisibleSeverities()
 {
-    return m_showAll ? m_severities | 0x80000000 : m_severities & ~0x80000000;
+    return m_severities;
 }

@@ -24,6 +24,7 @@
 
 #include <layers_id_colors_and_visibility.h>
 #include <map>
+#include <unordered_set>
 
 #include <boost/range/adaptor/map.hpp>
 
@@ -36,7 +37,7 @@ namespace PNS {
 
 
 /**
- * Class INDEX
+ * INDEX
  *
  * Custom spatial index, holding our board items and allowing for very fast searches. Items
  * are assigned to separate R-Tree subindices depending on their type and spanned layers, reducing
@@ -47,7 +48,7 @@ class INDEX
 public:
     typedef std::list<ITEM*>            NET_ITEMS_LIST;
     typedef SHAPE_INDEX<ITEM*>          ITEM_SHAPE_INDEX;
-    typedef boost::unordered_set<ITEM*> ITEM_SET;
+    typedef std::unordered_set<ITEM*>   ITEM_SET;
 
     INDEX();
     ~INDEX();
@@ -158,93 +159,6 @@ private:
     ITEM_SET m_allItems;
 };
 
-INDEX::INDEX()
-{
-    memset( m_subIndices, 0, sizeof( m_subIndices ) );
-}
-
-INDEX::ITEM_SHAPE_INDEX* INDEX::getSubindex( const ITEM* aItem )
-{
-    int idx_n = -1;
-
-    const LAYER_RANGE l = aItem->Layers();
-
-    switch( aItem->Kind() )
-    {
-    case ITEM::VIA_T:
-        idx_n = SI_Multilayer;
-        break;
-
-    case ITEM::SOLID_T:
-        {
-            if( l.IsMultilayer() )
-                idx_n = SI_Multilayer;
-            else if( l.Start() == B_Cu ) // fixme: use kicad layer codes
-                idx_n = SI_PadsTop;
-            else if( l.Start() == F_Cu )
-                idx_n = SI_PadsBottom;
-        }
-        break;
-
-    case ITEM::SEGMENT_T:
-    case ITEM::LINE_T:
-        idx_n = SI_Traces + 2 * l.Start() + SI_SegStraight;
-        break;
-
-    default:
-        break;
-    }
-
-    if( idx_n < 0 || idx_n >= MaxSubIndices )
-    {
-        wxASSERT( idx_n >= 0 );
-        wxASSERT( idx_n < MaxSubIndices );
-        return nullptr;
-    }
-
-    if( !m_subIndices[idx_n] )
-        m_subIndices[idx_n] = new ITEM_SHAPE_INDEX;
-
-    return m_subIndices[idx_n];
-}
-
-void INDEX::Add( ITEM* aItem )
-{
-    ITEM_SHAPE_INDEX* idx = getSubindex( aItem );
-
-    if( !idx )
-        return;
-
-    idx->Add( aItem );
-    m_allItems.insert( aItem );
-    int net = aItem->Net();
-
-    if( net >= 0 )
-    {
-        m_netMap[net].push_back( aItem );
-    }
-}
-
-void INDEX::Remove( ITEM* aItem )
-{
-    ITEM_SHAPE_INDEX* idx = getSubindex( aItem );
-
-    if( !idx )
-        return;
-
-    idx->Remove( aItem );
-    m_allItems.erase( aItem );
-    int net = aItem->Net();
-
-    if( net >= 0 && m_netMap.find( net ) != m_netMap.end() )
-        m_netMap[net].remove( aItem );
-}
-
-void INDEX::Replace( ITEM* aOldItem, ITEM* aNewItem )
-{
-    Remove( aOldItem );
-    Add( aNewItem );
-}
 
 template<class Visitor>
 int INDEX::querySingle( int index, const SHAPE* aShape, int aMinDistance, Visitor& aVisitor )
@@ -263,7 +177,7 @@ int INDEX::Query( const ITEM* aItem, int aMinDistance, Visitor& aVisitor )
 
     total += querySingle( SI_Multilayer, shape, aMinDistance, aVisitor );
 
-    const LAYER_RANGE layers = aItem->Layers();
+    const LAYER_RANGE& layers = aItem->Layers();
 
     if( layers.IsMultilayer() )
     {
@@ -299,32 +213,6 @@ int INDEX::Query( const SHAPE* aShape, int aMinDistance, Visitor& aVisitor )
     return total;
 }
 
-void INDEX::Clear()
-{
-    for( int i = 0; i < MaxSubIndices; ++i )
-    {
-        ITEM_SHAPE_INDEX* idx = m_subIndices[i];
-
-        if( idx )
-            delete idx;
-
-        m_subIndices[i] = NULL;
-    }
-}
-
-INDEX::~INDEX()
-{
-    Clear();
-}
-
-INDEX::NET_ITEMS_LIST* INDEX::GetItemsForNet( int aNet )
-{
-    if( m_netMap.find( aNet ) == m_netMap.end() )
-        return NULL;
-
-    return &m_netMap[aNet];
-}
-
-}
+};
 
 #endif

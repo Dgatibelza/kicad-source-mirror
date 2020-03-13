@@ -23,29 +23,26 @@ class TestBoardClass(unittest.TestCase):
         self.FILENAME=tempfile.mktemp()+".kicad_pcb"
 
     def test_pcb_find_module(self):
-        module = self.pcb.FindModule('P1')
+        module = self.pcb.FindModuleByReference('P1')
         self.assertEqual(module.GetReference(),'P1')
 
     def test_pcb_get_track_count(self):
         pcb = BOARD()
 
-        self.assertEqual(pcb.GetNumSegmTrack(),0)
+        self.assertEqual(pcb.Tracks().size(),0)
 
         track0 = TRACK(pcb)
         pcb.Add(track0)
-        self.assertEqual(pcb.GetNumSegmTrack(),1)
+        self.assertEqual(pcb.Tracks().size(),1)
 
         track1 = TRACK(pcb)
         pcb.Add(track1)
-        self.assertEqual(pcb.GetNumSegmTrack(),2)
+        self.assertEqual(pcb.Tracks().size(),2)
 
     def test_pcb_bounding_box(self):
         pcb = BOARD()
         track = TRACK(pcb)
         pcb.Add(track)
-
-        #track.SetStartEnd(wxPointMM(10.0, 10.0),
-        #                  wxPointMM(20.0, 30.0))
 
         track.SetStart(wxPointMM(10.0, 10.0))
         track.SetEnd(wxPointMM(20.0, 30.0))
@@ -57,9 +54,9 @@ class TestBoardClass(unittest.TestCase):
         bounding_box = pcb.ComputeBoundingBox()
         height, width = ToMM(bounding_box.GetSize())
 
-        clearance = ToMM(track.GetClearance()*2)
-        self.assertAlmostEqual(width, (30-10) + 0.5 + clearance, 2)
-        self.assertAlmostEqual(height,  (20-10) + 0.5 + clearance, 2)
+        margin = 0 # margin around bounding boxes (currently 0)
+        self.assertAlmostEqual(width, (30-10) + 0.5 + margin, 2)
+        self.assertAlmostEqual(height,  (20-10) + 0.5 + margin, 2)
 
     def test_pcb_get_pad(self):
         pcb = BOARD()
@@ -71,6 +68,10 @@ class TestBoardClass(unittest.TestCase):
         pad.SetShape(PAD_SHAPE_OVAL)
         pad.SetSize(wxSizeMM(2.0, 3.0))
         pad.SetPosition(wxPointMM(0,0))
+
+        #Update the footprint bounding box, because
+        #the new pad must be inside the bounding box to be located
+        module.CalculateBoundingBox()
 
         # easy case
         p1 = pcb.GetPad(wxPointMM(0,0))
@@ -90,7 +91,7 @@ class TestBoardClass(unittest.TestCase):
     def test_pcb_save_and_load(self):
         pcb = BOARD()
         pcb.GetTitleBlock().SetTitle(self.TITLE)
-        pcb.GetTitleBlock().SetComment1(self.COMMENT1)
+        pcb.GetTitleBlock().SetComment(0,self.COMMENT1)
         result = SaveBoard(self.FILENAME,pcb)
         self.assertTrue(result)
 
@@ -99,7 +100,7 @@ class TestBoardClass(unittest.TestCase):
 
         tb = pcb2.GetTitleBlock()
         self.assertEqual(tb.GetTitle(),self.TITLE)
-        self.assertEqual(tb.GetComment1(),self.COMMENT1)
+        self.assertEqual(tb.GetComment(0),self.COMMENT1)
 
         os.remove(self.FILENAME)
 

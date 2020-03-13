@@ -25,8 +25,8 @@
 #include <preview_items/selection_area.h>
 
 #include <gal/graphics_abstraction_layer.h>
+#include <painter.h>
 #include <view/view.h>
-#include <pcb_painter.h>
 
 using namespace KIGFX::PREVIEW;
 
@@ -35,6 +35,7 @@ struct SELECTION_COLORS
     COLOR4D normal;
     COLOR4D additive;
     COLOR4D subtract;
+    COLOR4D exclusiveOr;
     COLOR4D outline_l2r;
     COLOR4D outline_r2l;
 };
@@ -44,6 +45,7 @@ static const SELECTION_COLORS selectionColorScheme[2] = {
         COLOR4D( 0.3, 0.3, 0.7, 0.3 ), // Slight blue
         COLOR4D( 0.3, 0.7, 0.3, 0.3 ), // Slight green
         COLOR4D( 0.7, 0.3, 0.3, 0.3 ), // Slight red
+        COLOR4D( 0.7, 0.3, 0.3, 0.3 ), // Slight red
 
         COLOR4D( 1.0, 1.0, 0.4, 1.0 ), // yellow
         COLOR4D( 0.4, 0.4, 1.0, 1.0 ) // blue
@@ -51,6 +53,7 @@ static const SELECTION_COLORS selectionColorScheme[2] = {
     { // bright background
         COLOR4D( 0.5, 0.3, 1.0, 0.5 ), // Slight blue
         COLOR4D( 0.5, 1.0, 0.5, 0.5 ), // Slight green
+        COLOR4D( 1.0, 0.5, 0.5, 0.5 ), // Slight red
         COLOR4D( 1.0, 0.5, 0.5, 0.5 ), // Slight red
 
         COLOR4D( 0.7, 0.7, 0.0, 1.0 ), // yellow
@@ -61,27 +64,10 @@ static const SELECTION_COLORS selectionColorScheme[2] = {
 
 SELECTION_AREA::SELECTION_AREA() :
         m_additive( false ),
-        m_subtractive( false )
+        m_subtractive( false ),
+        m_exclusiveOr( false )
 {
 
-}
-
-
-void SELECTION_AREA::SetAdditive( bool aAdditive )
-{
-    m_additive = aAdditive;
-
-    if( m_additive )
-        m_subtractive = false;
-}
-
-
-void SELECTION_AREA::SetSubtractive( bool aSubtractive )
-{
-    m_subtractive = aSubtractive;
-
-    if( m_subtractive )
-        m_additive = false;
 }
 
 
@@ -95,33 +81,42 @@ const BOX2I SELECTION_AREA::ViewBBox() const
     return tmp;
 }
 
+
 void SELECTION_AREA::ViewDraw( int aLayer, KIGFX::VIEW* aView ) const
 {
     auto& gal = *aView->GetGAL();
-
-    auto rs = static_cast<PCB_RENDER_SETTINGS*>( aView->GetPainter()->GetSettings() );
+    auto rs = aView->GetPainter()->GetSettings();
 
     const auto& scheme =  rs->IsBackgroundDark() ? selectionColorScheme[0] : selectionColorScheme[1];
 
     // Set the fill of the selection rectangle
     // based on the selection mode
     if( m_additive )
-    {
         gal.SetFillColor( scheme.additive  );
-    }
     else if( m_subtractive )
-    {
         gal.SetFillColor( scheme.subtract );
-    }
+    else if( m_exclusiveOr )
+        gal.SetFillColor( scheme.exclusiveOr );
     else
-    {
         gal.SetFillColor( scheme.normal );
-    }
 
     gal.SetIsStroke( true );
     gal.SetIsFill( true );
 
+    // force 1-pixel-wide line
+    gal.SetLineWidth( 0.0 );
+
     // Set the stroke color to indicate window or crossing selection
-    gal.SetStrokeColor( ( m_origin.x <= m_end.x ) ? scheme.outline_l2r : scheme.outline_r2l );
+    bool windowSelection = ( m_origin.x <= m_end.x ) ? true : false;
+
+    if( aView->IsMirroredX() )
+        windowSelection = !windowSelection;
+
+    gal.SetStrokeColor( windowSelection ? scheme.outline_l2r : scheme.outline_r2l );
+    gal.SetIsFill( false );
+    gal.DrawRectangle( m_origin, m_end );
+    gal.SetIsFill( true );
+    // draw the fill as the second object so that Z test will not clamp
+    // the single-pixel-wide rectangle sides
     gal.DrawRectangle( m_origin, m_end );
 }

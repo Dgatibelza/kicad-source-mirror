@@ -31,12 +31,9 @@
 #include <wx/debug.h>
 
 
-CPOLYGON4PTS2D::CPOLYGON4PTS2D( const SFVEC2F &v1,
-                                const SFVEC2F &v2,
-                                const SFVEC2F &v3,
-                                const SFVEC2F &v4,
-                                const BOARD_ITEM &aBoardItem ) :
-                COBJECT2D( OBJ2D_POLYGON4PT, aBoardItem )
+CPOLYGON4PTS2D::CPOLYGON4PTS2D( const SFVEC2F& v1, const SFVEC2F& v2, const SFVEC2F& v3,
+        const SFVEC2F& v4, const BOARD_ITEM& aBoardItem )
+        : COBJECT2D( OBJECT2D_TYPE::POLYGON4PT, aBoardItem )
 {/*
     if( (v1.x > v2.x) || (v1.y < v2.y) )
     {
@@ -88,7 +85,7 @@ bool CPOLYGON4PTS2D::Intersects( const CBBOX2D &aBBox ) const
     if( !m_bbox.Intersects( aBBox ) )
         return false;
 
-    // Check if the bouding box complety have inside the small bouding box
+    // Check if the bounding box complety have inside the small bounding box
     if( (aBBox.Max().x > m_bbox.Max().x) &&
         (aBBox.Max().y > m_bbox.Max().x) &&
         (aBBox.Min().x < m_bbox.Min().x) &&
@@ -177,7 +174,7 @@ INTERSECTION_RESULT CPOLYGON4PTS2D::IsBBoxInside( const CBBOX2D &aBBox ) const
 {
     // !TODO:
 
-    return INTR_MISSES;
+    return INTERSECTION_RESULT::MISSES;
 }
 
 

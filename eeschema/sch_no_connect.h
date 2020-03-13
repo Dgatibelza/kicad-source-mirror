@@ -2,7 +2,7 @@
  * This program source code file is part of KiCad, a free EDA CAD application.
  *
  * Copyright (C) 2009 Jean-Pierre Charras, jaen-pierre.charras@gipsa-lab.inpg.com
- * Copyright (C) 1992-2011 KiCad Developers, see AUTHORS.txt for contributors.
+ * Copyright (C) 1992-2019 KiCad Developers, see AUTHORS.txt for contributors.
  *
  * This program is free software; you can redistribute it and/or
  * modify it under the terms of the GNU General Public License
@@ -30,14 +30,16 @@
 #define _SCH_NO_CONNECT_H_
 
 
-#include <sch_item_struct.h>
+#include <sch_item.h>
+#include <math/util.h>      // for KiROUND
+
 
 class NETLIST_OBJECT_LIST;
 
 class SCH_NO_CONNECT : public SCH_ITEM
 {
     wxPoint m_pos;                 ///< Position of the no connect object.
-    wxSize  m_size;                ///< Size of the no connect object.
+    int     m_size;                ///< Size of the no connect object.
 
 public:
     SCH_NO_CONNECT( const wxPoint& pos = wxPoint( 0, 0 ) );
@@ -46,21 +48,28 @@ public:
 
     ~SCH_NO_CONNECT() { }
 
+    static inline bool ClassOf( const EDA_ITEM* aItem )
+    {
+        return aItem && SCH_NO_CONNECT_T == aItem->Type();
+    }
+
     wxString GetClass() const override
     {
         return wxT( "SCH_NO_CONNECT" );
+    }
+
+    int GetSize() const
+    {
+        return std::max( m_size, KiROUND( GetDefaultLineThickness() * 3 ) );
     }
 
     int GetPenSize() const override;
 
     void SwapData( SCH_ITEM* aItem ) override;
 
-    void Draw( EDA_DRAW_PANEL* aPanel, wxDC* aDC, const wxPoint& aOffset,
-               GR_DRAWMODE aDrawMode, COLOR4D aColor = COLOR4D::UNSPECIFIED ) override;
+    void ViewGetLayers( int aLayers[], int& aCount ) const override;
 
-    bool Save( FILE* aFile ) const override;
-
-    bool Load( LINE_READER& aLine, wxString& aErrorMsg ) override;
+    void Print( wxDC* aDC, const wxPoint& aOffset ) override;
 
     void GetEndPoints( std::vector< DANGLING_END_ITEM >& aItemList ) override;
 
@@ -74,30 +83,33 @@ public:
     }
 
     void MirrorY( int aYaxis_position ) override;
-
     void MirrorX( int aXaxis_position ) override;
-
     void Rotate( wxPoint aPosition ) override;
-
-    bool IsSelectStateChanged( const wxRect& aRect ) override;
 
     bool IsConnectable() const override { return true; }
 
+    bool CanConnect( const SCH_ITEM* aItem ) const override
+    {
+        return ( aItem->Type() == SCH_LINE_T && aItem->GetLayer() == LAYER_WIRE ) ||
+                aItem->Type() == SCH_COMPONENT_T;
+    }
+
     void GetConnectionPoints( std::vector< wxPoint >& aPoints ) const override;
 
-    wxString GetSelectMenuText() const override { return wxString( _( "No Connect" ) ); }
+    wxString GetSelectMenuText( EDA_UNITS aUnits ) const override
+    {
+        return wxString( _( "No Connect" ) );
+    }
 
     BITMAP_DEF GetMenuImage() const override;
 
     void GetNetListItem( NETLIST_OBJECT_LIST& aNetListItems, SCH_SHEET_PATH* aSheetPath ) override;
 
     wxPoint GetPosition() const override { return m_pos; }
-
     void SetPosition( const wxPoint& aPosition ) override { m_pos = aPosition; }
 
-    bool HitTest( const wxPoint& aPosition, int aAccuracy ) const override;
-
-    bool HitTest( const EDA_RECT& aRect, bool aContained = false, int aAccuracy = 0 ) const override;
+    bool HitTest( const wxPoint& aPosition, int aAccuracy = 0 ) const override;
+    bool HitTest( const EDA_RECT& aRect, bool aContained, int aAccuracy = 0 ) const override;
 
     void Plot( PLOTTER* aPlotter ) override;
 

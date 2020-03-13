@@ -2,7 +2,7 @@
  * This program source code file is part of KiCad, a free EDA CAD application.
  *
  * Copyright (C) 2004-2015 Jean-Pierre Charras, jp.charras at wanadoo.fr
- * Copyright (C) 2004-2017 KiCad Developers, see AUTHORS.txt for contributors.
+ * Copyright (C) 2004-2018 KiCad Developers, see AUTHORS.txt for contributors.
  *
  * This program is free software; you can redistribute it and/or
  * modify it under the terms of the GNU General Public License
@@ -33,18 +33,18 @@
 #include <wx/stdpaths.h>
 #include <wx/string.h>
 
-#include <common.h>
+#include <filehistory.h>
 #include <hotkeys_basic.h>
 #include <kiway.h>
-#include <richio.h>
-#include <wildcards_and_files_ext.h>
+#include <settings/settings_manager.h>
 #include <systemdirsappend.h>
+#include <wildcards_and_files_ext.h>
 
 #include <stdexcept>
 
 #include "pgm_kicad.h"
-
-#include "kicad.h"
+#include "kicad_manager_frame.h"
+#include "kicad_settings.h"
 
 
 // a dummy to quiet linking with EDA_BASE_FRAME::config();
@@ -58,6 +58,7 @@ KIFACE_I& Kiface()
 
     throw std::logic_error( "Unexpected call to Kiface() in kicad/kicad.cpp" );
 }
+
 
 static PGM_KICAD program;
 
@@ -89,6 +90,8 @@ bool PGM_KICAD::OnPgmInit()
     if( !InitPgm() )
         return false;
 
+    m_bm.InitSettings( new KICAD_SETTINGS );
+    GetSettingsManager().RegisterSettings( PgmSettings() );
     m_bm.Init();
 
     // Add search paths to feed the PGM_KICAD::SysSearch() function,
@@ -104,17 +107,28 @@ bool PGM_KICAD::OnPgmInit()
 
             // Add KiCad template file path to search path list.
             fn.AppendDir( wxT( "template" ) );
-            m_bm.m_search.AddPaths( fn.GetPath() );
+
+            // Only add path if exists and can be read by the user.
+            if( fn.DirExists() && fn.IsDirReadable() )
+                m_bm.m_search.AddPaths( fn.GetPath() );
         }
+
+        // The KICAD_TEMPLATE_DIR takes precedence over the search stack template path.
+        ENV_VAR_MAP_CITER it = GetLocalEnvVariables().find( "KICAD_TEMPLATE_DIR" );
+
+        if( it != GetLocalEnvVariables().end() && it->second.GetValue() != wxEmptyString )
+            m_bm.m_search.Insert( it->second.GetValue(), 0 );
+
+        // The KICAD_USER_TEMPLATE_DIR takes precedence over KICAD_TEMPLATE_DIR and the search
+        // stack template path.
+        it = GetLocalEnvVariables().find( "KICAD_USER_TEMPLATE_DIR" );
+
+        if( it != GetLocalEnvVariables().end() && it->second.GetValue() != wxEmptyString )
+            m_bm.m_search.Insert( it->second.GetValue(), 0 );
     }
 
-    // Must be called before creating the main frame in order to
-    // display the real hotkeys in menus or tool tips
-    extern struct EDA_HOTKEY_CONFIG kicad_Manager_Hokeys_Descr[];
-    ReadHotkeyConfig( KICAD_MANAGER_FRAME_NAME, kicad_Manager_Hokeys_Descr );
-
     KICAD_MANAGER_FRAME* frame = new KICAD_MANAGER_FRAME( NULL, wxT( "KiCad" ),
-                                     wxDefaultPosition, wxDefaultSize );
+                                                          wxDefaultPosition, wxSize( 775, -1 ) );
     App().SetTopWindow( frame );
 
     Kiway.SetTop( frame );
@@ -142,9 +156,14 @@ bool PGM_KICAD::OnPgmInit()
     }
 
     // Do not attempt to load a non-existent project file.
-    if( !projToLoad.empty() && wxFileExists( projToLoad ) )
+    if( !projToLoad.empty() )
     {
-        frame->LoadProject( projToLoad );
+        wxFileName fn( projToLoad );
+        if( fn.Exists() )
+        {
+            fn.MakeAbsolute();
+            frame->LoadProject( fn );
+        }
     }
 
     frame->Show( true );
@@ -158,9 +177,13 @@ void PGM_KICAD::OnPgmExit()
 {
     Kiway.OnKiwayEnd();
 
-    SaveCommonSettings();
+    if( m_settings_manager && m_settings_manager->IsOK() )
+    {
+        SaveCommonSettings();
+        m_settings_manager->Save();
+    }
 
-    // write common settings to disk, and destroy everything in PGM_KICAD,
+    // Destroy everything in PGM_KICAD,
     // especially wxSingleInstanceCheckerImpl earlier than wxApp and earlier
     // than static destruction would.
     Destroy();
@@ -203,25 +226,48 @@ struct APP_KICAD : public wxApp
 #if defined (__LINUX__)
     APP_KICAD(): wxApp()
     {
-        // Disable proxy menu in Unity window manager. Only usual menubar works with wxWidgets (at least <= 3.1)
-        // When the proxy menu menubar is enable, some important things for us do not work: menuitems UI events and shortcuts.
+        // Disable proxy menu in Unity window manager. Only usual menubar works with
+        // wxWidgets (at least <= 3.1).  When the proxy menu menubar is enable, some
+        // important things for us do not work: menuitems UI events and shortcuts.
         wxString wm;
 
         if( wxGetEnv( wxT( "XDG_CURRENT_DESKTOP" ), &wm ) && wm.CmpNoCase( wxT( "Unity" ) ) == 0 )
         {
             wxSetEnv ( wxT("UBUNTU_MENUPROXY" ), wxT( "0" ) );
         }
+
+        // Force the use of X11 backend (or wayland-x11 compatibilty layer).  This is required until wxWidgets
+        // supports the Wayland compositors
+        wxSetEnv( wxT( "GDK_BACKEND" ), wxT( "x11" ) );
+
+        // Disable overlay scrollbars as they mess up wxWidgets window sizing and cause excessive redraw requests
+        wxSetEnv( wxT( "GTK_OVERLAY_SCROLLING" ), wxT( "0" ) );
+
+        // Set GTK2-style input instead of xinput2.  This disables touchscreen and smooth scrolling
+        // Needed to ensure that we are not getting multiple mouse scroll events
+        wxSetEnv( wxT( "GDK_CORE_DEVICE_EVENTS" ), wxT( "1" ) );
     }
 #endif
 
     bool OnInit()           override
     {
-        return program.OnPgmInit();
+        if( !program.OnPgmInit() )
+        {
+            program.OnPgmExit();
+            return false;
+        }
+
+        return true;
     }
 
     int  OnExit()           override
     {
         program.OnPgmExit();
+
+#if defined(__FreeBSD__)
+        /* Avoid wxLog crashing when used in destructors. */
+        wxLog::EnableLogging( false );
+#endif
 
         return wxApp::OnExit();
     }
@@ -251,18 +297,19 @@ struct APP_KICAD : public wxApp
     }
 
     /**
-     * Function MacOpenFile
-     * is specific to MacOSX (not used under Linux or Windows).
-     * MacOSX requires it for file association.
+     * Set MacOS file associations.
+     *
      * @see http://wiki.wxwidgets.org/WxMac-specific_topics
      */
-    void MacOpenFile( const wxString& aFileName )
+#if defined( __WXMAC__ )
+    void MacOpenFile( const wxString& aFileName ) override
     {
         Pgm().MacOpenFile( aFileName );
     }
+#endif
 };
 
-IMPLEMENT_APP( APP_KICAD );
+IMPLEMENT_APP( APP_KICAD )
 
 
 // The C++ project manager supports one open PROJECT, so Prj() calls within

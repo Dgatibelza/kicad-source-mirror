@@ -1,8 +1,8 @@
 /*
  * This program source code file is part of KiCad, a free EDA CAD application.
  *
- * Copyright (C) 2016 Jean-Pierre Charras, jp.charras at wanadoo.fr
- * Copyright (C) 1992-2017 KiCad Developers, see AUTHORS.txt for contributors.
+ * Copyright (C) 2018 Jean-Pierre Charras, jp.charras at wanadoo.fr
+ * Copyright (C) 1992-2018 KiCad Developers, see AUTHORS.txt for contributors.
  *
  * This program is free software; you can redistribute it and/or
  * modify it under the terms of the GNU General Public License
@@ -22,34 +22,37 @@
  * 51 Franklin Street, Fifth Floor, Boston, MA  02110-1301, USA
  */
 
-/**
- * @file cvpcb_mainframe.h
- */
-
 #ifndef _CVPCB_MAINFRAME_H_
 #define _CVPCB_MAINFRAME_H_
 
-#include <wx/listctrl.h>
-#include <wx/filename.h>
-#include <pcb_netlist.h>
-#include <footprint_info.h>
-
-#include <wxBasePcbFrame.h>
 #include <config_params.h>
-#include <autosel.h>
-#include <memory>
+#include <kiway_player.h>
+#include <netlist_reader/pcb_netlist.h>
 
+#include <auto_associate.h>
+#include <cvpcb_association.h>
+#include <listboxes.h>
 
-/*  Forward declarations of all top-level window classes. */
+/*  Forward declarations */
+class ACTION_TOOLBAR;
+class ACTION_MENU;
+class TOOL_DISPATCHER;
 class wxAuiToolBar;
-class FOOTPRINTS_LISTBOX;
-class COMPONENTS_LISTBOX;
-class LIBRARY_LISTBOX;
 class DISPLAY_FOOTPRINTS_FRAME;
-class COMPONENT;
-class FP_LIB_TABLE;
 
 namespace CV { struct IFACE; }
+
+// The undo/redo list is composed of vectors of associations
+typedef std::vector< CVPCB_ASSOCIATION >       CVPCB_UNDO_REDO_ENTRIES;
+
+// The undo list is a vector of undo entries
+typedef std::vector< CVPCB_UNDO_REDO_ENTRIES > CVPCB_UNDO_REDO_LIST;
+
+/**
+ * The print format to display a schematic component line.
+ * format: idx reference - value : footprint_id
+ */
+#define CMP_FORMAT wxT( "%3d %8s - %16s : %s" )
 
 /**
  * The CvPcb application main window.
@@ -58,29 +61,33 @@ class CVPCB_MAINFRAME : public KIWAY_PLAYER
 {
     friend struct CV::IFACE;
 
-    wxArrayString             m_footprintListEntries;
     wxString                  m_currentSearchPattern;
-    bool                      m_keepCvpcbOpen;
     NETLIST                   m_netlist;
     int                       m_filteringOptions;
-    wxAuiToolBar*             m_mainToolBar;
+    ACTION_TOOLBAR*           m_mainToolBar;
     FOOTPRINTS_LISTBOX*       m_footprintListBox;
     LIBRARY_LISTBOX*          m_libListBox;
     COMPONENTS_LISTBOX*       m_compListBox;
     wxTextCtrl*               m_tcFilterString;
+    wxStaticText*             m_statusLine1;
+    wxStaticText*             m_statusLine2;
+    wxStaticText*             m_statusLine3;
+    wxButton*                 m_saveAndContinue;
 
 public:
     wxArrayString             m_ModuleLibNames;
     wxArrayString             m_EquFilesNames;
-    wxString                  m_DocModulesFileName;
-    std::unique_ptr<FOOTPRINT_LIST> m_FootprintsList;
+
+    FOOTPRINT_LIST*           m_FootprintsList;
 
 protected:
-    int             m_undefinedComponentCnt;
-    bool            m_modified;
-    bool            m_skipComponentSelect;      // true to skip OnSelectComponent event
-                                                // (in automatic selection/deletion of associations)
-    PARAM_CFG_ARRAY m_projectFileParams;
+    bool                      m_modified;
+    bool                      m_skipComponentSelect;   // skip component selection event during
+                                                       // automatic selection/deletion of
+                                                       // associations
+    std::vector<PARAM_CFG*>   m_projectFileParams;
+
+    bool                      m_initialized;
 
     CVPCB_MAINFRAME( KIWAY* aKiway, wxWindow* aParent );
 
@@ -92,9 +99,79 @@ public:
     void KiwayMailIn( KIWAY_EXPRESS& aEvent ) override;
 
     /**
+     * The action to apply to a footprint filter when it is modified.
+     */
+    enum CVPCB_FILTER_ACTION
+    {
+        FILTER_DISABLE,     ///< Turn off the filter
+        FILTER_ENABLE,      ///< Turn on the filter
+        FILTER_TOGGLE       ///< Toggle the filter state
+    };
+
+    /**
+     * The type of the controls present in the application
+     */
+    enum CONTROL_TYPE
+    {
+        CONTROL_NONE,            ///< No controls have focus
+        CONTROL_LIBRARY,         ///< Library listbox
+        CONTROL_COMPONENT,       ///< Component listbox
+        CONTROL_FOOTPRINT        ///< Footprint listbox
+    };
+
+    /**
+     * Directions to rotate the focus through the listboxes is
+     */
+    enum FOCUS_DIR
+    {
+        CHANGE_FOCUS_RIGHT,
+        CHANGE_FOCUS_LEFT
+    };
+
+    /**
+     * Directions to move when selecting items
+     */
+    enum ITEM_DIR
+    {
+        ITEM_NEXT,  ///< The next item
+        ITEM_PREV   ///< The previous item
+    };
+
+    /**
+     * Get if the current associations have been modified but not saved.
+     *
+     * @return true if the any changes have not been saved
+     */
+    bool IsContentModified() override
+    {
+        return m_modified;
+    }
+
+    /**
      * @return a pointer on the Footprint Viewer frame, if exists, or NULL
      */
     DISPLAY_FOOTPRINTS_FRAME* GetFootprintViewerFrame();
+
+    /**
+     * Find out which control currently has focus.
+     *
+     * @return the contorl that currently has focus
+     */
+    CVPCB_MAINFRAME::CONTROL_TYPE GetFocusedControl();
+
+    /**
+     * Get a pointer to the currently focused control
+     *
+     * @return the control that currently has focus
+     */
+    wxControl* GetFocusedControlObject();
+
+    /**
+     * Set the focus to a specific control.
+     *
+     * @param aControl the contorl to set focus to
+     */
+    void SetFocusedControl( CVPCB_MAINFRAME::CONTROL_TYPE aControl );
 
     /**
      * Function OnSelectComponent
@@ -103,44 +180,22 @@ public:
      * * Updates the current selected footprint in footprint list
      * * Updates the footprint shown in footprint display window (if opened)
      */
-    void             OnSelectComponent( wxListEvent& event );
+    void OnSelectComponent( wxListEvent& event );
 
     /**
-     * Function OnEditFootprintLibraryTable
-     * displays the footprint library table editing dialog and updates the global and local
-     * footprint tables accordingly.
+     * OnCloseWindow
+     *
+     * Called by a close event to close the window
      */
-    void             OnEditFootprintLibraryTable( wxCommandEvent& event );
+    void OnCloseWindow( wxCloseEvent& Event );
 
-    void             OnQuit( wxCommandEvent& event );
-    void             OnCloseWindow( wxCloseEvent& Event );
-    void             OnSize( wxSizeEvent& SizeEvent );
-    void             ReCreateHToolbar();
-    virtual void     ReCreateMenuBar() override;
-
-    void             ChangeFocus( bool aMoveRight );
-
-    void             ToFirstNA( wxCommandEvent& event );
-    void             ToPreviousNA( wxCommandEvent& event );
-
-    /**
-     * Function DelAssociations
-     * removes all component footprint associations already made
+    /*
+     * Functions to rebuild the toolbars and menubars
      */
-    void             DelAssociations( wxCommandEvent& event );
+    void ReCreateHToolbar();
+    void ReCreateMenuBar() override;
 
-    void             SaveQuitCvpcb( wxCommandEvent& event );
-
-    void             OnConfigurePaths( wxCommandEvent& aEvent );
-
-    /**
-     * Function OnEditEquFilesList
-     * envokes the equ files list edit dialog.
-     */
-    void             OnEditEquFilesList( wxCommandEvent& aEvent );
-
-    void             OnKeepOpenOnSave( wxCommandEvent& event );
-    void             DisplayModule( wxCommandEvent& event );
+    void ShowChangedLanguage() override;
 
     /**
      * Called by the automatic association button
@@ -150,55 +205,63 @@ public:
      * format of a line:
      * 'cmp_ref' 'footprint_name'
      */
-    void             AutomaticFootprintMatching( wxCommandEvent& event );
-
-    void             DisplayDocFile( wxCommandEvent& event );
+    void AutomaticFootprintMatching();
 
     /**
-     * Function OnSelectFilteringFootprint
-     * is the command event handler for enabling and disabling footprint filtering.
+     * Function SetFootprintFilter
+     * Set a filter criteria to either on/off or toggle the criteria.
+     *
+     * @param aFilter The filter to modify
+     * @param aAction What action (on, off or toggle) to take
      */
-    void             OnSelectFilteringFootprint( wxCommandEvent& event );
+    void SetFootprintFilter(
+            FOOTPRINTS_LISTBOX::FP_FILTER_T aFilter, CVPCB_MAINFRAME::CVPCB_FILTER_ACTION aAction );
 
     /**
      * Function OnEnterFilteringText
      * Is called each time the text of m_tcFilterString is changed.
      */
-    void             OnEnterFilteringText( wxCommandEvent& event );
+    void OnEnterFilteringText( wxCommandEvent& event );
+
 
     /**
-     * Function SetNewPkg
-     * set the footprint name for all selected components in component list
-     * and selects the next component.
-     * @param aFootprintName = the new footprint name
+     * Undo the most recent associations that were performed.
      */
-    void             SetNewPkg( const wxString& aFootprintName );
+    void UndoAssociation();
 
     /**
-     * Function SetNewPkg
-     * Set the footprint name for the component of position aIndex in the component list
+     * Redo the most recently undone association
+     */
+    void RedoAssociation();
+
+    /**
+     * Associate a footprint with a specific component in the list.
      *
-     * @param aFootprintName = the new footprint name
-     * @param aIndex = the index of the component to modify in the component list
+     * Associations can be chained into a single undo/redo step by setting aNewEntry to false
+     * for every association other than the first one. This will create a new list entry for
+     * the first association, and add the subsequent associations to that list.
+     *
+     * @param aAssociation is the association to perform
+     * @param aNewEntry specifies if this association should be a new entry in the undo list
+     * @param aAddUndoItem specifies if an undo item should be created for this association
      */
-    void             SetNewPkg( const wxString& aFootprintName, int aIndex );
+    void AssociateFootprint( const CVPCB_ASSOCIATION& aAssociation, bool aNewEntry = true,
+            bool aAddUndoItem = true );
 
-    void             BuildCmpListBox();
-    void             BuildFOOTPRINTS_LISTBOX();
-    void             BuildLIBRARY_LISTBOX();
-
-    /**
-     * Create or Update the frame showing the current highlighted footprint
-     * and (if showed) the 3D display frame
+    /*
+     * Functions to build the listboxes and their contents
      */
-    void             CreateScreenCmp();
+    void BuildCmpListBox();
+    void BuildFOOTPRINTS_LISTBOX();
+    void BuildLIBRARY_LISTBOX();
 
     /**
      * Function SaveFootprintAssociation
      * saves the edits that the user has done by sending them back to eeschema
      * via the kiway.
+     * Optionally saves the schematic to disk as well.
      */
-    void SaveFootprintAssociation();
+    bool SaveFootprintAssociation( bool doSaveSchematic );
 
     /**
      * Function ReadNetListAndFpFiles
@@ -207,7 +270,7 @@ public:
      * @param aNetlist is the netlist from eeschema in kicad s-expr format.
      * (see CVPCB_MAINFRAME::KiwayMailIn() to know how to get this netlist)
      */
-    bool             ReadNetListAndFpFiles( const std::string& aNetlist );
+    bool ReadNetListAndFpFiles( const std::string& aNetlist );
 
     /**
      * Function ReadSchematicNetlist
@@ -216,7 +279,7 @@ public:
      * It is the same netlist as the .net file created by Eeschema.
      * (This method is called by ReadNetListAndFpFiles)
      */
-    int              ReadSchematicNetlist( const std::string& aNetlist );
+    int ReadSchematicNetlist( const std::string& aNetlist );
 
     /**
      * Function LoadProjectFile
@@ -230,9 +293,9 @@ public:
      */
     void SaveProjectFile();
 
-    void LoadSettings( wxConfigBase* aCfg ) override;
+    void LoadSettings( APP_SETTINGS_BASE* aCfg ) override;
 
-    void SaveSettings( wxConfigBase* aCfg ) override;
+    void SaveSettings( APP_SETTINGS_BASE* aCfg ) override;
 
     /**
      * Function DisplayStatus
@@ -246,7 +309,7 @@ public:
      * displayed in the second status bar pane.  The third status bar pane always displays the
      * current footprint list filtering.
      */
-    void             DisplayStatus();
+    void DisplayStatus();
 
     /**
      * Function LoadFootprintFiles
@@ -259,7 +322,7 @@ public:
      * fills m_footprints
      * @return true if libraries are found, false otherwise.
      */
-    bool             LoadFootprintFiles();
+    bool LoadFootprintFiles();
 
     /**
      * Function GetProjectFileParameters
@@ -272,44 +335,79 @@ public:
      * at compile time requiring global variable definitions.
      * </p>
      *
-     * @return A reference to a PARAM_CFG_ARRAY contain the project settings for CvPcb.
+     * @return reference to a std::vector<PARAM_CFG*> contain the project settings for CvPcb.
      */
-    PARAM_CFG_ARRAY& GetProjectFileParameters( void );
-
-    /**
-     * Function UpdateTitle
-     * sets the main window title bar text.
-     * <p>
-     * If no current project open( eeschema run outside kicad manager with no schematic loaded),
-     * the title is set to the application name appended with "no project".
-     * Otherwise, the title shows the project name.
-     */
-    void UpdateTitle();
+    std::vector<PARAM_CFG*>& GetProjectFileParameters( void );
 
     /**
      * Function SendMessageToEESCHEMA
      * Send a remote command to Eeschema via a socket,
      * Commands are
      * $PART: "reference"   put cursor on component anchor
+     * @param aClearHighligntOnly = true if the message to send is only "clear highlight"
+     * (used when exiting Cvpcb)
      */
-    void SendMessageToEESCHEMA();
+    void SendMessageToEESCHEMA( bool aClearHighligntOnly = false );
 
+    /**
+     * Get the selected component from the component listbox.
+     *
+     * @return the selected component
+     */
     COMPONENT* GetSelectedComponent();
+
+    /**
+     * Set the currently selected component in the components listbox
+     *
+     * @param aIndex the index of the component to select, -1 to clear selection
+     * @param aSkipUpdate skips running the OnSelectComponent event to update the other windows
+     */
+    void SetSelectedComponent( int aIndex, bool aSkipUpdate = false );
+
+    /**
+     * Criteria to use to identify sets of components
+     */
+    enum CRITERIA
+    {
+        ALL_COMPONENTS,     ///< All components
+        SEL_COMPONENTS,     ///< Selected components
+        NA_COMPONENTS,      ///< Not associated components
+        ASSOC_COMPONENTS    ///< Associated components
+    };
+
+    /**
+     * Get the indices for all the components meeting the specified criteria in the components
+     *  listbox.
+     *
+     * @param aCriteria is the criteria to use for finding the indices
+     * @return a vector containing all the indices
+     */
+    std::vector<unsigned int> GetComponentIndices(
+            CVPCB_MAINFRAME::CRITERIA aCriteria = CVPCB_MAINFRAME::ALL_COMPONENTS );
 
     /**
      * @return the LIB_ID of the selected footprint in footprint listview
      * or a empty string if no selection
      */
-    const wxString GetSelectedFootprint();
+    wxString GetSelectedFootprint();
+
+    void SetStatusText( const wxString& aText, int aNumber = 0 ) override;
+
+    /**
+     * Syncronize the toolbar state with the current tool state.
+     */
+    void SyncToolbars() override;
 
 private:
-    // UI event handlers.
-    // Keep consistent the display state of toggle menus or tools in toolbar
-    void OnUpdateKeepOpenOnSave( wxUpdateUIEvent& event );
-    void OnFilterFPbyKeywords( wxUpdateUIEvent& event );
-    void OnFilterFPbyPinCount( wxUpdateUIEvent& event );
-    void OnFilterFPbyLibrary( wxUpdateUIEvent& event );
-    void OnFilterFPbyKeyName( wxUpdateUIEvent& event );
+    /**
+     * Setup the tool system for the CVPCB main frame.
+     */
+    void setupTools();
+
+    /**
+     * Setup event handlers
+     */
+    void setupEventHandlers();
 
     /**
      * read the .equ files and populate the list of equvalents
@@ -322,7 +420,16 @@ private:
 
     void refreshAfterComponentSearch (COMPONENT* component);
 
-    DECLARE_EVENT_TABLE()
+    // Tool dispatcher
+    TOOL_DISPATCHER* m_toolDispatcher;
+
+    // Context menus for the list boxes
+    ACTION_MENU* m_footprintContextMenu;
+    ACTION_MENU* m_componentContextMenu;
+
+    // Undo/Redo item lists
+    CVPCB_UNDO_REDO_LIST    m_undoList;
+    CVPCB_UNDO_REDO_LIST    m_redoList;
 };
 
 #endif  //#ifndef _CVPCB_MAINFRAME_H_

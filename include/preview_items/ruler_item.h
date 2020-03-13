@@ -36,15 +36,14 @@ namespace PREVIEW
 class TWO_POINT_GEOMETRY_MANAGER;
 
 /**
- * Class RULER_ITEM
+ * RULER_ITEM
  *
  * A drawn ruler item for showing the distance between two points.
  */
 class RULER_ITEM : public EDA_ITEM
 {
 public:
-
-    RULER_ITEM( const TWO_POINT_GEOMETRY_MANAGER& m_geomMgr );
+    RULER_ITEM( const TWO_POINT_GEOMETRY_MANAGER& m_geomMgr, EDA_UNITS userUnits );
 
     ///> @copydoc EDA_ITEM::ViewBBox()
     const BOX2I ViewBBox() const override;
@@ -71,9 +70,17 @@ public:
         return wxT( "RULER_ITEM" );
     }
 
-private:
+    void SwitchUnits()
+    {
+        if( m_userUnits == EDA_UNITS::INCHES )
+            m_userUnits = EDA_UNITS::MILLIMETRES;
+        else
+            m_userUnits = EDA_UNITS::INCHES;
+    }
 
+private:
     const TWO_POINT_GEOMETRY_MANAGER& m_geomMgr;
+    EDA_UNITS                         m_userUnits;
 };
 
 } // PREVIEW

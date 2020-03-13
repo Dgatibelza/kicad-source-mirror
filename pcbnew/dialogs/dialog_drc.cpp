@@ -1,13 +1,9 @@
-/**
- * @file dialog_drc.cpp
- */
-
 /*
  * This program source code file is part of KiCad, a free EDA CAD application.
  *
- * Copyright (C) 2017 Jean-Pierre Charras, jp.charras at wanadoo.fr
+ * Copyright (C) 2018 Jean-Pierre Charras, jp.charras at wanadoo.fr
  * Copyright (C) 2009-2016 Dick Hollenbeck, dick@softplc.com
- * Copyright (C) 2004-2017 KiCad Developers, see AUTHORS.txt for contributors.
+ * Copyright (C) 2004-2020 KiCad Developers, see AUTHORS.txt for contributors.
  *
  * This program is free software; you can redistribute it and/or
  * modify it under the terms of the GNU General Public License
@@ -27,50 +23,84 @@
  * 51 Franklin Street, Fifth Floor, Boston, MA  02110-1301, USA
  */
 
+#include <base_units.h>
+#include <bitmaps.h>
+#include <collectors.h>
+#include <confirm.h>
+#include <dialog_drc.h>
 #include <fctsys.h>
 #include <kiface_i.h>
-#include <confirm.h>
-#include <wildcards_and_files_ext.h>
+#include <pcb_edit_frame.h>
+#include <pcbnew_settings.h>
 #include <pgm_base.h>
-#include <dialog_drc.h>
-#include <wxPcbStruct.h>
-#include <base_units.h>
-#include <class_board_design_settings.h>
-#include <class_draw_panel_gal.h>
-#include <view/view.h>
-
-/* class DIALOG_DRC_CONTROL: a dialog to set DRC parameters (clearance, min cooper size)
- * and run DRC tests
- */
-
-// Keywords for read and write config
-#define TestMissingCourtyardKey     wxT( "TestMissingCourtyard" )
-#define TestFootprintCourtyardKey   wxT( "TestFootprintCourtyard" )
-
+#include <tool/tool_manager.h>
+#include <tools/pcb_actions.h>
+#include <wildcards_and_files_ext.h>
+#include <drc/drc_tree_model.h>
+#include <wx/wupdlock.h>
+#include <widgets/ui_common.h>
 
 DIALOG_DRC_CONTROL::DIALOG_DRC_CONTROL( DRC* aTester, PCB_EDIT_FRAME* aEditorFrame,
                                         wxWindow* aParent ) :
-    DIALOG_DRC_CONTROL_BASE( aParent )
+        DIALOG_DRC_CONTROL_BASE( aParent ),
+        m_trackMinWidth( aEditorFrame, m_MinWidthLabel, m_MinWidthCtrl, m_MinWidthUnits, true ),
+        m_viaMinSize( aEditorFrame, m_ViaMinLabel, m_ViaMinCtrl, m_ViaMinUnits, true ),
+        m_uviaMinSize( aEditorFrame, m_uViaMinLabel, m_uViaMinCtrl, m_uViaMinUnits, true ),
+        m_markersProvider( nullptr ),
+        m_markerTreeModel( nullptr ),
+        m_unconnectedItemsProvider( nullptr ),
+        m_unconnectedTreeModel( nullptr ),
+        m_footprintWarningsProvider( nullptr ),
+        m_footprintWarningsTreeModel( nullptr ),
+        m_severities( RPT_SEVERITY_ERROR | RPT_SEVERITY_WARNING )
 {
-    m_config = Kiface().KifaceSettings();
-    m_tester = aTester;
-    m_brdEditor = aEditorFrame;
+    SetName( DIALOG_DRC_WINDOW_NAME ); // Set a window name to be able to find it
+
+    m_tester       = aTester;
+    m_brdEditor    = aEditorFrame;
     m_currentBoard = m_brdEditor->GetBoard();
-    m_BrdSettings = m_brdEditor->GetBoard()->GetDesignSettings();
+    m_BrdSettings  = m_brdEditor->GetBoard()->GetDesignSettings();
 
-    InitValues();
+    m_markerTreeModel = new DRC_TREE_MODEL( m_brdEditor, m_markerDataView );
+    m_markerDataView->AssociateModel( m_markerTreeModel );
 
-    // Now all widgets have the size fixed, call FinishDialogSettings
+    m_unconnectedTreeModel = new DRC_TREE_MODEL( m_brdEditor, m_unconnectedDataView );
+    m_unconnectedDataView->AssociateModel( m_unconnectedTreeModel );
+
+    m_footprintWarningsTreeModel = new DRC_TREE_MODEL( m_brdEditor, m_footprintsDataView );
+    m_footprintsDataView->AssociateModel( m_footprintWarningsTreeModel );
+
+    m_Notebook->SetSelection( 0 );
+
+    // We use a sdbSizer here to get the order right, which is platform-dependent
+    m_sdbSizer1OK->SetLabel( _( "Run DRC" ) );
+    m_sdbSizer1Cancel->SetLabel( _( "Close" ) );
+    m_sizerButtons->Layout();
+
+    m_sdbSizer1OK->SetDefault();
+
+    initValues();
+    syncCheckboxes();
+
     FinishDialogSettings();
 }
 
+
 DIALOG_DRC_CONTROL::~DIALOG_DRC_CONTROL()
 {
-    m_config->Write( TestMissingCourtyardKey, m_cbCourtyardMissing->GetValue() );
-    m_config->Write( TestFootprintCourtyardKey,  m_cbCourtyardOverlap->GetValue() );
+    m_brdEditor->FocusOnItem( nullptr );
+
+    PCBNEW_SETTINGS* settings = m_brdEditor->GetSettings();
+    settings->m_DrcDialog.refill_zones       = m_cbRefillZones->GetValue();
+    settings->m_DrcDialog.test_track_to_zone = m_cbReportAllTrackErrors->GetValue();
+    settings->m_DrcDialog.test_footprints    = m_cbTestFootprints->GetValue();
+    settings->m_DrcDialog.severities         = m_severities;
+
+    m_markerTreeModel->DecRef();
 }
 
-void DIALOG_DRC_CONTROL::OnActivateDlg( wxActivateEvent& event )
+
+void DIALOG_DRC_CONTROL::OnActivateDlg( wxActivateEvent& aEvent )
 {
     if( m_currentBoard != m_brdEditor->GetBoard() )
     {
@@ -87,254 +117,340 @@ void DIALOG_DRC_CONTROL::OnActivateDlg( wxActivateEvent& event )
     // updating data which can be modified outside the dialog (DRC parameters, units ...)
     // because the dialog is not modal
     m_BrdSettings = m_brdEditor->GetBoard()->GetDesignSettings();
-    DisplayDRCValues();
+    displayDRCValues();
+
+    m_markerTreeModel->SetProvider( m_markersProvider );
+    m_unconnectedTreeModel->SetProvider( m_unconnectedItemsProvider );
+    m_footprintWarningsTreeModel->SetProvider( m_footprintWarningsProvider );
+    updateDisplayedCounts();
 }
 
 
-void DIALOG_DRC_CONTROL::DisplayDRCValues()
+void DIALOG_DRC_CONTROL::displayDRCValues()
 {
-    m_TrackMinWidthUnit->SetLabel( GetAbbreviatedUnitsLabel( g_UserUnit ) );
-    m_ViaMinUnit->SetLabel( GetAbbreviatedUnitsLabel( g_UserUnit ) );
-    m_MicroViaMinUnit->SetLabel(GetAbbreviatedUnitsLabel( g_UserUnit ) );
-
-    PutValueInLocalUnits( *m_SetTrackMinWidthCtrl, m_BrdSettings.m_TrackMinWidth );
-    PutValueInLocalUnits( *m_SetViaMinSizeCtrl, m_BrdSettings.m_ViasMinSize );
-    PutValueInLocalUnits( *m_SetMicroViakMinSizeCtrl, m_BrdSettings.m_MicroViasMinSize );
+    m_trackMinWidth.SetValue( m_BrdSettings.m_TrackMinWidth );
+    m_viaMinSize.SetValue( m_BrdSettings.m_ViasMinSize );
+    m_uviaMinSize.SetValue( m_BrdSettings.m_MicroViasMinSize );
 }
 
 
-void DIALOG_DRC_CONTROL::InitValues()
+void DIALOG_DRC_CONTROL::initValues()
 {
-    // Connect events and objects
-    m_ClearanceListBox->Connect( ID_CLEARANCE_LIST, wxEVT_LEFT_DCLICK,
-                                 wxMouseEventHandler(
-                                     DIALOG_DRC_CONTROL::OnLeftDClickClearance ), NULL, this );
-    m_ClearanceListBox->Connect( ID_CLEARANCE_LIST, wxEVT_RIGHT_UP,
-                                 wxMouseEventHandler(
-                                     DIALOG_DRC_CONTROL::OnRightUpClearance ), NULL, this );
-    m_UnconnectedListBox->Connect( ID_UNCONNECTED_LIST, wxEVT_LEFT_DCLICK,
-                                   wxMouseEventHandler( DIALOG_DRC_CONTROL::
-                                                        OnLeftDClickUnconnected ), NULL, this );
-    m_UnconnectedListBox->Connect( ID_UNCONNECTED_LIST, wxEVT_RIGHT_UP,
-                                   wxMouseEventHandler(
-                                       DIALOG_DRC_CONTROL::OnRightUpUnconnected ), NULL, this );
+    m_markersTitleTemplate     = m_Notebook->GetPageText( 0 );
+    m_unconnectedTitleTemplate = m_Notebook->GetPageText( 1 );
+    m_footprintsTitleTemplate  = m_Notebook->GetPageText( 2 );
 
-    m_DeleteCurrentMarkerButton->Enable( false );
+    displayDRCValues();
 
-    DisplayDRCValues();
+    auto cfg = m_brdEditor->GetSettings();
 
-    // read options
-    bool value;
-    m_config->Read( TestMissingCourtyardKey, &value, false );
-    m_cbCourtyardMissing->SetValue( value );
-    m_config->Read( TestFootprintCourtyardKey, &value, false );
-    m_cbCourtyardOverlap->SetValue( value );
+    m_cbRefillZones->SetValue( cfg->m_DrcDialog.refill_zones );
+    m_cbReportAllTrackErrors->SetValue( cfg->m_DrcDialog.test_track_to_zone );
+    m_cbTestFootprints->SetValue( cfg->m_DrcDialog.test_footprints );
 
+    m_severities = cfg->m_DrcDialog.severities;
+    m_markerTreeModel->SetSeverities( m_severities );
+    m_unconnectedTreeModel->SetSeverities( m_severities );
+    m_footprintWarningsTreeModel->SetSeverities( m_severities );
 
-    // Set the initial "enabled" status of the browse button and the text
-    // field for report name
-    wxCommandEvent junk;
-    OnReportCheckBoxClicked( junk );
-
-    Layout();      // adding the units above expanded Clearance text, now resize.
+    Layout(); // adding the units above expanded Clearance text, now resize.
 
     SetFocus();
 }
 
-/* accept DRC parameters (min clearance value and min sizes
-*/
-void DIALOG_DRC_CONTROL::SetDrcParmeters( )
+
+void DIALOG_DRC_CONTROL::setDRCParameters()
 {
-    m_BrdSettings.m_TrackMinWidth = ValueFromTextCtrl( *m_SetTrackMinWidthCtrl );
-    m_BrdSettings.m_ViasMinSize = ValueFromTextCtrl( *m_SetViaMinSizeCtrl );
-    m_BrdSettings.m_MicroViasMinSize = ValueFromTextCtrl( *m_SetMicroViakMinSizeCtrl );
+    m_BrdSettings.m_TrackMinWidth    = (int) m_trackMinWidth.GetValue();
+    m_BrdSettings.m_ViasMinSize      = (int) m_viaMinSize.GetValue();
+    m_BrdSettings.m_MicroViasMinSize = (int) m_uviaMinSize.GetValue();
 
     m_brdEditor->GetBoard()->SetDesignSettings( m_BrdSettings );
 }
 
 
-void DIALOG_DRC_CONTROL::SetRptSettings( bool aEnable, const wxString& aFileName )
+// Don't globally define this; different facilities use different definitions of "ALL"
+static int RPT_SEVERITY_ALL = RPT_SEVERITY_WARNING | RPT_SEVERITY_ERROR | RPT_SEVERITY_EXCLUSION;
+
+
+void DIALOG_DRC_CONTROL::syncCheckboxes()
 {
-    m_RptFilenameCtrl->Enable( aEnable );
-    m_BrowseButton->Enable( aEnable );
-    m_CreateRptCtrl->SetValue( aEnable );
-    m_RptFilenameCtrl->SetValue( aFileName );
+    m_showAll->SetValue( m_severities == RPT_SEVERITY_ALL );
+    m_showErrors->SetValue( m_severities & RPT_SEVERITY_ERROR );
+    m_showWarnings->SetValue( m_severities & RPT_SEVERITY_WARNING );
+    m_showExclusions->SetValue( m_severities & RPT_SEVERITY_EXCLUSION );
 }
 
-void DIALOG_DRC_CONTROL::GetRptSettings( bool* aEnable, wxString& aFileName )
+
+void DIALOG_DRC_CONTROL::OnRunDRCClick( wxCommandEvent& aEvent )
 {
-    *aEnable = m_CreateRptCtrl->GetValue();
-    aFileName = m_RptFilenameCtrl->GetValue();
-}
+    setDRCParameters();
+    m_tester->m_doZonesTest          = m_cbReportTracksToZonesErrors->GetValue();
+    m_tester->m_refillZones          = m_cbRefillZones->GetValue();
+    m_tester->m_reportAllTrackErrors = m_cbReportAllTrackErrors->GetValue();
+    m_tester->m_testFootprints       = m_cbTestFootprints->GetValue();
 
-void DIALOG_DRC_CONTROL::OnStartdrcClick( wxCommandEvent& event )
-{
-    wxString reportName;
-
-    bool make_report = m_CreateRptCtrl->IsChecked();
-
-    if( make_report )      // Create a rpt file
-    {
-        reportName = m_RptFilenameCtrl->GetValue();
-
-        if( reportName.IsEmpty() )
-        {
-            wxCommandEvent dummy;
-            OnButtonBrowseRptFileClick( dummy );
-        }
-
-        if( !reportName.IsEmpty() )
-            reportName = makeValidFileNameReport();
-    }
-
-    SetDrcParmeters();
-    m_tester->SetSettings( true,        // Pad to pad DRC test enabled
-                           true,        // unconnected pads DRC test enabled
-                           true,        // DRC test for zones enabled
-                           true,        // DRC test for keepout areas enabled
-                           m_cbCourtyardOverlap->GetValue(),
-                           m_cbCourtyardMissing->GetValue(),
-                           reportName, make_report );
-
-    DelDRCMarkers();
+    m_brdEditor->RecordDRCExclusions();
+    deleteAllMarkers();
 
     wxBeginBusyCursor();
+    wxWindowDisabler disabler;
 
     // run all the tests, with no UI at this time.
     m_Messages->Clear();
-    wxSafeYield();                          // Allows time slice to refresh the m_Messages window
-    m_brdEditor->GetBoard()->m_Status_Pcb = 0; // Force full connectivity and ratsnest recalculations
-    m_tester->RunTests(m_Messages);
-    m_Notebook->ChangeSelection( 0 );       // display the 1at tab "...Markers ..."
+    wxSafeYield(); // Allows time slice to refresh the Messages
+    m_tester->RunTests( m_Messages );
 
-
-    // Generate the report
-    if( !reportName.IsEmpty() )
-    {
-        if( writeReport( reportName ) )
-        {
-            wxString        msg;
-            msg.Printf( _( "Report file \"%s\" created" ), GetChars( reportName ) );
-
-            wxString        caption( _( "Disk File Report Completed" ) );
-            wxMessageDialog popupWindow( this, msg, caption );
-            popupWindow.ShowModal();
-        }
-        else
-            DisplayError( this, wxString::Format( _( "Unable to create report file '%s' "),
-                          GetChars( reportName ) ) );
-    }
+    m_Notebook->ChangeSelection( 0 ); // display the "Problems/Markers" tab
 
     wxEndBusyCursor();
 
-    RedrawDrawPanel();
+    refreshBoardEditor();
+    SetFocus();
+    m_Notebook->GetPage( m_Notebook->GetSelection() )->SetFocus();
 }
 
 
-void DIALOG_DRC_CONTROL::OnDeleteAllClick( wxCommandEvent& event )
+void DIALOG_DRC_CONTROL::SetMarkersProvider( DRC_ITEMS_PROVIDER* aProvider )
 {
-    DelDRCMarkers();
-    RedrawDrawPanel();
-    UpdateDisplayedCounts();
+    m_markersProvider = aProvider;
+    m_markerTreeModel->SetProvider( m_markersProvider );
+    updateDisplayedCounts();
 }
 
 
-void DIALOG_DRC_CONTROL::OnListUnconnectedClick( wxCommandEvent& event )
+void DIALOG_DRC_CONTROL::SetUnconnectedProvider(class DRC_ITEMS_PROVIDER * aProvider )
 {
-    wxString reportName;
+    m_unconnectedItemsProvider = aProvider;
+    m_unconnectedTreeModel->SetProvider( m_unconnectedItemsProvider );
+    updateDisplayedCounts();
+}
 
-    bool make_report = m_CreateRptCtrl->IsChecked();
 
-    if( make_report )      // Create a file rpt
+void DIALOG_DRC_CONTROL::SetFootprintsProvider( DRC_ITEMS_PROVIDER* aProvider )
+{
+    m_footprintWarningsProvider = aProvider;
+    m_footprintWarningsTreeModel->SetProvider( m_footprintWarningsProvider );
+    updateDisplayedCounts();
+}
+
+
+void DIALOG_DRC_CONTROL::OnDRCItemSelected( wxDataViewEvent& aEvent )
+{
+    BOARD_ITEM*   item = DRC_TREE_MODEL::ToBoardItem( m_brdEditor->GetBoard(), aEvent.GetItem() );
+    WINDOW_THAWER thawer( m_brdEditor );
+
+    m_brdEditor->FocusOnItem( item );
+    m_brdEditor->GetCanvas()->Refresh();
+
+    aEvent.Skip();
+}
+
+
+void DIALOG_DRC_CONTROL::OnDRCItemDClick( wxDataViewEvent& aEvent )
+{
+    if( aEvent.GetItem().IsOk() )
     {
-        reportName = m_RptFilenameCtrl->GetValue();
-
-        if( reportName.IsEmpty() )
-        {
-            wxCommandEvent junk;
-            OnButtonBrowseRptFileClick( junk );
-        }
-
-        if( !reportName.IsEmpty() )
-            reportName = makeValidFileNameReport();
+        // turn control over to m_brdEditor, hide this DIALOG_DRC_CONTROL window,
+        // no destruction so we can preserve listbox cursor
+        if( !IsModal() )
+            Show( false );
     }
 
-    SetDrcParmeters();
-
-    m_tester->SetSettings( true,        // Pad to pad DRC test enabled
-                           true,        // unconnected pads DRC test enabled
-                           true,        // DRC test for zones enabled
-                           true,        // DRC test for keepout areas enabled
-                           m_cbCourtyardOverlap->GetValue(),
-                           m_cbCourtyardMissing->GetValue(),
-                           reportName, make_report );
-
-    DelDRCMarkers();
-
-    wxBeginBusyCursor();
-
-    m_Messages->Clear();
-    m_tester->ListUnconnectedPads();
-
-    m_Notebook->ChangeSelection( 1 );       // display the 2nd tab "Unconnected..."
-
-    // Generate the report
-    if( !reportName.IsEmpty() )
-    {
-        if( writeReport( reportName ) )
-        {
-            wxString        msg;
-            msg.Printf( _( "Report file \"%s\" created" ), GetChars( reportName ) );
-            wxString        caption( _( "Disk File Report Completed" ) );
-            wxMessageDialog popupWindow( this, msg, caption );
-            popupWindow.ShowModal();
-        }
-        else
-            DisplayError( this, wxString::Format( _( "Unable to create report file '%s'"),
-                          GetChars( reportName ) ) );
-    }
-
-    UpdateDisplayedCounts();
-
-    wxEndBusyCursor();
-
-    /* there is currently nothing visible on the DrawPanel for unconnected pads
-     *  RedrawDrawPanel();
-     */
+    aEvent.Skip();
 }
 
 
-void DIALOG_DRC_CONTROL::OnButtonBrowseRptFileClick( wxCommandEvent& event )
+void DIALOG_DRC_CONTROL::OnDRCItemRClick( wxDataViewEvent& aEvent )
 {
-    wxFileName fn = m_brdEditor->GetBoard()->GetFileName();
-    fn.SetExt( ReportFileExtension );
-    wxString prj_path =  Prj().GetProjectPath();
+    DRC_TREE_NODE* node = DRC_TREE_MODEL::ToNode( aEvent.GetItem() );
 
-    wxFileDialog dlg( this, _( "Save DRC Report File" ), prj_path,
-                      fn.GetFullName(), ReportFileWildcard,
-                      wxFD_SAVE | wxFD_OVERWRITE_PROMPT );
-
-    if( dlg.ShowModal() == wxID_CANCEL )
+    if( !node )
         return;
 
-    m_RptFilenameCtrl->SetValue( dlg.GetPath() );
+    DRC_ITEM* drcItem = node->m_DrcItem;
+    wxString  listName;
+    wxMenu    menu;
+
+    switch( m_BrdSettings.m_DRCSeverities[ drcItem->GetErrorCode() ] )
+    {
+    case RPT_SEVERITY_ERROR:   listName = _( "errors" );      break;
+    case RPT_SEVERITY_WARNING: listName = _( "warnings" );    break;
+    default:               listName = _( "appropriate" ); break;
+    }
+
+    if( drcItem->GetParent()->IsExcluded() )
+    {
+        menu.Append( 1, _( "Remove exclusion for this violation" ),
+                     wxString::Format( _( "It will be placed back in the %s list" ), listName ) );
+    }
+    else
+    {
+        menu.Append( 2, _( "Exclude this violation" ),
+                     wxString::Format( _( "It will be excluded from the %s list" ), listName ) );
+    }
+
+    menu.AppendSeparator();
+
+    if( m_BrdSettings.m_DRCSeverities[ drcItem->GetErrorCode() ] == RPT_SEVERITY_WARNING )
+    {
+        menu.Append( 3, wxString::Format( _( "Change severity to Error for all '%s' violations" ),
+                     drcItem->GetErrorText(),
+                     _( "Violation severities can also be edited in the Board Setup... dialog" ) ) );
+    }
+    else
+    {
+        menu.Append( 4, wxString::Format( _( "Change severity to Warning for all '%s' violations" ),
+                     drcItem->GetErrorText(),
+                     _( "Violation severities can also be edited in the Board Setup... dialog" ) ) );
+    }
+
+    menu.Append( 5, wxString::Format( _( "Ignore all '%s' violations" ),
+                 drcItem->GetErrorText() ),
+                 _( "Violations will not be checked or reported" ) );
+
+    menu.AppendSeparator();
+
+    menu.Append( 6, _( "Edit violation severities..." ), _( "Open the Board Setup... dialog" ) );
+
+    switch( GetPopupMenuSelectionFromUser( menu ) )
+    {
+    case 1:
+        node->m_DrcItem->GetParent()->SetExcluded( false );
+
+        // Update view
+        static_cast<DRC_TREE_MODEL*>( aEvent.GetModel() )->ValueChanged( node );
+        updateDisplayedCounts();
+        break;
+
+    case 2:
+        node->m_DrcItem->GetParent()->SetExcluded( true );
+
+        // Update view
+        if( m_severities & RPT_SEVERITY_EXCLUSION )
+            static_cast<DRC_TREE_MODEL*>( aEvent.GetModel() )->ValueChanged( node );
+        else
+            static_cast<DRC_TREE_MODEL*>( aEvent.GetModel() )->DeleteCurrentItem( false );
+
+        updateDisplayedCounts();
+        break;
+
+    case 3:
+        m_BrdSettings.m_DRCSeverities[ drcItem->GetErrorCode() ] = RPT_SEVERITY_ERROR;
+        m_brdEditor->GetBoard()->SetDesignSettings( m_BrdSettings );
+
+        // Rebuild model and view
+        static_cast<DRC_TREE_MODEL*>( aEvent.GetModel() )->SetProvider( m_markersProvider );
+        updateDisplayedCounts();
+        break;
+
+    case 4:
+        m_BrdSettings.m_DRCSeverities[ drcItem->GetErrorCode() ] = RPT_SEVERITY_WARNING;
+        m_brdEditor->GetBoard()->SetDesignSettings( m_BrdSettings );
+
+        // Rebuild model and view
+        static_cast<DRC_TREE_MODEL*>( aEvent.GetModel() )->SetProvider( m_markersProvider );
+        updateDisplayedCounts();
+        break;
+
+    case 5:
+        m_BrdSettings.m_DRCSeverities[ drcItem->GetErrorCode() ] = RPT_SEVERITY_IGNORE;
+        m_brdEditor->GetBoard()->SetDesignSettings( m_BrdSettings );
+
+        for( MARKER_PCB* marker : m_brdEditor->GetBoard()->Markers() )
+        {
+            if( marker->GetReporter().GetErrorCode() == drcItem->GetErrorCode() )
+                m_brdEditor->GetBoard()->Delete( marker );
+        }
+
+        // Rebuild model and view
+        static_cast<DRC_TREE_MODEL*>( aEvent.GetModel() )->SetProvider( m_markersProvider );
+        updateDisplayedCounts();
+        break;
+
+    case 6:
+        m_brdEditor->DoShowBoardSetupDialog( _( "Violation Severity" ) );
+        break;
+    }
 }
 
 
-void DIALOG_DRC_CONTROL::OnOkClick( wxCommandEvent& event )
+void DIALOG_DRC_CONTROL::OnSeverity( wxCommandEvent& aEvent )
 {
-    SetReturnCode( wxID_OK );
-    SetDrcParmeters();
+    int flag = 0;
 
-    // The dialog can be modal or not modal.
-    // Leave the DRC caller destroy (or not) the dialog
-    m_tester->DestroyDRCDialog( wxID_OK );
+    if( aEvent.GetEventObject() == m_showAll )
+        flag = RPT_SEVERITY_ALL;
+    else if( aEvent.GetEventObject() == m_showErrors )
+        flag = RPT_SEVERITY_ERROR;
+    else if( aEvent.GetEventObject() == m_showWarnings )
+        flag = RPT_SEVERITY_WARNING;
+    else if( aEvent.GetEventObject() == m_showExclusions )
+        flag = RPT_SEVERITY_EXCLUSION;
+
+    if( aEvent.IsChecked() )
+        m_severities |= flag;
+    else if( aEvent.GetEventObject() == m_showAll )
+        m_severities = RPT_SEVERITY_ERROR;
+    else
+        m_severities &= ~flag;
+
+    syncCheckboxes();
+
+    // Set the provider's severity levels through the TreeModel so that the old tree
+    // can be torn down before the severity changes.
+    //
+    // It's not clear this is required, but we've had a lot of issues with wxDataView
+    // being cranky on various platforms.
+
+    m_markerTreeModel->SetSeverities( m_severities );
+    m_unconnectedTreeModel->SetSeverities( m_severities );
+    m_footprintWarningsTreeModel->SetSeverities( m_severities );
+
+    updateDisplayedCounts();
 }
 
 
-void DIALOG_DRC_CONTROL::OnCancelClick( wxCommandEvent& event )
+void DIALOG_DRC_CONTROL::OnSaveReport( wxCommandEvent& aEvent )
 {
+    wxFileName fn( "./DRC." + ReportFileExtension );
+
+    wxFileDialog dlg( this, _( "Save Report to File" ), fn.GetPath(), fn.GetFullName(),
+                      ReportFileWildcard(), wxFD_SAVE | wxFD_OVERWRITE_PROMPT );
+
+    if( dlg.ShowModal() != wxID_OK )
+        return;
+
+    fn = dlg.GetPath();
+
+    if( fn.GetExt().IsEmpty() )
+        fn.SetExt( ReportFileExtension );
+
+    if( !fn.IsAbsolute() )
+    {
+        wxString prj_path = Prj().GetProjectPath();
+        fn.MakeAbsolute( prj_path );
+    }
+
+    if( writeReport( fn.GetFullPath() ) )
+    {
+        m_Messages->AppendText( wxString::Format( _( "Report file '%s' created\n" ),
+                                                  fn.GetFullPath() ) );
+    }
+    else
+    {
+        DisplayError( this, wxString::Format( _( "Unable to create report file '%s'" ),
+                                              fn.GetFullPath() ) );
+    }
+}
+
+
+void DIALOG_DRC_CONTROL::OnCancelClick( wxCommandEvent& aEvent )
+{
+    m_brdEditor->FocusOnItem( nullptr );
+
     SetReturnCode( wxID_CANCEL );
+    setDRCParameters();
 
     // The dialog can be modal or not modal.
     // Leave the DRC caller destroy (or not) the dialog
@@ -342,275 +458,33 @@ void DIALOG_DRC_CONTROL::OnCancelClick( wxCommandEvent& event )
 }
 
 
-/*!
- * wxEVT_COMMAND_CHECKBOX_CLICKED event handler for ID_CHECKBOX1
- */
-
-void DIALOG_DRC_CONTROL::OnReportCheckBoxClicked( wxCommandEvent& event )
+void DIALOG_DRC_CONTROL::OnChangingNotebookPage( wxNotebookEvent& aEvent )
 {
-    m_RptFilenameCtrl->Enable( m_CreateRptCtrl->IsChecked() );
-    m_BrowseButton->Enable( m_CreateRptCtrl->IsChecked() );
+    // Shouldn't be necessary, but is on at least OSX
+    if( aEvent.GetSelection() >= 0 )
+        m_Notebook->ChangeSelection( (unsigned) aEvent.GetSelection() );
+
+    m_markerDataView->UnselectAll();
+    m_unconnectedDataView->UnselectAll();
+    m_footprintsDataView->UnselectAll();
 }
 
 
-void DIALOG_DRC_CONTROL::OnLeftDClickClearance( wxMouseEvent& event )
+void DIALOG_DRC_CONTROL::refreshBoardEditor()
 {
-    event.Skip();
+    WINDOW_THAWER thawer( m_brdEditor );
 
-    // I am assuming that the double click actually changed the selected item.
-    // please verify this.
-    int selection = m_ClearanceListBox->GetSelection();
-
-    if( selection != wxNOT_FOUND )
-    {
-        // Find the selected MARKER in the PCB, position cursor there.
-        // Then close the dialog.
-        const DRC_ITEM* item = m_ClearanceListBox->GetItem( selection );
-
-        if( item )
-        {
-            m_brdEditor->CursorGoto( item->GetPointA() );
-            m_brdEditor->GetGalCanvas()->GetView()->SetCenter( VECTOR2D( item->GetPointA() ) );
-
-            if( !IsModal() )
-            {
-                // turn control over to m_brdEditor, hide this DIALOG_DRC_CONTROL window,
-                // no destruction so we can preserve listbox cursor
-                Show( false );
-
-                // We do not want the clarification popup window.
-                // when releasing the left button in the main window
-                m_brdEditor->SkipNextLeftButtonReleaseEvent();
-            }
-        }
-    }
-}
-
-
-void DIALOG_DRC_CONTROL::OnPopupMenu( wxCommandEvent& event )
-{
-    int             source = event.GetId();
-
-    const DRC_ITEM* item = 0;
-    wxPoint         pos;
-
-    int             selection;
-
-    switch( source )
-    {
-    case ID_POPUP_UNCONNECTED_A:
-        selection = m_UnconnectedListBox->GetSelection();
-        item = m_UnconnectedListBox->GetItem( selection );
-        pos  = item->GetPointA();
-        break;
-
-    case ID_POPUP_UNCONNECTED_B:
-        selection = m_UnconnectedListBox->GetSelection();
-        item = m_UnconnectedListBox->GetItem( selection );
-        pos  = item->GetPointB();
-        break;
-
-    case ID_POPUP_MARKERS_A:
-        selection = m_ClearanceListBox->GetSelection();
-        item = m_ClearanceListBox->GetItem( selection );
-        pos  = item->GetPointA();
-        break;
-
-    case ID_POPUP_MARKERS_B:
-        selection = m_ClearanceListBox->GetSelection();
-        item = m_ClearanceListBox->GetItem( selection );
-        pos  = item->GetPointB();
-        break;
-    }
-
-    if( item )
-    {
-        m_brdEditor->CursorGoto( pos );
-        m_brdEditor->GetGalCanvas()->GetView()->SetCenter( VECTOR2D( item->GetPointA() ) );
-
-        if( !IsModal() )
-            Show( false );
-    }
-}
-
-
-void DIALOG_DRC_CONTROL::OnRightUpUnconnected( wxMouseEvent& event )
-{
-    event.Skip();
-
-    // popup menu to go to either of the items listed in the DRC_ITEM.
-
-    int selection = m_UnconnectedListBox->GetSelection();
-
-    if( selection != wxNOT_FOUND )
-    {
-        wxMenu          menu;
-        wxMenuItem*     mItem;
-        const DRC_ITEM* dItem = m_UnconnectedListBox->GetItem( selection );
-
-        mItem = new wxMenuItem( &menu, ID_POPUP_UNCONNECTED_A, dItem->GetTextA() );
-        menu.Append( mItem );
-
-        if( dItem->HasSecondItem() )
-        {
-            mItem = new wxMenuItem( &menu, ID_POPUP_UNCONNECTED_B, dItem->GetTextB() );
-            menu.Append( mItem );
-        }
-
-        PopupMenu( &menu );
-    }
-}
-
-
-void DIALOG_DRC_CONTROL::OnRightUpClearance( wxMouseEvent& event )
-{
-    event.Skip();
-
-    // popup menu to go to either of the items listed in the DRC_ITEM.
-
-    int selection = m_ClearanceListBox->GetSelection();
-
-    if( selection != wxNOT_FOUND )
-    {
-        wxMenu          menu;
-        wxMenuItem*     mItem;
-        const DRC_ITEM* dItem = m_ClearanceListBox->GetItem( selection );
-
-        mItem = new wxMenuItem( &menu, ID_POPUP_MARKERS_A, dItem->GetTextA() );
-        menu.Append( mItem );
-
-        if( dItem->HasSecondItem() )
-        {
-            mItem = new wxMenuItem( &menu, ID_POPUP_MARKERS_B, dItem->GetTextB() );
-            menu.Append( mItem );
-        }
-
-        PopupMenu( &menu );
-    }
-}
-
-
-void DIALOG_DRC_CONTROL::OnLeftDClickUnconnected( wxMouseEvent& event )
-{
-    event.Skip();
-
-    // I am assuming that the double click actually changed the selected item.
-    // please verify this.
-    int selection = m_UnconnectedListBox->GetSelection();
-
-    if( selection != wxNOT_FOUND )
-    {
-        // Find the selected DRC_ITEM in the listbox, position cursor there,
-        // at the first of the two pads.
-        // Then hide the dialog.
-        const DRC_ITEM* item = m_UnconnectedListBox->GetItem( selection );
-        if( item )
-        {
-            m_brdEditor->CursorGoto( item->GetPointA() );
-            m_brdEditor->GetGalCanvas()->GetView()->SetCenter( VECTOR2D( item->GetPointA() ) );
-
-            if( !IsModal() )
-            {
-                Show( false );
-
-                // We do not want the clarification popup window.
-                // when releasing the left button in the main window
-                m_brdEditor->SkipNextLeftButtonReleaseEvent();
-            }
-        }
-    }
-}
-
-/* called when switching from Error list to Unconnected list
- * To avoid mistakes, the current marker is selection is cleared
- */
-void DIALOG_DRC_CONTROL::OnChangingMarkerList( wxNotebookEvent& event )
-{
-    m_DeleteCurrentMarkerButton->Enable( false );
-    m_ClearanceListBox->SetSelection( -1 );
-    m_UnconnectedListBox->SetSelection( -1 );
-}
-
-void DIALOG_DRC_CONTROL::OnMarkerSelectionEvent( wxCommandEvent& event )
-{
-    int selection = event.GetSelection();
-
-    if( selection != wxNOT_FOUND )
-    {
-        // until a MARKER is selected, this button is not enabled.
-        m_DeleteCurrentMarkerButton->Enable( true );
-
-        // Find the selected DRC_ITEM in the listbox, position cursor there,
-        // at the first of the two pads.
-        const DRC_ITEM* item = m_ClearanceListBox->GetItem( selection );
-        if( item )
-        {
-            m_brdEditor->CursorGoto( item->GetPointA(), false );
-            m_brdEditor->GetGalCanvas()->GetView()->SetCenter( VECTOR2D( item->GetPointA() ) );
-        }
-    }
-
-    event.Skip();
-}
-
-
-void DIALOG_DRC_CONTROL::OnUnconnectedSelectionEvent( wxCommandEvent& event )
-{
-    int selection = event.GetSelection();
-
-    if( selection != wxNOT_FOUND )
-    {
-        // until a MARKER is selected, this button is not enabled.
-        m_DeleteCurrentMarkerButton->Enable( true );
-
-        // Find the selected DRC_ITEM in the listbox, position cursor there,
-        // at the first of the two pads.
-        const DRC_ITEM* item = m_UnconnectedListBox->GetItem( selection );
-        if( item )
-        {
-            m_brdEditor->CursorGoto( item->GetPointA(), false );
-            m_brdEditor->GetGalCanvas()->GetView()->SetCenter( VECTOR2D( item->GetPointA() ) );
-        }
-    }
-
-    event.Skip();
-}
-
-
-void DIALOG_DRC_CONTROL::RedrawDrawPanel()
-{
     m_brdEditor->GetCanvas()->Refresh();
 }
 
 
-void DIALOG_DRC_CONTROL::DelDRCMarkers()
+void DIALOG_DRC_CONTROL::deleteAllMarkers()
 {
-    m_brdEditor->SetCurItem( NULL );           // clear curr item, because it could be a DRC marker
-    m_ClearanceListBox->DeleteAllItems();
-    m_UnconnectedListBox->DeleteAllItems();
-    m_DeleteCurrentMarkerButton->Enable( false );
-}
+    // Clear current selection list to avoid selection of deleted items
+    m_brdEditor->GetToolManager()->RunAction( PCB_ACTIONS::selectionClear, true );
 
-
-const wxString DIALOG_DRC_CONTROL::makeValidFileNameReport()
-{
-    wxFileName fn = m_RptFilenameCtrl->GetValue();
-
-    if( !fn.HasExt() )
-    {
-        fn.SetExt( ReportFileExtension );
-        m_RptFilenameCtrl->SetValue( fn.GetFullPath() );
-    }
-
-    // Ensure it is an absolute filename. if it is given relative
-    // it will be made relative to the project
-    if( !fn.IsAbsolute() )
-    {
-        wxString prj_path =  Prj().GetProjectPath();
-        fn.MakeAbsolute( prj_path );
-    }
-
-    return fn.GetFullPath();
+    m_markerTreeModel->DeleteAllItems();
+    m_unconnectedTreeModel->DeleteAllItems();
 }
 
 
@@ -621,28 +495,36 @@ bool DIALOG_DRC_CONTROL::writeReport( const wxString& aFullFileName )
     if( fp == NULL )
         return false;
 
-    int count;
+    int       count;
+    EDA_UNITS units = GetUserUnits();
 
-    fprintf( fp, "** Drc report for %s **\n",
-             TO_UTF8( m_brdEditor->GetBoard()->GetFileName() ) );
+    fprintf( fp, "** Drc report for %s **\n", TO_UTF8( m_brdEditor->GetBoard()->GetFileName() ) );
 
     wxDateTime now = wxDateTime::Now();
 
     fprintf( fp, "** Created on %s **\n", TO_UTF8( now.Format( wxT( "%F %T" ) ) ) );
 
-    count = m_ClearanceListBox->GetItemCount();
+    count = m_markersProvider->GetCount();
 
-    fprintf( fp, "\n** Found %d DRC errors **\n", count );
+    fprintf( fp, "\n** Found %d DRC violations **\n", count );
 
-    for( int i = 0;  i<count;  ++i )
-        fprintf( fp, "%s", TO_UTF8( m_ClearanceListBox->GetItem( i )->ShowReport()) );
+    for( int i = 0; i < count; ++i )
+        fprintf( fp, "%s", TO_UTF8( m_markersProvider->GetItem( i )->ShowReport( units ) ) );
 
-    count = m_UnconnectedListBox->GetItemCount();
+    count = m_unconnectedItemsProvider->GetCount();
 
     fprintf( fp, "\n** Found %d unconnected pads **\n", count );
 
-    for( int i = 0;  i<count;  ++i )
-        fprintf( fp, "%s", TO_UTF8( m_UnconnectedListBox->GetItem( i )->ShowReport() ) );
+    for( int i = 0; i < count; ++i )
+        fprintf( fp, "%s", TO_UTF8( m_unconnectedItemsProvider->GetItem( i )->ShowReport( units ) ) );
+
+    count = m_footprintWarningsProvider->GetCount();
+
+    fprintf( fp, "\n** Found %d Footprint errors **\n", count );
+
+    for( int i = 0; i < count; ++i )
+        fprintf( fp, "%s", TO_UTF8( m_footprintWarningsProvider->GetItem( i )->ShowReport( units ) ) );
+
 
     fprintf( fp, "\n** End of Report **\n" );
 
@@ -652,46 +534,108 @@ bool DIALOG_DRC_CONTROL::writeReport( const wxString& aFullFileName )
 }
 
 
-void DIALOG_DRC_CONTROL::OnDeleteOneClick( wxCommandEvent& event )
+void DIALOG_DRC_CONTROL::OnDeleteOneClick( wxCommandEvent& aEvent )
 {
-    int selectedIndex;
-    int curTab = m_Notebook->GetSelection();
-
-    if( curTab == 0 )
+    if( m_Notebook->GetSelection() == 0 )
     {
-        selectedIndex = m_ClearanceListBox->GetSelection();
+        // Clear the selection.  It may be the selected DRC marker.
+        m_brdEditor->GetToolManager()->RunAction( PCB_ACTIONS::selectionClear, true );
 
-        if( selectedIndex != wxNOT_FOUND )
-        {
-            m_ClearanceListBox->DeleteItem( selectedIndex );
+        m_markerTreeModel->DeleteCurrentItem( true );
 
-            // redraw the pcb
-            RedrawDrawPanel();
-        }
+        // redraw the pcb
+        refreshBoardEditor();
     }
-    else if( curTab == 1 )
+    else if( m_Notebook->GetSelection() == 1 )
     {
-        selectedIndex = m_UnconnectedListBox->GetSelection();
-
-        if( selectedIndex != wxNOT_FOUND )
-        {
-            m_UnconnectedListBox->DeleteItem( selectedIndex );
-
-            /* these unconnected DRC_ITEMs are not currently visible on the pcb
-             *  RedrawDrawPanel();
-             */
-        }
+        m_unconnectedTreeModel->DeleteCurrentItem( true );
+    }
+    else if( m_Notebook->GetSelection() == 2 )
+    {
+        m_footprintWarningsTreeModel->DeleteCurrentItem( true );
     }
 
-    UpdateDisplayedCounts();
+    updateDisplayedCounts();
 }
 
 
-void DIALOG_DRC_CONTROL::UpdateDisplayedCounts()
+void DIALOG_DRC_CONTROL::OnDeleteAllClick( wxCommandEvent& aEvent )
 {
-    int marker_count = m_ClearanceListBox->GetItemCount();
-    int unconnected_count = m_UnconnectedListBox->GetItemCount();
+    deleteAllMarkers();
 
-    m_MarkerCount->SetLabelText( wxString::Format( "%d", marker_count ) );
-    m_UnconnectedCount->SetLabelText( wxString::Format( "%d", unconnected_count ) );
+    refreshBoardEditor();
+    updateDisplayedCounts();
+}
+
+
+void DIALOG_DRC_CONTROL::updateDisplayedCounts()
+{
+    wxString msg;
+
+    // First the tab headers:
+    //
+
+    if( m_tester->m_drcRun )
+    {
+        msg.sprintf( m_markersTitleTemplate, m_markerTreeModel->GetDRCItemCount() );
+        m_Notebook->SetPageText( 0, msg );
+
+        msg.sprintf( m_unconnectedTitleTemplate, m_unconnectedTreeModel->GetDRCItemCount() );
+        m_Notebook->SetPageText( 1, msg );
+
+        if( m_tester->m_footprintsTested )
+            msg.sprintf( m_footprintsTitleTemplate, m_footprintWarningsTreeModel->GetDRCItemCount() );
+        else
+        {
+            msg = m_footprintsTitleTemplate;
+            msg.Replace( wxT( "%d" ), _( "not run" ) );
+        }
+        m_Notebook->SetPageText( 2, msg );
+    }
+    else
+    {
+        msg = m_markersTitleTemplate;
+        msg.Replace( wxT( "(%d)" ), wxEmptyString );
+        m_Notebook->SetPageText( 0, msg );
+
+        msg = m_unconnectedTitleTemplate;
+        msg.Replace( wxT( "(%d)" ), wxEmptyString );
+        m_Notebook->SetPageText( 1, msg );
+
+        msg = m_footprintsTitleTemplate;
+        msg.Replace( wxT( "(%d)" ), wxEmptyString );
+        m_Notebook->SetPageText( 2, msg );
+    }
+
+    // And now the badges:
+    //
+
+    int numErrors = 0;
+    int numWarnings = 0;
+    int numExcluded = 0;
+
+    if( m_markersProvider )
+    {
+        numErrors += m_markersProvider->GetCount( RPT_SEVERITY_ERROR );
+        numWarnings += m_markersProvider->GetCount( RPT_SEVERITY_WARNING );
+        numExcluded += m_markersProvider->GetCount( RPT_SEVERITY_EXCLUSION );
+    }
+
+    if( m_unconnectedItemsProvider )
+    {
+        numErrors += m_unconnectedItemsProvider->GetCount( RPT_SEVERITY_ERROR );
+        numWarnings += m_unconnectedItemsProvider->GetCount( RPT_SEVERITY_WARNING );
+        numExcluded += m_unconnectedItemsProvider->GetCount( RPT_SEVERITY_EXCLUSION );
+    }
+
+    if( m_footprintWarningsProvider )
+    {
+        numErrors += m_footprintWarningsProvider->GetCount( RPT_SEVERITY_ERROR );
+        numWarnings += m_footprintWarningsProvider->GetCount( RPT_SEVERITY_WARNING );
+        numExcluded += m_footprintWarningsProvider->GetCount( RPT_SEVERITY_EXCLUSION );
+    }
+
+    m_errorsBadge->SetBitmap( MakeBadge( RPT_SEVERITY_ERROR, numErrors, m_errorsBadge ) );
+    m_warningsBadge->SetBitmap( MakeBadge( RPT_SEVERITY_WARNING, numWarnings, m_warningsBadge ) );
+    m_exclusionsBadge->SetBitmap( MakeBadge( RPT_SEVERITY_EXCLUSION, numExcluded, m_exclusionsBadge ) );
 }

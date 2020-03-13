@@ -4,7 +4,7 @@
  * Copyright (C) 2015 Jean-Pierre Charras, jp.charras at wanadoo.fr
  * Copyright (C) 2012 SoftPLC Corporation, Dick Hollenbeck <dick@softplc.com>
  * Copyright (C) 2015-2016 Wayne Stambaugh <stambaughw@verizon.net>
- * Copyright (C) 1992-2016 KiCad Developers, see AUTHORS.txt for contributors.
+ * Copyright (C) 1992-2019 KiCad Developers, see AUTHORS.txt for contributors.
  *
  * This program is free software; you can redistribute it and/or
  * modify it under the terms of the GNU General Public License
@@ -24,162 +24,29 @@
  * 51 Franklin Street, Fifth Floor, Boston, MA  02110-1301, USA
  */
 
-/**
- * @file microwave.cpp
- * @brief Microwave pcb layout code.
- */
-
 #include <fctsys.h>
-#include <class_drawpanel.h>
 #include <confirm.h>
 #include <trigo.h>
 #include <kicad_string.h>
 #include <gestfich.h>
-#include <wxPcbStruct.h>
+#include <pcb_edit_frame.h>
 #include <dialog_helpers.h>
 #include <richio.h>
 #include <filter_reader.h>
-#include <gr_basic.h>
-#include <macros.h>
 #include <base_units.h>
-#include <validators.h> //
-
+#include <validators.h>
+#include <dialog_text_entry.h>
 #include <class_board.h>
 #include <class_module.h>
 #include <class_edge_mod.h>
-
 #include <microwave/microwave_inductor.h>
-
 #include <pcbnew.h>
+#include <math/util.h>      // for KiROUND
 
 static std::vector< wxRealPoint > PolyEdges;
 static double  ShapeScaleX, ShapeScaleY;
 static wxSize  ShapeSize;
 static int     PolyShapeType;
-
-
-static void Exit_Self( EDA_DRAW_PANEL* aPanel, wxDC* aDC );
-
-static void ShowBoundingBoxMicroWaveInductor( EDA_DRAW_PANEL* aPanel,
-                                              wxDC*           aDC,
-                                              const wxPoint&  aPosition,
-                                              bool            aErase );
-
-
-///> An inductor pattern temporarily used during mu-wave inductor creation
-static MWAVE::INDUCTOR_PATTERN s_inductor_pattern;
-
-///> A flag set to true when mu-wave inductor is being created
-static bool s_inductorInProgress = false;
-
-
-/* This function shows on screen the bounding box of the inductor that will be
- * created at the end of the build inductor process
- */
-static void ShowBoundingBoxMicroWaveInductor( EDA_DRAW_PANEL* aPanel, wxDC* aDC,
-                                              const wxPoint& aPosition, bool aErase )
-{
-    /* Calculate the orientation and size of the box containing the inductor:
-     * the box is a rectangle with height = length/2
-     * the shape is defined by a rectangle, nor necessary horizontal or vertical
-     */
-    GRSetDrawMode( aDC, GR_XOR );
-
-    wxPoint poly[5];
-    wxPoint pt    = s_inductor_pattern.m_End - s_inductor_pattern.m_Start;
-    double  angle = -ArcTangente( pt.y, pt.x );
-    int     len   = KiROUND( EuclideanNorm( pt ) );
-
-    // calculate corners
-    pt.x = 0; pt.y = len / 4;
-    RotatePoint( &pt, angle );
-    poly[0] = s_inductor_pattern.m_Start + pt;
-    poly[1] = s_inductor_pattern.m_End + pt;
-    pt.x    = 0; pt.y = -len / 4;
-    RotatePoint( &pt, angle );
-    poly[2] = s_inductor_pattern.m_End + pt;
-    poly[3] = s_inductor_pattern.m_Start + pt;
-    poly[4] = poly[0];
-
-    if( aErase )
-    {
-        GRPoly( aPanel->GetClipBox(), aDC, 5, poly, false, 0, YELLOW, YELLOW );
-    }
-
-    s_inductor_pattern.m_End = aPanel->GetParent()->GetCrossHairPosition();
-    pt    = s_inductor_pattern.m_End - s_inductor_pattern.m_Start;
-    angle = -ArcTangente( pt.y, pt.x );
-    len   = KiROUND( EuclideanNorm( pt ) );
-
-    // calculate new corners
-    pt.x = 0; pt.y = len / 4;
-    RotatePoint( &pt, angle );
-    poly[0] = s_inductor_pattern.m_Start + pt;
-    poly[1] = s_inductor_pattern.m_End + pt;
-    pt.x    = 0; pt.y = -len / 4;
-    RotatePoint( &pt, angle );
-    poly[2] = s_inductor_pattern.m_End + pt;
-    poly[3] = s_inductor_pattern.m_Start + pt;
-    poly[4] = poly[0];
-
-    GRPoly( aPanel->GetClipBox(), aDC, 5, poly, false, 0, YELLOW, YELLOW );
-}
-
-
-void Exit_Self( EDA_DRAW_PANEL* aPanel, wxDC* aDC )
-{
-    if( aPanel->IsMouseCaptured() )
-        aPanel->CallMouseCapture( aDC, wxDefaultPosition, false );
-
-    s_inductorInProgress = false;
-    aPanel->SetMouseCapture( NULL, NULL );
-}
-
-
-void PCB_EDIT_FRAME::Begin_Self( wxDC* DC )
-{
-    if( s_inductorInProgress )
-    {
-        m_canvas->CallMouseCapture( DC, wxDefaultPosition, false );
-        m_canvas->SetMouseCapture( NULL, NULL );
-
-        wxString errorMessage;
-
-        // Prepare parameters for inductor
-        // s_inductor_pattern.m_Start is already initialized,
-        // when s_inductor_pattern.m_Flag == false
-        s_inductor_pattern.m_Width = GetDesignSettings().GetCurrentTrackWidth();
-        s_inductor_pattern.m_End = GetCrossHairPosition();
-
-        wxASSERT( s_inductorInProgress );
-        s_inductorInProgress = false;
-
-        MODULE* footprint = MWAVE::CreateMicrowaveInductor( s_inductor_pattern, this, errorMessage );
-
-        if( footprint )
-        {
-            SetMsgPanel( footprint );
-            footprint->Draw( m_canvas, DC, GR_OR );
-        }
-
-        else if( !errorMessage.IsEmpty() )
-            DisplayError( this, errorMessage );
-
-        return;
-    }
-
-    s_inductor_pattern.m_Start = GetCrossHairPosition();
-    s_inductor_pattern.m_End   = s_inductor_pattern.m_Start;
-
-    s_inductorInProgress = true;
-
-    // Update the initial coordinates.
-    GetScreen()->m_O_Curseur = GetCrossHairPosition();
-    UpdateStatusBar();
-
-    m_canvas->SetMouseCapture( ShowBoundingBoxMicroWaveInductor, Exit_Self );
-    m_canvas->CallMouseCapture( DC, wxDefaultPosition, false );
-}
 
 
 MODULE* PCB_EDIT_FRAME::CreateMuWaveBaseFootprint( const wxString& aValue,
@@ -204,7 +71,7 @@ MODULE* PCB_EDIT_FRAME::CreateMuWaveBaseFootprint( const wxString& aValue,
     {
         D_PAD* pad = new D_PAD( module );
 
-        module->PadsList().PushFront( pad );
+        module->Add( pad, ADD_MODE::INSERT );
 
         int tw = GetDesignSettings().GetCurrentTrackWidth();
         pad->SetSize( wxSize( tw, tw ) );
@@ -241,21 +108,21 @@ MODULE* PCB_EDIT_FRAME::Create_MuWaveComponent( int shape_type )
     switch( shape_type )
     {
     case 0:
-        msg = _( "Gap" );
-        cmp_name = wxT( "muwave_gap" );
+        msg = _( "Gap Size:" );
+        cmp_name = "muwave_gap";
         text_size = gap_size;
         break;
 
     case 1:
-        msg = _( "Stub" );
-        cmp_name  = wxT( "muwave_stub" );
+        msg = _( "Stub Size:" );
+        cmp_name  = "muwave_stub";
         text_size = gap_size;
         pad_count = 2;
         break;
 
     case 2:
-        msg = _( "Arc Stub" );
-        cmp_name  = wxT( "muwave_arcstub" );
+        msg = _( "Arc Stub Radius Value:" );
+        cmp_name  = "muwave_arcstub";
         pad_count = 1;
         break;
 
@@ -264,17 +131,14 @@ MODULE* PCB_EDIT_FRAME::Create_MuWaveComponent( int shape_type )
         break;
     }
 
-    wxString          value = StringFromValue( g_UserUnit, gap_size );
-    wxTextEntryDialog dlg( this, msg, _( "Create microwave module" ), value );
+    wxString value = StringFromValue( GetUserUnits(), gap_size );
+    WX_TEXT_ENTRY_DIALOG dlg( this, msg, _( "Create microwave module" ), value );
 
     if( dlg.ShowModal() != wxID_OK )
-    {
-        m_canvas->MoveCursorToCrossHair();
         return NULL; // cancelled by user
-    }
 
     value    = dlg.GetValue();
-    gap_size = ValueFromString( g_UserUnit, value );
+    gap_size = ValueFromString( GetUserUnits(), value );
 
     bool abort = false;
 
@@ -282,14 +146,11 @@ MODULE* PCB_EDIT_FRAME::Create_MuWaveComponent( int shape_type )
     {
         double            fcoeff = 10.0, fval;
         msg.Printf( wxT( "%3.1f" ), angle / fcoeff );
-        wxTextEntryDialog angledlg( this, _( "Angle in degrees:" ),
-                                    _( "Create microwave module" ), msg );
+        WX_TEXT_ENTRY_DIALOG angledlg( this, _( "Angle in degrees:" ),
+                                       _( "Create microwave module" ), msg );
 
         if( angledlg.ShowModal() != wxID_OK )
-        {
-            m_canvas->MoveCursorToCrossHair();
             return NULL; // cancelled by user
-        }
 
         msg = angledlg.GetValue();
 
@@ -306,13 +167,11 @@ MODULE* PCB_EDIT_FRAME::Create_MuWaveComponent( int shape_type )
     }
 
     if( abort )
-    {
-        m_canvas->MoveCursorToCrossHair();
         return NULL;
-    }
 
     module = CreateMuWaveBaseFootprint( cmp_name, text_size, pad_count );
-    pad    = module->PadsList();
+    auto it = module->Pads().begin();
+    pad = *it;
 
     switch( shape_type )
     {
@@ -322,7 +181,7 @@ MODULE* PCB_EDIT_FRAME::Create_MuWaveComponent( int shape_type )
 
         pad->SetX( pad->GetPos0().x + pad->GetPosition().x );
 
-        pad = pad->Next();
+        pad = *( it + 1 );
 
         pad->SetX0( oX + gap_size + pad->GetSize().x );
         pad->SetX( pad->GetPos0().x + pad->GetPosition().x );
@@ -330,7 +189,7 @@ MODULE* PCB_EDIT_FRAME::Create_MuWaveComponent( int shape_type )
 
     case 1:     //Stub :
         pad->SetName( wxT( "1" ) );
-        pad = pad->Next();
+        pad = *( it + 1 );
         pad->SetY0( -( gap_size + pad->GetSize().y ) / 2 );
         pad->SetSize( wxSize( pad->GetSize().x, gap_size ) );
         pad->SetY( pad->GetPos0().y + pad->GetPosition().y );
@@ -345,7 +204,7 @@ MODULE* PCB_EDIT_FRAME::Create_MuWaveComponent( int shape_type )
         std::vector<wxPoint> polyPoints;
         polyPoints.reserve( numPoints );
 
-        polyPoints.push_back( wxPoint( 0, 0 ) );
+        polyPoints.emplace_back( wxPoint( 0, 0 ) );
 
         int theta = -angle / 2;
 
@@ -364,7 +223,7 @@ MODULE* PCB_EDIT_FRAME::Create_MuWaveComponent( int shape_type )
         // Close the polygon:
         polyPoints.push_back( polyPoints[0] );
 
-        pad->AddPrimitive( polyPoints, 0 );  // add a polygonal basic shape
+        pad->AddPrimitivePoly( polyPoints, 0 ); // add a polygonal basic shape
     }
         break;
 
@@ -373,7 +232,6 @@ MODULE* PCB_EDIT_FRAME::Create_MuWaveComponent( int shape_type )
     }
 
     module->CalculateBoundingBox();
-    GetBoard()->m_Status_Pcb = 0;
     OnModify();
     return module;
 }
@@ -420,7 +278,6 @@ private:
      *  Each line is the X Y coord (normalized units from 0 to 1)
      */
     void ReadDataShapeDescr( wxCommandEvent& event );
-    void AcceptOptions( wxCommandEvent& event );
 
     DECLARE_EVENT_TABLE()
 };
@@ -459,10 +316,7 @@ MWAVE_POLYGONAL_SHAPE_DLG::MWAVE_POLYGONAL_SHAPE_DLG( PCB_EDIT_FRAME* parent,
                            _( "Read Shape Description File..." ) );
     RightBoxSizer->Add( Button, 0, wxGROW | wxALL, 5 );
 
-    wxString shapelist[3] =
-    {
-        _( "Normal" ), _( "Symmetrical" ), _( "Mirrored" )
-    };
+    wxString shapelist[] = { _( "Normal" ), _( "Symmetrical" ), _( "Mirrored" ) };
 
     m_ShapeOptionCtrl = new wxRadioBox( this, -1, _( "Shape Option" ),
                                         wxDefaultPosition, wxDefaultSize, 3,
@@ -470,7 +324,8 @@ MWAVE_POLYGONAL_SHAPE_DLG::MWAVE_POLYGONAL_SHAPE_DLG( PCB_EDIT_FRAME* parent,
                                         wxRA_SPECIFY_COLS );
     LeftBoxSizer->Add( m_ShapeOptionCtrl, 0, wxGROW | wxALL, 5 );
 
-    m_SizeCtrl = new EDA_SIZE_CTRL( this, _( "Size" ), ShapeSize, g_UserUnit, LeftBoxSizer );
+    m_SizeCtrl = new EDA_SIZE_CTRL( this, _( "Size" ), ShapeSize, parent->GetUserUnits(),
+                                    LeftBoxSizer );
 
     GetSizer()->SetSizeHints( this );
 }
@@ -494,12 +349,11 @@ void MWAVE_POLYGONAL_SHAPE_DLG::OnOkClick( wxCommandEvent& event )
 void MWAVE_POLYGONAL_SHAPE_DLG::ReadDataShapeDescr( wxCommandEvent& event )
 {
     static wxString lastpath;       // To remember the last open path during a session
-    wxString mask = wxT( "*.*" );
+    wxString mask = wxFileSelectorDefaultWildcardStr;
 
-    wxString FullFileName = EDA_FILE_SELECTOR( _( "Read descr shape file" ),
-                                               lastpath, FullFileName,
-                                               wxEmptyString, mask,
-                                               this, wxFD_OPEN, true );
+    wxString FullFileName = EDA_FILE_SELECTOR( _( "Read descr shape file" ), lastpath,
+                                               FullFileName, wxEmptyString, mask, this,
+                                               wxFD_OPEN, true );
     if( FullFileName.IsEmpty() )
         return;
 
@@ -579,11 +433,9 @@ MODULE* PCB_EDIT_FRAME::Create_MuWavePolygonShape()
     int          pad_count = 2;
     EDGE_MODULE* edge;
 
-    MWAVE_POLYGONAL_SHAPE_DLG dlg( this, wxPoint( -1, -1 ) );
+    MWAVE_POLYGONAL_SHAPE_DLG dlg( this, wxDefaultPosition );
 
     int ret = dlg.ShowModal();
-
-    m_canvas->MoveCursorToCrossHair();
 
     if( ret != wxID_OK )
     {
@@ -618,11 +470,13 @@ MODULE* PCB_EDIT_FRAME::Create_MuWavePolygonShape()
     wxPoint offset;
     offset.x = -ShapeSize.x / 2;
 
-    pad1   = module->PadsList();
+    auto it = module->Pads().begin();
+
+    pad1 = *it;
     pad1->SetX0( offset.x );
     pad1->SetX( pad1->GetPos0().x );
 
-    pad2 = pad1->Next();
+    pad2 = *( ++it );
     pad2->SetX0( offset.x + ShapeSize.x );
     pad2->SetX( pad2->GetPos0().x );
 
@@ -631,28 +485,28 @@ MODULE* PCB_EDIT_FRAME::Create_MuWavePolygonShape()
     edge->SetShape( S_POLYGON );
     edge->SetLayer( F_Cu );
 
-    module->GraphicalItemsList().PushFront( edge );
+    module->Add( edge, ADD_MODE::INSERT );
 
     // Get the corner buffer of the polygonal edge
     std::vector<wxPoint> polyPoints;
     polyPoints.reserve( PolyEdges.size() + 2 );
 
     // Init start point coord:
-    polyPoints.push_back( wxPoint( offset.x, 0 ) );
+    polyPoints.emplace_back( wxPoint( offset.x, 0 ) );
 
     wxPoint last_coordinate;
 
-    for( unsigned ii = 0; ii < PolyEdges.size(); ii++ )  // Copy points
+    for( wxRealPoint& pt: PolyEdges )  // Copy points
     {
-        last_coordinate.x = KiROUND( PolyEdges[ii].x * ShapeScaleX );
-        last_coordinate.y = -KiROUND( PolyEdges[ii].y * ShapeScaleY );
+        last_coordinate.x = KiROUND( pt.x * ShapeScaleX );
+        last_coordinate.y = -KiROUND( pt.y * ShapeScaleY );
         last_coordinate += offset;
         polyPoints.push_back( last_coordinate );
     }
 
     // finish the polygonal shape
     if( last_coordinate.y != 0 )
-        polyPoints.push_back( wxPoint( last_coordinate.x, 0 ) );
+        polyPoints.emplace_back( wxPoint( last_coordinate.x, 0 ) );
 
     switch( PolyShapeType )
     {
@@ -661,7 +515,7 @@ MODULE* PCB_EDIT_FRAME::Create_MuWavePolygonShape()
         break;
 
     case 1:     // Symmetric shape: add the symmetric (mirrored) shape
-        for( int ndx = polyPoints.size() - 1; ndx >= 0; --ndx )
+        for( int ndx = (int) polyPoints.size() - 1; ndx >= 0; --ndx )
         {
             wxPoint pt = polyPoints[ndx];
             pt.y = -pt.y;   // mirror about X axis
@@ -671,87 +525,11 @@ MODULE* PCB_EDIT_FRAME::Create_MuWavePolygonShape()
     }
 
     edge->SetPolyPoints( polyPoints );
+    // Set the polygon outline thickness to 0, only the polygonal shape is filled
+    // without extra thickness
+    edge->SetWidth( 0 );
     PolyEdges.clear();
     module->CalculateBoundingBox();
-    GetBoard()->m_Status_Pcb = 0;
     OnModify();
     return module;
-}
-
-
-void PCB_EDIT_FRAME::Edit_Gap( wxDC* DC, MODULE* aModule )
-{
-    int      gap_size, oX;
-    D_PAD*   pad, * next_pad;
-    wxString msg;
-
-    if( aModule == NULL )
-        return;
-
-    // Test if module is a gap type (name begins with GAP, and has 2 pads).
-    msg = aModule->GetReference().Left( 3 );
-
-    if( msg != wxT( "GAP" ) )
-        return;
-
-    pad = aModule->PadsList();
-
-    if( pad == NULL )
-    {
-        DisplayError( this, _( "No pad for this footprint" ) );
-        return;
-    }
-
-    next_pad = pad->Next();
-
-    if( next_pad == NULL )
-    {
-        DisplayError( this, _( "Only one pad for this footprint" ) );
-        return;
-    }
-
-    aModule->Draw( m_canvas, DC, GR_XOR );
-
-    // Calculate the current dimension.
-    gap_size = next_pad->GetPos0().x - pad->GetPos0().x - pad->GetSize().x;
-
-    // Entrer the desired length of the gap.
-    msg = StringFromValue( g_UserUnit, gap_size );
-    wxTextEntryDialog dlg( this, _( "Gap:" ), _( "Create Microwave Gap" ), msg );
-
-    if( dlg.ShowModal() != wxID_OK )
-        return; // cancelled by user
-
-    msg = dlg.GetValue();
-    gap_size = ValueFromString( g_UserUnit, msg );
-
-    // Updating sizes of pads forming the gap.
-    int tw = GetDesignSettings().GetCurrentTrackWidth();
-    pad->SetSize( wxSize( tw, tw ) );
-
-    pad->SetY0( 0 );
-    oX = -( gap_size + pad->GetSize().x ) / 2;
-    pad->SetX0( oX );
-
-    wxPoint padpos = pad->GetPos0() + aModule->GetPosition();
-
-    RotatePoint( &padpos.x, &padpos.y,
-                 aModule->GetPosition().x, aModule->GetPosition().y, aModule->GetOrientation() );
-
-    pad->SetPosition( padpos );
-
-    tw = GetDesignSettings().GetCurrentTrackWidth();
-    next_pad->SetSize( wxSize( tw, tw ) );
-
-    next_pad->SetY0( 0 );
-    next_pad->SetX0( oX + gap_size + next_pad->GetSize().x );
-
-    padpos = next_pad->GetPos0() + aModule->GetPosition();
-
-    RotatePoint( &padpos.x, &padpos.y,
-                 aModule->GetPosition().x, aModule->GetPosition().y, aModule->GetOrientation() );
-
-    next_pad->SetPosition( padpos );
-
-    aModule->Draw( m_canvas, DC, GR_OR );
 }

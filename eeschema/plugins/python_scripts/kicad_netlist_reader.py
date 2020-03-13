@@ -372,7 +372,7 @@ class comp():
         """
 
         field = self.element.get("field", "name", name)
-        if field == "" and libraryToo:
+        if field == "" and libraryToo and self.libpart:
             field = self.libpart.getField(name)
         return field
 
@@ -394,13 +394,13 @@ class comp():
 
     def getFootprint(self, libraryToo=True):
         ret = self.element.get("footprint")
-        if ret =="" and libraryToo:
+        if ret == "" and libraryToo and self.libpart:
             ret = self.libpart.getFootprint()
         return ret
 
     def getDatasheet(self, libraryToo=True):
         ret = self.element.get("datasheet")
-        if ret == '' and libraryToo:
+        if ret == "" and libraryToo and self.libpart:
             ret = self.libpart.getDatasheet()
         return ret
 
@@ -408,7 +408,7 @@ class comp():
         return self.element.get("tstamp")
 
     def getDescription(self):
-        return self.libpart.getDescription()
+        return self.element.get("libsource", "description")
 
 
 class netlist():
@@ -618,10 +618,14 @@ class netlist():
             if not exclude:
                 ret.append(c)
 
-        # Sort first by ref as this makes for easier to read BOM's
-        def f(v):
-            return re.sub(r'([A-z]+)[0-9]+', r'\1', v) + '%08i' % int(re.sub(r'[A-z]+([0-9]+)', r'\1', v))
-        ret.sort(key=lambda g: f(g.getRef()))
+        # The key to sort the components in the BOM
+        # This sorts using a natural sorting order (e.g. 100 after 99), and if it wasn't used
+        # the normal sort would place 100 before 99 since it only would look at the first digit.
+        def sortKey( str ):
+            return [ int(t) if t.isdigit() else t.lower()
+                    for t in re.split( '(\d+)', str ) ]
+
+        ret.sort(key=lambda g: sortKey(g.getRef()))
 
         return ret
 
@@ -660,15 +664,19 @@ class netlist():
                 # Add the new component group to the groups list
                 groups.append(newgroup)
 
-        # Each group is a list of components, we need to sort each list first
-        # to get them in order as this makes for easier to read BOM's
-        def f(v):
-            return re.sub(r'([A-z]+)[0-9]+', r'\1', v) + '%08i' % int(re.sub(r'[A-z]+([0-9]+)', r'\1', v))
+        # The key to sort the components in the BOM
+        # This sorts using a natural sorting order (e.g. 100 after 99), and if it wasn't used
+        # the normal sort would place 100 before 99 since it only would look at the first digit.
+        def sortKey( str ):
+            return [ int(t) if t.isdigit() else t.lower()
+                    for t in re.split( '(\d+)', str ) ]
+
         for g in groups:
-            g = sorted(g, key=lambda g: f(g.getRef()))
+            #g = sorted(g, key=lambda g: sortKey(g.getRef()))
+            g.sort(key=lambda g: sortKey(g.getRef()))
 
         # Finally, sort the groups to order the references alphabetically
-        groups = sorted(groups, key=lambda group: f(group[0].getRef()))
+        groups.sort(key=lambda group: sortKey(group[0].getRef()))
 
         return groups
 
@@ -681,7 +689,12 @@ class netlist():
             ret = c.getField(field, False)
             if ret != '':
                 return ret
-        return group[0].getLibPart().getField(field)
+
+        libpart = group[0].getLibPart()
+        if not libpart:
+            return ''
+
+        return libpart.getField(field)
 
     def getGroupFootprint(self, group):
         """Return the whatever is known about the Footprint by consulting each

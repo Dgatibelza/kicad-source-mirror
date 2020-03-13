@@ -63,10 +63,15 @@ const char kicad_vertex_shader[] = R"SHADER_SOURCE(
 #version 120
 
 // Shader types
-const float SHADER_LINE                 = 1.0;
 const float SHADER_FILLED_CIRCLE        = 2.0;
 const float SHADER_STROKED_CIRCLE       = 3.0;
 const float SHADER_FONT                 = 4.0;
+const float SHADER_LINE_A               = 5.0;
+const float SHADER_LINE_B               = 6.0;
+const float SHADER_LINE_C               = 7.0;
+const float SHADER_LINE_D               = 8.0;
+const float SHADER_LINE_E               = 9.0;
+const float SHADER_LINE_F               = 10.0;
 
 // Minimum line width
 const float MIN_WIDTH = 1.0;
@@ -74,61 +79,166 @@ const float MIN_WIDTH = 1.0;
 attribute vec4 attrShaderParams;
 varying vec4 shaderParams;
 varying vec2 circleCoords;
+uniform float worldPixelSize;
+uniform vec2 screenPixelSize;
+uniform float pixelSizeMultiplier;
+uniform float minLinePixelWidth;
+
+
+float roundr( float f, float r )
+{
+    return floor(f / r + 0.5) * r;
+}
+
+vec4 roundv( vec4 x, vec2 t)
+{
+    return vec4( roundr(x.x, t.x), roundr(x.y, t.y), x.z, x.w );
+}
+
+void computeLineCoords( bool posture, vec2 vs, vec2 vp, vec2 texcoord, vec2 dir, float lineWidth, bool endV )
+{
+    float lineLength = length(vs);
+    vec4 screenPos = gl_ModelViewProjectionMatrix * gl_Vertex + vec4(1, 1, 0, 0);
+    float w = ((lineWidth == 0.0) ? worldPixelSize : lineWidth );
+    float pixelWidth = roundr( w / worldPixelSize, 1.0 );
+    float aspect = ( lineLength + w ) / w;
+    vec4 color = gl_Color;
+    vec2 s = sign( vec2( gl_ModelViewProjectionMatrix[0][0], gl_ModelViewProjectionMatrix[1][1] ) );
+
+
+    if( pixelWidth < 1.0 )
+        pixelWidth = 1.0;
+
+    if ( pixelWidth > 1.0 || pixelSizeMultiplier > 1.0 )
+    {
+        vec2 offsetNorm = (vs + vp) * pixelWidth / lineLength * 0.5;
+        vec4 screenOffset = vec4( s.x * offsetNorm.x  * screenPixelSize.x, s.y * offsetNorm.y  * screenPixelSize.y , 0, 0);
+        vec4 adjust = vec4(-1, -1, 0, 0);
+
+        if( mod( pixelWidth * pixelSizeMultiplier, 2.0 ) > 0.9 )
+        {
+            adjust += vec4( screenPixelSize.x, screenPixelSize.y, 0, 0 ) * 0.5;
+        }
+
+        gl_Position = roundv(screenPos, screenPixelSize) + adjust + screenOffset;
+
+        shaderParams[0] = SHADER_LINE_A;
+    }
+    else {
+        vec4 pos0 = screenPos;
+        pos0.xy += ( posture ? dir.xy : dir.yx ) * screenPixelSize / 2.0;
+
+        if(posture)
+        {
+            pos0.y -= screenPixelSize.y * sign(vs.y) * 0.5;
+        }
+        else
+        {
+            pos0.x += screenPixelSize.x * sign(vs.x) * 0.5;
+        }
+
+        gl_Position = pos0 - vec4(1, 1, 0, 0);
+        shaderParams[0] = SHADER_LINE_B;
+    }
+
+    shaderParams[1] = aspect;
+
+    gl_TexCoord[0].st = vec2(aspect * texcoord.x, texcoord.y);
+    gl_FrontColor = gl_Color;
+}
+
+
+void computeCircleCoords( float mode, float vertexIndex, float radius, float lineWidth )
+{
+    vec4 delta;
+    vec4 center = roundv( gl_ModelViewProjectionMatrix * gl_Vertex + vec4(1, 1, 0, 0), screenPixelSize );
+    float pixelWidth = roundr( lineWidth / worldPixelSize, 1.0);
+    float pixelR = roundr( radius / worldPixelSize, 1.0);
+
+    if( mode == SHADER_STROKED_CIRCLE)
+        pixelR += pixelWidth / 2.0;
+
+    vec4 adjust = vec4(-1, -1, 0, 0);
+
+    if( pixelWidth < 1.0 )
+        pixelWidth = 1.0;
+
+    if( vertexIndex == 1.0 )
+    {
+        circleCoords = vec2( -sqrt( 3.0 ), -1.0 );
+        delta = vec4( -pixelR * sqrt(3.0), -pixelR, 0, 0 );
+    }
+    else if( vertexIndex == 2.0 )
+    {
+        circleCoords = vec2( sqrt( 3.0 ), -1.0 );
+        delta = vec4( pixelR * sqrt( 3.0 ), -pixelR, 0, 0 );
+    }
+    else if( vertexIndex == 3.0 )
+    {
+        circleCoords = vec2( 0.0, 2.0 );
+        delta = vec4( 0, 2 * pixelR, 0, 0 );
+    }
+    else if( vertexIndex == 4.0 )
+    {
+        circleCoords = vec2( -sqrt( 3.0 ), 0.0 );
+        delta = vec4( 0, 0, 0, 0 );
+    }
+    else if( vertexIndex == 5.0 )
+    {
+        circleCoords = vec2( sqrt( 3.0 ), 0.0 );
+        delta = vec4( 0, 0, 0, 0 );
+    }
+    else if( vertexIndex == 6.0 )
+    {
+        circleCoords = vec2( 0.0, 2.0 );
+        delta = vec4( 0, 0, 0, 0 );
+    }
+
+    shaderParams[2] = pixelR;
+    shaderParams[3] = pixelWidth;
+
+    delta.x *= screenPixelSize.x;
+    delta.y *= screenPixelSize.y;
+
+    gl_Position = center + delta + adjust;
+    gl_FrontColor = gl_Color;
+}
+
 
 void main()
 {
+    float mode = attrShaderParams[0];
+
     // Pass attributes to the fragment shader
     shaderParams = attrShaderParams;
 
-    if( shaderParams[0] == SHADER_LINE )
-    {
-        float lineWidth = shaderParams[3];
-        float worldScale = abs( gl_ModelViewMatrix[0][0] );
+    float lineWidth = shaderParams.y;
+    vec2 vs = shaderParams.zw;
+    vec2 vp = vec2(-vs.y, vs.x);
+    bool posture = abs( vs.x ) < abs(vs.y);
 
-        // Make lines appear to be at least 1 pixel wide
-        if( worldScale * lineWidth < MIN_WIDTH )
-            gl_Position = gl_ModelViewProjectionMatrix *
-                ( gl_Vertex + vec4( shaderParams.yz * MIN_WIDTH / ( worldScale * lineWidth ), 0.0, 0.0 ) );
-        else
-            gl_Position = gl_ModelViewProjectionMatrix *
-                ( gl_Vertex + vec4( shaderParams.yz, 0.0, 0.0 ) );
-    }
-    else if( ( shaderParams[0] == SHADER_STROKED_CIRCLE ) ||
-             ( shaderParams[0] == SHADER_FILLED_CIRCLE  ) )
-    {
-        // Compute relative circle coordinates basing on indices
-        // Circle
-        if( shaderParams[1] == 1.0 )
-            circleCoords = vec2( -sqrt( 3.0 ), -1.0 );
-        else if( shaderParams[1] == 2.0 )
-            circleCoords = vec2( sqrt( 3.0 ), -1.0 );
-        else if( shaderParams[1] == 3.0 )
-            circleCoords = vec2( 0.0, 2.0 );
-
-        // Semicircle
-        else if( shaderParams[1] == 4.0 )
-            circleCoords = vec2( -3.0 / sqrt( 3.0 ), 0.0 );
-        else if( shaderParams[1] == 5.0 )
-            circleCoords = vec2( 3.0 / sqrt( 3.0 ), 0.0 );
-        else if( shaderParams[1] == 6.0 )
-            circleCoords = vec2( 0.0, 2.0 );
-
-        // Make the line appear to be at least 1 pixel wide
-        float lineWidth = shaderParams[3];
-        float worldScale = abs( gl_ModelViewMatrix[0][0] );
-
-        if( worldScale * lineWidth < MIN_WIDTH )
-            shaderParams[3] = shaderParams[3] / ( worldScale * lineWidth );
-
-        gl_Position = ftransform();
-    }
+    if( mode == SHADER_LINE_A )
+        computeLineCoords( posture,  -vs, vp,  vec2( -1, -1 ), vec2( -1, 0 ), lineWidth, false );
+    else if( mode == SHADER_LINE_B )
+        computeLineCoords( posture,  -vs, -vp, vec2( -1,  1 ), vec2(  1, 0 ), lineWidth, false );
+    else if( mode == SHADER_LINE_C )
+        computeLineCoords( posture,  vs, -vp,  vec2(  1,  1 ), vec2(  1, 0 ), lineWidth, true );
+    else if( mode == SHADER_LINE_D )
+        computeLineCoords( posture,  vs, -vp,  vec2( -1, -1 ), vec2(  1, 0 ), lineWidth, true );
+    else if( mode == SHADER_LINE_E )
+        computeLineCoords( posture,  vs, vp,   vec2( -1,  1 ), vec2( -1, 0 ), lineWidth, true );
+    else if( mode == SHADER_LINE_F )
+        computeLineCoords( posture,  -vs, vp,  vec2(  1,  1 ), vec2( -1, 0 ), lineWidth, false );
+    else if( mode == SHADER_FILLED_CIRCLE || mode == SHADER_STROKED_CIRCLE)
+        computeCircleCoords( mode, shaderParams.y, shaderParams.z, shaderParams.w );
     else
     {
         // Pass through the coordinates like in the fixed pipeline
         gl_Position = ftransform();
+        gl_FrontColor = gl_Color;
+
     }
 
-    gl_FrontColor = gl_Color;
 }
 
 )SHADER_SOURCE";
@@ -168,14 +278,16 @@ const char kicad_fragment_shader[] = R"SHADER_SOURCE(
 #define USE_MSDF
 
 // Shader types
-const float SHADER_LINE                 = 1.0;
 const float SHADER_FILLED_CIRCLE        = 2.0;
 const float SHADER_STROKED_CIRCLE       = 3.0;
 const float SHADER_FONT                 = 4.0;
+const float SHADER_LINE_A               = 5.0;
+const float SHADER_LINE_B               = 6.0;
 
 varying vec4 shaderParams;
 varying vec2 circleCoords;
 uniform sampler2D fontTexture;
+uniform float worldPixelSize;
 
 // Needed to reconstruct the mipmap level / texel derivative
 uniform int fontTextureWidth;
@@ -188,15 +300,53 @@ void filledCircle( vec2 aCoord )
         discard;
 }
 
+float pixelSegDistance( vec2 aCoord )
+{
+    if( shaderParams[0] == SHADER_LINE_B )
+    {
+        gl_FragColor = gl_Color;
+        return 0.0;
+    }
+
+    float aspect = shaderParams[1];
+    float dist;
+    vec2 v = vec2( 1.0 - ( aspect - abs( aCoord.s ) ), aCoord.t );
+
+    if( v.x <= 0.0 )
+    {
+        dist = abs( aCoord.t );
+    }
+    else
+    {
+        dist = length( v );
+    }
+
+    return dist;
+}
+
+int isPixelInSegment( vec2 aCoord )
+{
+    return pixelSegDistance( aCoord ) <= 1.0 ? 1 : 0;
+}
+
+
 
 void strokedCircle( vec2 aCoord, float aRadius, float aWidth )
 {
-    float outerRadius = aRadius + ( aWidth / 2 );
-    float innerRadius = aRadius - ( aWidth / 2 );
-    float relWidth = innerRadius / outerRadius;
+    float outerRadius = max( aRadius, 0.0 );
+    float innerRadius = max( aRadius - aWidth, 0.0 );
 
     if( ( dot( aCoord, aCoord ) < 1.0 ) &&
-        ( dot( aCoord, aCoord ) > relWidth * relWidth ) )
+        ( dot( aCoord, aCoord ) * ( outerRadius * outerRadius ) > innerRadius * innerRadius ) )
+        gl_FragColor = gl_Color;
+    else
+        discard;
+}
+
+
+void drawLine( vec2 aCoord )
+{
+    if( isPixelInSegment( aCoord ) != 0)
         gl_FragColor = gl_Color;
     else
         discard;
@@ -211,7 +361,11 @@ float median( vec3 v )
 
 void main()
 {
-    if( shaderParams[0] == SHADER_FILLED_CIRCLE )
+    if( shaderParams[0] == SHADER_LINE_A )
+    {
+        drawLine( gl_TexCoord[0].st );
+    }
+    else if( shaderParams[0] == SHADER_FILLED_CIRCLE )
     {
         filledCircle( circleCoords );
     }
@@ -223,7 +377,7 @@ void main()
     {
         vec2 tex           = shaderParams.yz;
 
-        // Unless we're streching chars it is okay to consider
+        // Unless we're stretching chars it is okay to consider
         // one derivative for filtering
         float derivative   = length( dFdx( tex ) ) * fontTextureWidth / 4;
 
@@ -404,7 +558,7 @@ const char smaa_base_shader_p1[] = R"SHADER_SOURCE(
  *     half-rate linear filtering on GCN.
  *
  *     If SMAA is applied to 64-bit color buffers, switching to point filtering
- *     when accesing them will increase the performance. Search for
+ *     when accessing them will increase the performance. Search for
  *     'SMAASamplePoint' to see which textures may benefit from point
  *     filtering, and where (which is basically the color input in the edge
  *     detection and resolve passes).
@@ -519,14 +673,14 @@ const char smaa_base_shader_p1[] = R"SHADER_SOURCE(
  *      - DX10.1:   D3D10_STANDARD_MULTISAMPLE_PATTERN or
  *      - DX11:     D3D11_STANDARD_MULTISAMPLE_PATTERN
  *
- *    This allows to ensure that the subsample order matches the table in
+ *    This allows one to ensure that the subsample order matches the table in
  *    @SUBSAMPLE_INDICES.
  *
  *    (*) In the case of DX10, we refer the reader to:
  *      - SMAA::detectMSAAOrder and
  *      - SMAA::msaaReorder
  *
- *    These functions allow to match the standard multisample patterns by
+ *    These functions allows one to match the standard multisample patterns by
  *    detecting the subsample order for a specific GPU, and reordering
  *    them appropriately.
  *
@@ -620,8 +774,8 @@ const char smaa_base_shader_p1[] = R"SHADER_SOURCE(
  * performance.
  *
  * Range: [0, 0.5]
- *   0.1 is a reasonable value, and allows to catch most visible edges.
- *   0.05 is a rather overkill value, that allows to catch 'em all.
+ *   0.1 is a reasonable value, and allows one to catch most visible edges.
+ *   0.05 is a rather overkill value, that allows one to catch 'em all.
  *
  *   If temporal supersampling is used, 0.2 could be a reasonable value, as low
  *   contrast edges are properly filtered by just 2x.
@@ -686,7 +840,7 @@ const char smaa_base_shader_p2[] = R"SHADER_SOURCE(
  * If there is an neighbor edge that has SMAA_LOCAL_CONTRAST_FACTOR times
  * bigger contrast than current edge, current edge will be discarded.
  *
- * This allows to eliminate spurious crossing edges, and is based on the fact
+ * This allows one to eliminate spurious crossing edges, and is based on the fact
  * that, if there is too much contrast in a direction, that will hide
  * perceptually contrast in the other neighbors.
  */
@@ -695,7 +849,7 @@ const char smaa_base_shader_p2[] = R"SHADER_SOURCE(
 #endif
 
 /**
- * Predicated thresholding allows to better preserve texture details and to
+ * Predicated thresholding allows one to better preserve texture details and to
  * improve performance, by decreasing the number of detected edges using an
  * additional buffer like the light accumulation buffer, object ids or even the
  * depth buffer (the depth buffer usage may be limited to indoor or short range
@@ -742,7 +896,7 @@ const char smaa_base_shader_p2[] = R"SHADER_SOURCE(
 #endif
 
 /**
- * Temporal reprojection allows to remove ghosting artifacts when using
+ * Temporal reprojection allows one to remove ghosting artifacts when using
  * temporal supersampling. We use the CryEngine 3 method which also introduces
  * velocity weighting. This feature is of extreme importance for totally
  * removing ghosting. More information here:
@@ -757,8 +911,8 @@ const char smaa_base_shader_p2[] = R"SHADER_SOURCE(
 #endif
 
 /**
- * SMAA_REPROJECTION_WEIGHT_SCALE controls the velocity weighting. It allows to
- * remove ghosting trails behind the moving object, which are not removed by
+ * SMAA_REPROJECTION_WEIGHT_SCALE controls the velocity weighting. It allows one
+ * to remove ghosting trails behind the moving object, which are not removed by
  * just using reprojection. Using low values will exhibit ghosting, while using
  * high values will disable temporal supersampling under motion.
  *
@@ -1132,7 +1286,7 @@ float2 SMAADepthEdgeDetectionPS(float2 texcoord,
 #if !defined(SMAA_DISABLE_DIAG_DETECTION)
 
 /**
- * Allows to decode two binary values from a bilinear-filtered access.
+ * Allows one to decode two binary values from a bilinear-filtered access.
  */
 float2 SMAADecodeDiagBilinearAccess(float2 e) {
     // Bilinear access for fetching 'e' have a 0.25 offset, and we are
@@ -1158,7 +1312,7 @@ float4 SMAADecodeDiagBilinearAccess(float4 e) {
 }
 
 /**
- * These functions allows to perform diagonal pattern searches.
+ * These functions allows one to perform diagonal pattern searches.
  */
 float2 SMAASearchDiag1(SMAATexture2D(edgesTex), float2 texcoord, float2 dir, out float2 e) {
     float4 coord = float4(texcoord, -1.0, 1.0);
@@ -1290,7 +1444,7 @@ float2 SMAACalculateDiagWeights(SMAATexture2D(edgesTex), SMAATexture2D(areaTex),
 // Horizontal/Vertical Search Functions
 
 /**
- * This allows to determine how much length should we add in the last step
+ * This allows one to determine how much length should we add in the last step
  * of the searches. It takes the bilinearly interpolated edge (see
  * @PSEUDO_GATHER4), and adds 0, 1 or 2, depending on which edges and
  * crossing edges are active.
@@ -1322,8 +1476,8 @@ float SMAASearchXLeft(SMAATexture2D(edgesTex), SMAATexture2D(searchTex), float2 
      * @PSEUDO_GATHER4
      * This texcoord has been offset by (-0.25, -0.125) in the vertex shader to
      * sample between edge, thus fetching four edges in a row.
-     * Sampling with different offsets in each direction allows to disambiguate
-     * which edges are active from the four fetched ones.
+     * Sampling with different offsets in each direction allows one to
+     * disambiguate which edges are active from the four fetched ones.
      */
     float2 e = float2(0.0, 1.0);
     while (texcoord.x > end &&
@@ -1484,8 +1638,8 @@ float4 SMAABlendingWeightCalculationPS(float2 texcoord,
         coords.z = SMAASearchXRight(SMAATexturePass2D(edgesTex), SMAATexturePass2D(searchTex), offset[0].zw, offset[2].y);
         d.y = coords.z;
 
-        // We want the distances to be in pixel units (doing this here allow to
-        // better interleave arithmetic and memory accesses):
+        // We want the distances to be in pixel units (doing this here allow one
+        // to better interleave arithmetic and memory accesses):
         d = abs(round(mad(SMAA_RT_METRICS.zz, d, -pixcoord.xx)));
 
         // SMAAArea below needs a sqrt, as the areas texture is compressed

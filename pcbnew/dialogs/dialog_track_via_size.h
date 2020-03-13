@@ -25,7 +25,7 @@
 #ifndef __dialog_track_via_size__
 #define __dialog_track_via_size__
 
-#include <wx_unit_binder.h>
+#include <widgets/unit_binder.h>
 
 #include "dialog_track_via_size_base.h"
 
@@ -36,23 +36,18 @@ class DIALOG_TRACK_VIA_SIZE : public DIALOG_TRACK_VIA_SIZE_BASE
 {
 public:
     /** Constructor */
-    DIALOG_TRACK_VIA_SIZE( wxWindow* aParent, BOARD_DESIGN_SETTINGS& aSettings );
+    DIALOG_TRACK_VIA_SIZE( EDA_DRAW_FRAME* aParent, BOARD_DESIGN_SETTINGS& aSettings );
+
+    bool TransferDataFromWindow() override;
+    bool TransferDataToWindow() override;
 
 protected:
-    WX_UNIT_BINDER m_trackWidth;
-    WX_UNIT_BINDER m_viaDiameter;
-    WX_UNIT_BINDER m_viaDrill;
+    UNIT_BINDER m_trackWidth;
+    UNIT_BINDER m_viaDiameter;
+    UNIT_BINDER m_viaDrill;
 
     // Routings settings that are modified by the dialog.
     BOARD_DESIGN_SETTINGS& m_settings;
-
-    ///> Checks if values given in the dialog are sensible.
-    bool check();
-
-    // Handlers for DIALOG_TRACK_VIA_SIZE_BASE events.
-    void onClose( wxCloseEvent& aEvent ) override;
-    void onOkClick( wxCommandEvent& aEvent ) override;
-    void onCancelClick( wxCommandEvent& aEvent ) override;
 };
 
 #endif // __dialog_track_via_size__

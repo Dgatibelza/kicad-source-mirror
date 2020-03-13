@@ -41,7 +41,7 @@ class SHOVE;
 class OPTIMIZER;
 
 /**
- * Class MEANDER_PLACER
+ * MEANDER_PLACER
  *
  * Single track length matching/meandering tool.
  */
@@ -59,7 +59,16 @@ public:
     virtual bool Move( const VECTOR2I& aP, ITEM* aEndItem ) override;
 
     /// @copydoc PLACEMENT_ALGO::FixRoute()
-    virtual bool FixRoute( const VECTOR2I& aP, ITEM* aEndItem ) override;
+    virtual bool FixRoute( const VECTOR2I& aP, ITEM* aEndItem, bool aForceFinish = false ) override;
+
+    /// @copydoc PLACEMENT_ALGO::CommitPlacement()
+    bool CommitPlacement() override;
+
+    /// @copydoc PLACEMENT_ALGO::AbortPlacement()
+    bool AbortPlacement() override;
+
+    /// @copydoc PLACEMENT_ALGO::HasPlacedAnything()
+    bool HasPlacedAnything() const override;
 
     /// @copydoc PLACEMENT_ALGO::CurrentNode()
     NODE* CurrentNode( bool aLoopsRemoved = false ) const override;
@@ -80,7 +89,7 @@ public:
     int CurrentLayer() const override;
 
     /// @copydoc MEANDER_PLACER_BASE::TuningInfo()
-    virtual const wxString TuningInfo() const override;
+    virtual const wxString TuningInfo( EDA_UNITS aUnits ) const override;
 
     /// @copydoc MEANDER_PLACER_BASE::TuningStatus()
     virtual TUNING_STATUS TuningStatus() const override;
@@ -89,15 +98,11 @@ public:
     bool CheckFit ( MEANDER_SHAPE* aShape ) override;
 
 protected:
-
-    bool doMove( const VECTOR2I& aP, ITEM* aEndItem, int aTargetLength );
+    bool doMove( const VECTOR2I& aP, ITEM* aEndItem, long long int aTargetLength );
 
     void setWorld( NODE* aWorld );
 
-    virtual int origPathLength() const;
-
-    ///> pointer to world to search colliding items
-    NODE* m_world;
+    virtual long long int origPathLength() const;
 
     ///> current routing start point (end of tail, beginning of head)
     VECTOR2I m_currentStart;
@@ -113,7 +118,7 @@ protected:
     MEANDERED_LINE   m_result;
     SEGMENT*         m_initialSegment;
 
-    int m_lastLength;
+    long long int m_lastLength;
     TUNING_STATUS m_lastStatus;
 };
 

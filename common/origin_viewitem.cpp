@@ -2,6 +2,7 @@
  * This program source code file is part of KiCad, a free EDA CAD application.
  *
  * Copyright (C) 2015 CERN
+ * Copyright (C) 2020 KiCad Developers, see AUTHORS.txt for contributors.
  * @author Maciej Suminski <maciej.suminski@cern.ch>
  *
  * This program is free software; you can redistribute it and/or
@@ -22,15 +23,40 @@
  * 51 Franklin Street, Fifth Floor, Boston, MA  02110-1301, USA
  */
 
-#include <origin_viewitem.h>
+#include <array>
+#include <eda_draw_frame.h>
 #include <gal/graphics_abstraction_layer.h>
+#include <geometry/geometry_utils.h>
+#include <origin_viewitem.h>
 
 using namespace KIGFX;
 
 ORIGIN_VIEWITEM::ORIGIN_VIEWITEM( const COLOR4D& aColor, MARKER_STYLE aStyle, int aSize, const VECTOR2D& aPosition ) :
-    EDA_ITEM( NOT_USED ),   // this item is never added to a BOARD so it needs no type
-    m_position( aPosition ), m_size( aSize ), m_color( aColor ), m_style( aStyle ), m_drawAtZero( false )
+    BOARD_ITEM( nullptr, NOT_USED ),   // this item is never added to a BOARD so it needs no type
+    m_position( aPosition ),
+    m_size( aSize ),
+    m_color( aColor ),
+    m_style( aStyle ),
+    m_drawAtZero( false )
 {
+}
+
+
+ORIGIN_VIEWITEM::ORIGIN_VIEWITEM( const VECTOR2D& aPosition, STATUS_FLAGS flags ) :
+    BOARD_ITEM( nullptr, NOT_USED ),   // this item is never added to a BOARD so it needs no type
+    m_position( aPosition ),
+    m_size( NOT_USED ),
+    m_color( UNSPECIFIED_COLOR ),
+    m_style( NO_GRAPHIC ),
+    m_drawAtZero( false )
+{
+    SetFlags( flags );
+}
+
+
+ORIGIN_VIEWITEM* ORIGIN_VIEWITEM::Clone() const
+{
+    return new ORIGIN_VIEWITEM( m_color, m_style, m_size, m_position );
 }
 
 
@@ -41,12 +67,11 @@ const BOX2I ORIGIN_VIEWITEM::ViewBBox() const
     return bbox;
 }
 
-
 void ORIGIN_VIEWITEM::ViewDraw( int, VIEW* aView ) const
 {
     auto gal = aView->GetGAL();
-    // Nothing to do if the target shouldn't be drawn at 0,0 and that's where the target is. This
-    // mimics the Legacy canvas that doesn't display most targets at 0,0
+
+    // Nothing to do if the target shouldn't be drawn at 0,0 and that's where the target is.
     if( !m_drawAtZero && ( m_position.x == 0 ) && ( m_position.y == 0 ) )
         return;
 
@@ -62,7 +87,7 @@ void ORIGIN_VIEWITEM::ViewDraw( int, VIEW* aView ) const
 
     switch( m_style )
     {
-        case NONE:
+        case NO_GRAPHIC:
             break;
 
         case CROSS:
@@ -72,6 +97,40 @@ void ORIGIN_VIEWITEM::ViewDraw( int, VIEW* aView ) const
             gal->DrawLine( m_position - VECTOR2D( 0, scaledSize.y ),
                             m_position + VECTOR2D( 0, scaledSize.y ) );
             break;
+
+        case DASH_LINE:
+        {
+            gal->DrawCircle( m_position, scaledSize.x / 4 );
+
+            VECTOR2D start( m_position );
+            VECTOR2D end( m_end );
+            EDA_RECT clip( wxPoint( start ), wxSize( end.x - start.x, end.y - start.y ) );
+            clip.Normalize();
+
+            double               theta = atan2( end.y - start.y, end.x - start.x );
+            std::array<double,2> strokes = { DASH_MARK_LEN( 1 ), DASH_GAP_LEN( 1 ) };
+
+            for( size_t i = 0; i < 10000; ++i )
+            {
+                VECTOR2D next( start.x + strokes[ i % 2 ] * cos( theta ),
+                               start.y + strokes[ i % 2 ] * sin( theta ) );
+
+                // Drawing each segment can be done rounded to ints.
+                wxPoint segStart( KiROUND( start.x ), KiROUND( start.y ) );
+                wxPoint segEnd( KiROUND( next.x ), KiROUND( next.y ) );
+
+                if( ClipLine( &clip, segStart.x, segStart.y, segEnd.x, segEnd.y ) )
+                    break;
+                else if( i % 2 == 0 )
+                    gal->DrawLine( segStart, segEnd );
+
+                start = next;
+            }
+
+            gal->DrawLine( m_position, m_end );
+            gal->DrawCircle( m_end, scaledSize.x / 4 );
+            break;
+        }
 
         case X:
         case CIRCLE_X:

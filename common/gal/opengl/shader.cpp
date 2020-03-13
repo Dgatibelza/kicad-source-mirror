@@ -34,6 +34,7 @@
 #include <cassert>
 
 #include <gal/opengl/shader.h>
+#include <vector>
 
 using namespace KIGFX;
 
@@ -100,8 +101,9 @@ bool SHADER::Link()
     programInfo( programNumber );
 
     // Check the Link state
-    glGetObjectParameterivARB( programNumber, GL_OBJECT_LINK_STATUS_ARB,
-                               (GLint*) &isShaderLinked );
+    GLint tmp;
+    glGetObjectParameterivARB( programNumber, GL_OBJECT_LINK_STATUS_ARB, &tmp );
+    isShaderLinked = !!tmp;
 
 #ifdef DEBUG
     if( !isShaderLinked )
@@ -154,6 +156,12 @@ void SHADER::SetParameter( int parameterNumber, float f0, float f1, float f2, fl
     assert( (unsigned)parameterNumber < parameterLocation.size() );
     float arr[4] = { f0, f1, f2, f3 };
     glUniform4fv( parameterLocation[parameterNumber], 1, arr );
+}
+
+void SHADER::SetParameter( int aParameterNumber, const VECTOR2D& aValue ) const
+{
+    assert( (unsigned)aParameterNumber < parameterLocation.size() );
+    glUniform2f( parameterLocation[aParameterNumber], aValue.x, aValue.y );
 }
 
 
@@ -258,7 +266,19 @@ bool SHADER::loadShaderFromStringArray( SHADER_TYPE aShaderType, const char** aA
     if( status != GL_TRUE )
     {
         shaderInfo( shaderNumber );
-        throw std::runtime_error( "Shader compilation error" );
+
+        GLint maxLength = 0;
+        glGetShaderiv( shaderNumber, GL_INFO_LOG_LENGTH, &maxLength );
+
+        // The maxLength includes the NULL character
+        std::vector<GLchar> errorLog( (size_t) maxLength );
+        glGetShaderInfoLog( shaderNumber, maxLength, &maxLength, &errorLog[0] );
+
+        // Provide the infolog in whatever manor you deem best.
+        // Exit with failure.
+        glDeleteShader( shaderNumber ); // Don't leak the shader.
+
+        throw std::runtime_error( &errorLog[0] );
     }
 
     glAttachShader( programNumber, shaderNumber );

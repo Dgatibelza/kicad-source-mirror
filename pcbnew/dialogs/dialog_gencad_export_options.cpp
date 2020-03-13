@@ -2,6 +2,8 @@
  * This program source code file is part of KiCad, a free EDA CAD application.
  *
  * Copyright (C) 2017 CERN
+ * Copyright (C) 2018-2019 KiCad Developers, see change_log.txt for contributors.
+ *
  * @author Maciej Suminski <maciej.suminski@cern.ch>
  *
  * This program is free software; you can redistribute it and/or
@@ -24,50 +26,46 @@
 
 #include "dialog_gencad_export_options.h"
 
-#include <wxPcbStruct.h>
+#include <pcb_edit_frame.h>
 #include <class_board.h>
 #include <project.h>
 #include <confirm.h>
-
+#include <wildcards_and_files_ext.h>
+#include <wx/filepicker.h>
 #include <wx/statline.h>
-#include <wx/button.h>
 
-DIALOG_GENCAD_EXPORT_OPTIONS::DIALOG_GENCAD_EXPORT_OPTIONS( PCB_EDIT_FRAME* aParent )
-    : DIALOG_SHIM( aParent, wxID_ANY, _( "Export to GenCAD settings" ) )
+
+DIALOG_GENCAD_EXPORT_OPTIONS::DIALOG_GENCAD_EXPORT_OPTIONS( PCB_EDIT_FRAME* aParent,
+                                                            const wxString& aPath )
+    : DIALOG_SHIM( aParent, wxID_ANY, _( "Export to GenCAD settings" ), wxDefaultPosition,
+                   wxDefaultSize, wxDEFAULT_DIALOG_STYLE | wxRESIZE_BORDER )
 {
-    // Obtain a potential filename for the exported file
-    wxFileName fn = aParent->GetBoard()->GetFileName();
-    fn.SetExt( "cad" );
-
-    // Create widgets
-    SetSizeHints( wxSize( 500, 200 ), wxDefaultSize );
-
     wxBoxSizer* m_mainSizer= new wxBoxSizer( wxVERTICAL );
 
-    wxBoxSizer* m_fileSizer = new wxBoxSizer( wxHORIZONTAL );
+    // Ctreate the file picker. The path will be set later, when the widget size
+    // is set to.
+    m_filePicker = new wxFilePickerCtrl( this, wxID_ANY, "",
+                                         _("Select a GenCAD export filename"),
+                                         GencadFileWildcard(),
+                                         wxDefaultPosition, wxSize( -1,-1 ),
+                                         wxFLP_SAVE|wxFLP_USE_TEXTCTRL );
+    m_mainSizer->Add( m_filePicker, 0, wxEXPAND | wxRIGHT, 5 );
 
-    m_filePath = new wxTextCtrl( this, wxID_ANY, fn.GetFullPath() );
-    m_fileSizer->Add( m_filePath, 1, wxALL, 5 );
-
-    wxButton* m_browseBtn = new wxButton( this, wxID_ANY, _( "Browse" ) );
-    m_browseBtn->Connect( wxEVT_COMMAND_BUTTON_CLICKED,
-            wxCommandEventHandler( DIALOG_GENCAD_EXPORT_OPTIONS::onBrowse ), NULL, this );
-    m_fileSizer->Add( m_browseBtn, 0, wxALL, 5 );
-
-    m_mainSizer->Add( m_fileSizer, 0, wxEXPAND, 5 );
-
-
-    m_optsSizer = new wxGridSizer( 0, 1, 0, 0 );
+    m_optsSizer = new wxGridSizer( 0, 1, 3, 3 );
     createOptCheckboxes();
-    m_mainSizer->Add( m_optsSizer, 1, wxEXPAND, 5 );
-
+    m_mainSizer->Add( m_optsSizer, 1, wxEXPAND | wxLEFT | wxRIGHT | wxBOTTOM, 5 );
 
     wxSizer* stdButtons = CreateSeparatedButtonSizer( wxOK | wxCANCEL );
-    m_mainSizer->Add( stdButtons, 0, wxEXPAND, 5 );
+    m_mainSizer->Add( stdButtons, 0, wxEXPAND | wxLEFT | wxRIGHT | wxBOTTOM, 5 );
 
     SetSizer( m_mainSizer );
-    Layout();
-    m_mainSizer->Fit( this );
+
+    // Now all widgets have the size fixed, call FinishDialogSettings
+    FinishDialogSettings();
+
+    // Set the path in m_filePicker, now the size is set
+    // (otherwize the text is truncated)
+    m_filePicker->SetPath( aPath );
 
     Centre( wxBOTH );
 }
@@ -105,7 +103,7 @@ std::map<GENCAD_EXPORT_OPT, bool> DIALOG_GENCAD_EXPORT_OPTIONS::GetAllOptions() 
 
 wxString DIALOG_GENCAD_EXPORT_OPTIONS::GetFileName() const
 {
-    return m_filePath->GetValue();
+    return m_filePicker->GetPath();
 }
 
 
@@ -117,7 +115,14 @@ bool DIALOG_GENCAD_EXPORT_OPTIONS::TransferDataFromWindow()
     wxString fn = GetFileName();
 
     if( wxFile::Exists( fn ) )
-        return IsOK( this, wxString::Format( _( "File %s already exists. Overwrite?" ), fn ) );
+    {
+        wxString msg = wxString::Format( _( "File %s already exists." ), fn );
+        KIDIALOG dlg( this, msg, _( "Confirmation" ), wxOK | wxCANCEL | wxICON_WARNING );
+        dlg.SetOKLabel( _( "Overwrite" ) );
+        dlg.DoNotShowCheckbox( __FILE__, __LINE__ );
+
+        return ( dlg.ShowModal() == wxID_OK );
+    }
 
     return true;
 }
@@ -127,30 +132,18 @@ void DIALOG_GENCAD_EXPORT_OPTIONS::createOptCheckboxes()
 {
     std::map<GENCAD_EXPORT_OPT, wxString> opts =
     {
-        { FLIP_BOTTOM_PADS,         _( "Flip bottom components padstacks" ) },
-        { UNIQUE_PIN_NAMES,         _( "Generate unique pin names" ) },
-        { INDIVIDUAL_SHAPES,        _( "Generate a new shape for each component (do not reuse shapes)" ) }
+        { FLIP_BOTTOM_PADS,    _( "Flip bottom footprint padstacks" ) },
+        { UNIQUE_PIN_NAMES,    _( "Generate unique pin names" ) },
+        { INDIVIDUAL_SHAPES,   _( "Generate a new shape for each footprint instance (do not reuse shapes)" ) },
+        { USE_AUX_ORIGIN,      _( "Use auxiliary axis as origin" ) },
+        { STORE_ORIGIN_COORDS, _( "Save the origin coordinates in the file" ) }
     };
 
     for( const auto& option : opts )
     {
         wxCheckBox* chkbox = new wxCheckBox( this, wxID_ANY, option.second );
         m_options[option.first] = chkbox;
-        m_optsSizer->Add( chkbox, 0, wxALL, 5 );
+        m_optsSizer->Add( chkbox );
     }
 }
 
-
-void DIALOG_GENCAD_EXPORT_OPTIONS::onBrowse( wxCommandEvent& aEvent )
-{
-    wxFileDialog dlg( this, _( "Save GenCAD Board File" ),
-        wxPathOnly( Prj().GetProjectFullName() ),
-        m_filePath->GetValue(),
-        _( "GenCAD 1.4 board files (.cad)|*.cad" ),
-        wxFD_SAVE | wxFD_OVERWRITE_PROMPT );
-
-    if( dlg.ShowModal() == wxID_CANCEL )
-        return;
-
-    m_filePath->SetValue( dlg.GetPath() );
-}

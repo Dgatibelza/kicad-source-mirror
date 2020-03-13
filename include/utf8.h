@@ -49,7 +49,7 @@ bool IsUTF8( const char* aString );
 
 
 /**
- * Class UTF8
+ * UTF8
  * is an 8 bit string that is assuredly encoded in UTF8, and supplies special
  * conversion support to and from wxString, to and from std::string, and has
  * non-mutating iteration over unicode characters.
@@ -128,24 +128,31 @@ public:
     {
         m_s += str.m_s;
         MAYBE_VERIFY_UTF8( c_str() );
-        return (UTF8&) *this;
+        return *this;
     }
 
     UTF8& operator+=( char ch )
     {
         m_s.operator+=( ch );
         MAYBE_VERIFY_UTF8( c_str() );
-        return (UTF8&) *this;
+        return *this;
     }
 
     UTF8& operator+=( const char* s )
     {
         m_s.operator+=( s );
         MAYBE_VERIFY_UTF8( c_str() );
-        return (UTF8&) *this;
+        return *this;
     }
 
-    static const std::string::size_type npos = std::string::npos;
+    /// Append a wide (unicode) char to the UTF8 string.
+    /// if this wide char is not a ASCII7 char, it will be added as a UTF8 multibyte seqence
+    /// @param w_ch is a UTF-16 value (can be a UTF-32 on Linux)
+    UTF8& operator+=( unsigned w_ch );
+
+    // std::string::npos is not constexpr, so we can't use it in an
+    // initializer.
+    static constexpr std::string::size_type npos = -1;
 
     UTF8& operator=( const wxString& o );
 
@@ -191,7 +198,7 @@ public:
 
 #ifndef SWIG
     /**
-     * class uni_iter
+     * uni_iter
      * is a non-mutating iterator that walks through unicode code points in the UTF8 encoded
      * string.  The normal ++(), ++(int), ->(), and *() operators are all supported
      * for read only access and some return an unsigned holding the unicode character

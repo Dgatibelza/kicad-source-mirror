@@ -1,13 +1,9 @@
-/**
- * @file cvpcb/readwrite_dlgs.cpp
- */
-
 /*
  * This program source code file is part of KiCad, a free EDA CAD application.
  *
- * Copyright (C) 2015 Jean-Pierre Charras, jean-pierre.charras
+ * Copyright (C) 2018 Jean-Pierre Charras, jean-pierre.charras
  * Copyright (C) 2011-2016 Wayne Stambaugh <stambaughw@verizon.net>
- * Copyright (C) 1992-2017 KiCad Developers, see AUTHORS.txt for contributors.
+ * Copyright (C) 1992-2018 KiCad Developers, see AUTHORS.txt for contributors.
  *
  * This program is free software; you can redistribute it and/or
  * modify it under the terms of the GNU General Public License
@@ -26,112 +22,18 @@
  * or you may write to the Free Software Foundation, Inc.,
  * 51 Franklin Street, Fifth Floor, Boston, MA  02110-1301, USA
  */
-#include <fctsys.h>
-#include <kiway.h>
-#include <common.h>
+
 #include <confirm.h>
-#include <build_version.h>
-#include <macros.h>
-#include <lib_id.h>
+#include <fctsys.h>
 #include <fp_lib_table.h>
-#include <reporter.h>
 #include <html_messagebox.h>
+#include <kiway.h>
+#include <lib_id.h>
+#include <macros.h>
 
-#include <cvpcb.h>
 #include <cvpcb_mainframe.h>
-#include <listview_classes.h>
-#include <wildcards_and_files_ext.h>
+#include <listboxes.h>
 #include <fp_conflict_assignment_selector.h>
-
-
-void CVPCB_MAINFRAME::SetNewPkg( const wxString& aFootprintName )
-{
-    COMPONENT* component;
-    int        componentIndex;
-
-    if( m_netlist.IsEmpty() )
-        return;
-
-    // If no component is selected, select the first one
-    if( m_compListBox->GetFirstSelected() < 0 )
-    {
-        componentIndex = 0;
-        m_compListBox->SetSelection( componentIndex, true );
-    }
-
-    // iterate over the selection
-    while( m_compListBox->GetFirstSelected() != -1 )
-    {
-        // Get the component for the current iteration
-        componentIndex = m_compListBox->GetFirstSelected();
-        component = m_netlist.GetComponent( componentIndex );
-
-        if( component == NULL )
-            return;
-
-        SetNewPkg( aFootprintName, componentIndex );
-
-        m_compListBox->SetSelection( componentIndex, false );
-    }
-
-    // select the next component, if there is one
-    if( componentIndex < (m_compListBox->GetCount() - 1) )
-        componentIndex++;
-
-    m_compListBox->SetSelection( componentIndex, true );
-
-    // update the statusbar
-    DisplayStatus();
-}
-
-
-void CVPCB_MAINFRAME::SetNewPkg( const wxString& aFootprintName, int aIndex )
-{
-    COMPONENT* component;
-
-    if( m_netlist.IsEmpty() )
-        return;
-
-    component = m_netlist.GetComponent( aIndex );
-
-    if( component == NULL )
-        return;
-
-    // Check to see if the component has already a footprint set.
-    bool hasFootprint = !component->GetFPID().empty();
-
-    LIB_ID fpid;
-
-    if( !aFootprintName.IsEmpty() )
-    {
-        wxCHECK_RET( fpid.Parse( aFootprintName ) < 0,
-                     wxString::Format( wxT( "<%s> is not a valid LIB_ID." ),
-                                       GetChars( aFootprintName ) ) );
-    }
-
-    component->SetFPID( fpid );
-
-    // create the new component description
-    wxString   description = wxString::Format( CMP_FORMAT, aIndex + 1,
-                        GetChars( component->GetReference() ),
-                        GetChars( component->GetValue() ),
-                        GetChars( FROM_UTF8( component->GetFPID().Format().c_str() ) ) );
-
-    // If the component hasn't had a footprint associated with it
-    // it now has, so we decrement the count of components without
-    // a footprint assigned.
-    if( !hasFootprint )
-        m_undefinedComponentCnt -= 1;
-
-    // Set the new description and deselect the processed component
-    m_compListBox->SetString( aIndex, description );
-
-    // Mark this "session" as modified
-    m_modified = true;
-
-    // update the statusbar
-    DisplayStatus();
-}
 
 
 /// Return true if the resultant LIB_ID has a certain nickname.  The guess
@@ -152,7 +54,7 @@ static int guessNickname( FP_LIB_TABLE* aTbl, LIB_ID* aFootprintId )
     {
         wxArrayString fpnames;
 
-        aTbl->FootprintEnumerate( fpnames, nicks[libNdx] );
+        aTbl->FootprintEnumerate( fpnames, nicks[libNdx], true );
 
         for( unsigned nameNdx = 0;  nameNdx<fpnames.size();   ++nameNdx )
         {
@@ -187,13 +89,15 @@ bool CVPCB_MAINFRAME::ReadNetListAndFpFiles( const std::string& aNetlist )
         return false;
 
     LoadProjectFile();
+
+    wxSafeYield();
+
     LoadFootprintFiles();
 
     BuildFOOTPRINTS_LISTBOX();
     BuildLIBRARY_LISTBOX();
 
     m_compListBox->Clear();
-    m_undefinedComponentCnt = 0;
 
     if( m_netlist.AnyFootprintsLinked() )
     {
@@ -246,7 +150,7 @@ bool CVPCB_MAINFRAME::ReadNetListAndFpFiles( const std::string& aNetlist )
 
                         case 1:
                             msg += wxString::Format( _(
-                                    "Component '%s' footprint '%s' was <b>not found</b> in any library.\n" ),
+                                    "Component \"%s\" footprint \"%s\" was <b>not found</b> in any library.\n" ),
                                     GetChars( component->GetReference() ),
                                     GetChars( component->GetFPID().GetLibItemName() )
                                     );
@@ -254,7 +158,7 @@ bool CVPCB_MAINFRAME::ReadNetListAndFpFiles( const std::string& aNetlist )
 
                         case 2:
                             msg += wxString::Format( _(
-                                    "Component '%s' footprint '%s' was found in <b>multiple</b> libraries.\n" ),
+                                    "Component \"%s\" footprint \"%s\" was found in <b>multiple</b> libraries.\n" ),
                                     GetChars( component->GetReference() ),
                                     GetChars( component->GetFPID().GetLibItemName() )
                                     );
@@ -370,12 +274,6 @@ bool CVPCB_MAINFRAME::ReadNetListAndFpFiles( const std::string& aNetlist )
                     GetChars( FROM_UTF8( component->GetFPID().Format().c_str() ) ) );
 
         m_compListBox->AppendLine( msg );
-
-        if( component->GetFPID().empty() )
-        {
-            m_undefinedComponentCnt += 1;
-            continue;
-        }
     }
 
     if( !m_netlist.IsEmpty() )
@@ -383,18 +281,31 @@ bool CVPCB_MAINFRAME::ReadNetListAndFpFiles( const std::string& aNetlist )
 
     DisplayStatus();
 
-    UpdateTitle();
     return true;
 }
 
 
-void CVPCB_MAINFRAME::SaveFootprintAssociation()
+bool CVPCB_MAINFRAME::SaveFootprintAssociation( bool doSaveSchematic )
 {
+    std::string      payload;
     STRING_FORMATTER sf;
 
     m_netlist.FormatBackAnnotation( &sf );
 
-    Kiway().ExpressMail( FRAME_SCH, MAIL_BACKANNOTATE_FOOTPRINTS, sf.GetString() );
+    payload = sf.GetString();
+    Kiway().ExpressMail( FRAME_SCH, MAIL_BACKANNOTATE_FOOTPRINTS, payload );
 
-    SetStatusText( _("Footprint association sent to Eeschema") );
+    if( doSaveSchematic )
+    {
+        payload = "";
+        Kiway().ExpressMail( FRAME_SCH, MAIL_SCH_SAVE, payload );
+
+        if( payload == "success" )
+            SetStatusText( _( "Schematic saved" ), 1 );
+    }
+
+    // Changes are saved, so reset the flag
+    m_modified = false;
+
+    return true;
 }

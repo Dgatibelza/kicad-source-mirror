@@ -31,26 +31,30 @@
 
 #include <fctsys.h>
 #include <gr_basic.h>
-#include <wxstruct.h>
 #include <trigo.h>
-#include <class_drawpanel.h>
-#include <class_pcb_screen.h>
+#include <pcb_screen.h>
 #include <confirm.h>
 #include <kicad_string.h>
 #include <richio.h>
 #include <macros.h>
 #include <math_for_graphics.h>
-#include <wxBasePcbFrame.h>
+#include <pcb_base_frame.h>
 #include <msgpanel.h>
 #include <base_units.h>
 #include <bitmaps.h>
+#include <math/util.h>      // for KiROUND
+#include <pgm_base.h>
+#include <settings/color_settings.h>
+#include <settings/settings_manager.h>
 
-#include <wxPcbStruct.h>
+#include <pcb_edit_frame.h>
 #include <class_board.h>
 #include <class_module.h>
 #include <class_edge_mod.h>
 
-#include <stdio.h>
+#include <view/view.h>
+
+#include <cstdio>
 
 EDGE_MODULE::EDGE_MODULE( MODULE* parent, STROKE_T aShape ) :
     DRAWSEGMENT( parent, PCB_MODULE_EDGE_T )
@@ -74,14 +78,20 @@ void EDGE_MODULE::SetLocalCoord()
     {
         m_Start0 = m_Start;
         m_End0 = m_End;
+        m_Bezier0_C1 = m_BezierC1;
+        m_Bezier0_C2 = m_BezierC2;
         return;
     }
 
     m_Start0 = m_Start - module->GetPosition();
     m_End0 = m_End - module->GetPosition();
+    m_Bezier0_C1 = m_BezierC1 - module->GetPosition();
+    m_Bezier0_C2 = m_BezierC2 - module->GetPosition();
     double angle = module->GetOrientation();
     RotatePoint( &m_Start0.x, &m_Start0.y, -angle );
     RotatePoint( &m_End0.x, &m_End0.y, -angle );
+    RotatePoint( &m_Bezier0_C1.x, &m_Bezier0_C1.y, -angle );
+    RotatePoint( &m_Bezier0_C2.x, &m_Bezier0_C2.y, -angle );
 }
 
 
@@ -91,45 +101,37 @@ void EDGE_MODULE::SetDrawCoord()
 
     m_Start = m_Start0;
     m_End   = m_End0;
+    m_BezierC1 = m_Bezier0_C1;
+    m_BezierC2 = m_Bezier0_C2;
 
     if( module )
     {
         RotatePoint( &m_Start.x, &m_Start.y, module->GetOrientation() );
-        RotatePoint( &m_End.x,   &m_End.y,   module->GetOrientation() );
+        RotatePoint( &m_End.x, &m_End.y, module->GetOrientation() );
+        RotatePoint( &m_BezierC1.x, &m_BezierC1.y, module->GetOrientation() );
+        RotatePoint( &m_BezierC2.x, &m_BezierC2.y, module->GetOrientation() );
 
         m_Start += module->GetPosition();
         m_End   += module->GetPosition();
+        m_BezierC1   += module->GetPosition();
+        m_BezierC2   += module->GetPosition();
     }
+
+    RebuildBezierToSegmentsPointsList( m_Width );
 }
 
 
-void EDGE_MODULE::Draw( EDA_DRAW_PANEL* panel, wxDC* DC, GR_DRAWMODE draw_mode,
-                        const wxPoint& offset )
+void EDGE_MODULE::Print( PCB_BASE_FRAME* aFrame, wxDC* DC, const wxPoint& offset )
 {
-    int         ux0, uy0, dx, dy, radius, StAngle, EndAngle;
-    PCB_LAYER_ID    curr_layer = ( (PCB_SCREEN*) panel->GetScreen() )->m_Active_Layer;
-
+    int     ux0, uy0, dx, dy, radius, StAngle, EndAngle;
     MODULE* module = (MODULE*) m_Parent;
+    BOARD*  brd = GetBoard( );
 
-    if( !module )
+    if( !module || !brd->IsLayerVisible( m_Layer ) )
         return;
 
-    BOARD* brd = GetBoard( );
-
-    if( brd->IsLayerVisible( m_Layer ) == false )
-        return;
-
-
-    auto frame = static_cast<PCB_BASE_FRAME*> ( panel->GetParent() );
-    auto color = frame->Settings().Colors().GetLayerColor( m_Layer );
-
-    DISPLAY_OPTIONS* displ_opts = (DISPLAY_OPTIONS*)panel->GetDisplayOptions();
-
-    if(( draw_mode & GR_ALLOW_HIGHCONTRAST ) && displ_opts && displ_opts->m_ContrastModeDisplay )
-    {
-        if( !IsOnLayer( curr_layer ) )
-            color = COLOR4D( DARKDARKGRAY );
-    }
+    COLOR4D color = Pgm().GetSettingsManager().GetColorSettings()->GetColor( m_Layer );
+    auto displ_opts = aFrame->GetDisplayOptions();
 
     ux0 = m_Start.x - offset.x;
     uy0 = m_Start.y - offset.y;
@@ -137,20 +139,19 @@ void EDGE_MODULE::Draw( EDA_DRAW_PANEL* panel, wxDC* DC, GR_DRAWMODE draw_mode,
     dx = m_End.x - offset.x;
     dy = m_End.y - offset.y;
 
-    GRSetDrawMode( DC, draw_mode );
-    bool filled = displ_opts ? displ_opts->m_DisplayModEdgeFill : FILLED;
+    bool filled = displ_opts.m_DisplayModEdgeFill;
 
     if( IsCopperLayer( m_Layer ) )
-        filled = displ_opts ? displ_opts->m_DisplayPcbTrackFill : FILLED;
+        filled = displ_opts.m_DisplayPcbTrackFill;
 
     switch( m_Shape )
     {
     case S_SEGMENT:
         if( filled )
-            GRLine( panel->GetClipBox(), DC, ux0, uy0, dx, dy, m_Width, color );
+            GRLine( nullptr, DC, ux0, uy0, dx, dy, m_Width, color );
         else
             // SKETCH Mode
-            GRCSegm( panel->GetClipBox(), DC, ux0, uy0, dx, dy, m_Width, color );
+            GRCSegm( nullptr, DC, ux0, uy0, dx, dy, m_Width, color );
 
         break;
 
@@ -159,12 +160,12 @@ void EDGE_MODULE::Draw( EDA_DRAW_PANEL* panel, wxDC* DC, GR_DRAWMODE draw_mode,
 
         if( filled )
         {
-            GRCircle( panel->GetClipBox(), DC, ux0, uy0, radius, m_Width, color );
+            GRCircle( nullptr, DC, ux0, uy0, radius, m_Width, color );
         }
         else        // SKETCH Mode
         {
-            GRCircle( panel->GetClipBox(), DC, ux0, uy0, radius + (m_Width / 2), color );
-            GRCircle( panel->GetClipBox(), DC, ux0, uy0, radius - (m_Width / 2), color );
+            GRCircle( nullptr, DC, ux0, uy0, radius + (m_Width / 2), color );
+            GRCircle( nullptr, DC, ux0, uy0, radius - (m_Width / 2), color );
         }
 
         break;
@@ -174,27 +175,17 @@ void EDGE_MODULE::Draw( EDA_DRAW_PANEL* panel, wxDC* DC, GR_DRAWMODE draw_mode,
         StAngle  = ArcTangente( dy - uy0, dx - ux0 );
         EndAngle = StAngle + m_Angle;
 
-        if( !panel->GetPrintMirrored() )
-        {
-            if( StAngle > EndAngle )
-                std::swap( StAngle, EndAngle );
-        }
-        else    // Mirrored mode: arc orientation is reversed
-        {
-            if( StAngle < EndAngle )
-                std::swap( StAngle, EndAngle );
-        }
+        if( StAngle > EndAngle )
+            std::swap( StAngle, EndAngle );
 
         if( filled )
         {
-            GRArc( panel->GetClipBox(), DC, ux0, uy0, StAngle, EndAngle, radius, m_Width, color );
+            GRArc( nullptr, DC, ux0, uy0, StAngle, EndAngle, radius, m_Width, color );
         }
         else        // SKETCH Mode
         {
-            GRArc( panel->GetClipBox(), DC, ux0, uy0, StAngle, EndAngle,
-                   radius + (m_Width / 2), color );
-            GRArc( panel->GetClipBox(), DC, ux0, uy0, StAngle, EndAngle,
-                   radius - (m_Width / 2), color );
+            GRArc( nullptr, DC, ux0, uy0, StAngle, EndAngle, radius + (m_Width / 2), color );
+            GRArc( nullptr, DC, ux0, uy0, StAngle, EndAngle, radius - (m_Width / 2), color );
         }
         break;
 
@@ -209,7 +200,7 @@ void EDGE_MODULE::Draw( EDA_DRAW_PANEL* panel, wxDC* DC, GR_DRAWMODE draw_mode,
 
         for( auto iter = m_Poly.CIterate(); iter; iter++ )
         {
-            points.push_back( wxPoint( iter->x,iter->y ) );
+            points.emplace_back( iter->x,iter->y );
         }
 
         for( unsigned ii = 0; ii < points.size(); ii++ )
@@ -220,7 +211,27 @@ void EDGE_MODULE::Draw( EDA_DRAW_PANEL* panel, wxDC* DC, GR_DRAWMODE draw_mode,
             pt += module->GetPosition() - offset;
         }
 
-        GRPoly( panel->GetClipBox(), DC, points.size(), &points[0], true, m_Width, color, color );
+        GRPoly( nullptr, DC, points.size(), &points[0], true, m_Width, color, color );
+        }
+        break;
+
+    case S_CURVE:
+        {
+            RebuildBezierToSegmentsPointsList( m_Width );
+
+            wxPoint& startp = m_BezierPoints[0];
+
+            for( unsigned int i = 1; i < m_BezierPoints.size(); i++ )
+            {
+                wxPoint& endp = m_BezierPoints[i];
+
+                if( filled )
+                    GRFilledSegment( nullptr, DC, startp-offset, endp-offset, m_Width, color );
+                else
+                    GRCSegm( nullptr, DC, startp-offset, endp-offset, m_Width, color );
+
+                startp = m_BezierPoints[i];
+            }
         }
         break;
 
@@ -231,7 +242,7 @@ void EDGE_MODULE::Draw( EDA_DRAW_PANEL* panel, wxDC* DC, GR_DRAWMODE draw_mode,
 
 
 // see class_edge_mod.h
-void EDGE_MODULE::GetMsgPanelInfo( std::vector< MSG_PANEL_ITEM >& aList )
+void EDGE_MODULE::GetMsgPanelInfo( EDA_UNITS aUnits, std::vector<MSG_PANEL_ITEM>& aList )
 {
     wxString msg;
 
@@ -245,28 +256,19 @@ void EDGE_MODULE::GetMsgPanelInfo( std::vector< MSG_PANEL_ITEM >& aList )
     if( !board )
         return;
 
-    aList.push_back( MSG_PANEL_ITEM( _( "Footprint" ), module->GetReference(), DARKCYAN ) );
-    aList.push_back( MSG_PANEL_ITEM( _( "Value" ), module->GetValue(), BLUE ) );
-    msg.Printf( wxT( "%8.8lX" ), module->GetTimeStamp() );
-    aList.push_back( MSG_PANEL_ITEM( _( "TimeStamp" ), msg, BROWN ) );
-    aList.push_back( MSG_PANEL_ITEM( _( "Footprint Layer" ),
-                     module->GetLayerName(), RED ) );
+    aList.emplace_back( _( "Footprint" ), module->GetReference(), DARKCYAN );
 
     // append the features shared with the base class
-    DRAWSEGMENT::GetMsgPanelInfo( aList );
+    DRAWSEGMENT::GetMsgPanelInfo( aUnits, aList );
 }
 
 
-
-wxString EDGE_MODULE::GetSelectMenuText() const
+wxString EDGE_MODULE::GetSelectMenuText( EDA_UNITS aUnits ) const
 {
-    wxString text;
-    text.Printf( _( "Graphic (%s) on %s of %s" ),
-            GetChars( ShowShape( m_Shape ) ),
-            GetChars( GetLayerName() ),
-            GetChars( ((MODULE*) GetParent())->GetReference() ) );
-
-    return text;
+    return wxString::Format( _( "Graphic %s of %s on %s" ),
+                             ShowShape( m_Shape  ),
+                             ((MODULE*) GetParent())->GetReference(),
+                             GetLayerName() );
 }
 
 
@@ -282,9 +284,9 @@ EDA_ITEM* EDGE_MODULE::Clone() const
 }
 
 
-void EDGE_MODULE::Flip( const wxPoint& aCentre )
+void EDGE_MODULE::Flip( const wxPoint& aCentre, bool aFlipLeftRight )
 {
-    wxPoint pt;
+    wxPoint pt( 0, 0 );
 
     switch( GetShape() )
     {
@@ -293,26 +295,43 @@ void EDGE_MODULE::Flip( const wxPoint& aCentre )
         //Fall through
     default:
     case S_SEGMENT:
-        pt = GetStart();
-        MIRROR( pt.y, aCentre.y );
-        SetStart( pt );
+    case S_CURVE:
+        // If Start0 and Start are equal (ie: ModEdit), then flip both sets around the
+        // centre point.
+        if( m_Start == m_Start0 )
+            pt = aCentre;
 
-        pt = GetEnd();
-        MIRROR( pt.y, aCentre.y );
-        SetEnd( pt );
+        if( aFlipLeftRight )
+        {
+            MIRROR( m_Start.x, aCentre.x );
+            MIRROR( m_End.x, aCentre.x );
+            MIRROR( m_BezierC1.x, aCentre.x );
+            MIRROR( m_BezierC2.x, aCentre.x );
+            MIRROR( m_Start0.x, pt.x );
+            MIRROR( m_End0.x, pt.x );
+            MIRROR( m_Bezier0_C1.x, pt.x );
+            MIRROR( m_Bezier0_C2.x, pt.x );
+        }
+        else
+        {
+            MIRROR( m_Start.y, aCentre.y );
+            MIRROR( m_End.y, aCentre.y );
+            MIRROR( m_BezierC1.y, aCentre.y );
+            MIRROR( m_BezierC2.y, aCentre.y );
+            MIRROR( m_Start0.y, pt.y );
+            MIRROR( m_End0.y, pt.y );
+            MIRROR( m_Bezier0_C1.y, pt.y );
+            MIRROR( m_Bezier0_C2.y, pt.y );
+        }
 
-        MIRROR( m_Start0.y, 0 );
-        MIRROR( m_End0.y, 0 );
+        RebuildBezierToSegmentsPointsList( m_Width );
         break;
 
     case S_POLYGON:
         // polygon corners coordinates are always relative to the
         // footprint position, orientation 0
-        for( auto iter = m_Poly.Iterate(); iter; iter++ )
-        {
-            MIRROR( iter->y, 0 );
-        }
-	break;
+        m_Poly.Mirror( aFlipLeftRight, !aFlipLeftRight );
+        break;
     }
 
     // DRAWSEGMENT items are not usually on copper layers, but
@@ -322,6 +341,12 @@ void EDGE_MODULE::Flip( const wxPoint& aCentre )
     SetLayer( FlipLayer( GetLayer() ) );
 }
 
+bool EDGE_MODULE::IsParentFlipped() const
+{
+    if( GetParent() &&  GetParent()->GetLayer() == B_Cu )
+        return true;
+    return false;
+}
 
 void EDGE_MODULE::Mirror( wxPoint aCentre, bool aMirrorAroundXAxis )
 {
@@ -333,29 +358,38 @@ void EDGE_MODULE::Mirror( wxPoint aCentre, bool aMirrorAroundXAxis )
         SetAngle( -GetAngle() );
         //Fall through
     default:
+    case S_CURVE:
     case S_SEGMENT:
         if( aMirrorAroundXAxis )
         {
             MIRROR( m_Start0.y, aCentre.y );
             MIRROR( m_End0.y, aCentre.y );
+            MIRROR( m_Bezier0_C1.y, aCentre.y );
+            MIRROR( m_Bezier0_C2.y, aCentre.y );
         }
         else
         {
             MIRROR( m_Start0.x, aCentre.x );
             MIRROR( m_End0.x, aCentre.x );
+            MIRROR( m_Bezier0_C1.x, aCentre.x );
+            MIRROR( m_Bezier0_C2.x, aCentre.x );
         }
-            break;
+
+        for( unsigned ii = 0; ii < m_BezierPoints.size(); ii++ )
+        {
+            if( aMirrorAroundXAxis )
+                MIRROR( m_BezierPoints[ii].y, aCentre.y );
+            else
+                MIRROR( m_BezierPoints[ii].x, aCentre.x );
+        }
+
+        break;
 
     case S_POLYGON:
         // polygon corners coordinates are always relative to the
         // footprint position, orientation 0
-        for( auto iter = m_Poly.Iterate(); iter; iter++ )
-        {
-            if( aMirrorAroundXAxis )
-                MIRROR( iter->y, aCentre.y );
-            else
-                MIRROR( iter->x, aCentre.x );
-        }
+        m_Poly.Mirror( !aMirrorAroundXAxis, aMirrorAroundXAxis );
+        break;
     }
 
     SetDrawCoord();
@@ -380,6 +414,8 @@ void EDGE_MODULE::Move( const wxPoint& aMoveVector )
     // This is a footprint shape modification.
     m_Start0 += aMoveVector;
     m_End0   += aMoveVector;
+    m_Bezier0_C1   += aMoveVector;
+    m_Bezier0_C2   += aMoveVector;
 
     switch( GetShape() )
     {
@@ -389,9 +425,28 @@ void EDGE_MODULE::Move( const wxPoint& aMoveVector )
     case S_POLYGON:
         // polygon corners coordinates are always relative to the
         // footprint position, orientation 0
-        for( auto iter = m_Poly.Iterate(); iter; iter++ )
-            *iter += VECTOR2I( aMoveVector );
+        m_Poly.Move( VECTOR2I( aMoveVector ) );
+
+        break;
     }
 
     SetDrawCoord();
+}
+
+unsigned int EDGE_MODULE::ViewGetLOD( int aLayer, KIGFX::VIEW* aView ) const
+{
+    const int HIDE = std::numeric_limits<unsigned int>::max();
+
+    if( !aView )
+        return 0;
+
+    // Handle Render tab switches
+    if( !IsParentFlipped() && !aView->IsLayerVisible( LAYER_MOD_FR ) )
+        return HIDE;
+
+    if( IsParentFlipped() && !aView->IsLayerVisible( LAYER_MOD_BK ) )
+        return HIDE;
+
+    // Other layers are shown without any conditions
+    return 0;
 }

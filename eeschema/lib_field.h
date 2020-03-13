@@ -1,8 +1,8 @@
 /*
  * This program source code file is part of KiCad, a free EDA CAD application.
  *
- * Copyright (C) 2004 Jean-Pierre Charras, jaen-pierre.charras@gipsa-lab.inpg.com
- * Copyright (C) 2004-2011 KiCad Developers, see change_log.txt for contributors.
+ * Copyright (C) 2019 Jean-Pierre Charras, jp.charras at wanadoo.fr
+ * Copyright (C) 2004-2020 KiCad Developers, see AUTHORS.txt for contributors.
  *
  * This program is free software; you can redistribute it and/or
  * modify it under the terms of the GNU General Public License
@@ -30,15 +30,14 @@
 #define CLASS_LIBENTRY_FIELDS_H
 
 #include <eda_text.h>
-#include <lib_draw_item.h>
+#include <lib_item.h>
 
 
 class SCH_LEGACY_PLUGIN_CACHE;
 
 
 /**
- * Class LIB_FIELD
- * is used in symbol libraries.  At least MANDATORY_FIELDS are always present
+ * Field object used in symbol libraries.  At least MANDATORY_FIELDS are always present
  * in a ram resident library symbol.  All constructors must ensure this because
  * the component property editor assumes it.
  * <p>
@@ -62,33 +61,30 @@ class LIB_FIELD : public LIB_ITEM, public EDA_TEXT
     int      m_id;           ///< @see enum NumFieldType
     wxString m_name;         ///< Name (not the field text value itself, that is .m_Text)
 
-    wxString m_savedText;    ///< Temporary storage for the string when edition.
-    bool     m_rotate;       ///< Flag to indicate a rotation occurred while editing.
-    bool     m_updateText;   ///< Flag to indicate text change occurred while editing.
-
     /**
-     * Draw the field.
+     * Print the field.
      * <p>
      * If \a aData not NULL, \a aData must point a wxString which is used instead of
      * the m_Text
      * </p>
      */
-    void drawGraphic( EDA_DRAW_PANEL* aPanel, wxDC* aDC, const wxPoint& aOffset,
-                      COLOR4D aColor, GR_DRAWMODE aDrawMode, void* aData,
-                      const TRANSFORM& aTransform ) override;
+    void print( wxDC* aDC, const wxPoint& aOffset, void* aData,
+                const TRANSFORM& aTransform ) override;
 
     /**
      * Calculate the new circle at \a aPosition when editing.
      *
      * @param aPosition - The position to edit the circle in drawing coordinates.
      */
-    void calcEdit( const wxPoint& aPosition ) override;
+    void CalcEdit( const wxPoint& aPosition ) override;
 
     friend class SCH_LEGACY_PLUGIN_CACHE;   // Required to access m_name.
 
 public:
 
     LIB_FIELD( int idfield = 2 );
+
+    LIB_FIELD( int aID, const wxString& aName );
 
     LIB_FIELD( LIB_PART * aParent, int idfield = 2 );
 
@@ -99,6 +95,11 @@ public:
     wxString GetClass() const override
     {
         return wxT( "LIB_FIELD" );
+    }
+
+    wxString GetTypeName() override
+    {
+        return _( "Field" );
     }
 
     /**
@@ -113,17 +114,19 @@ public:
      * names.  The user definable fields will return FieldN where N is the ID of the field
      * when the m_name member is empty.
      *
-     * @param aTranslate True to return translated field name (default).  False to return
-     *                   the english name (useful when the name is used as keyword in
-     *                   netlists ...)
+     * @param aTranslate true to return translated field name.
+     * note: has meaning mainly for mandatory fields or to return a default field name.
+     * Should be used only in messages (never when trying to find a field by name)
+     * false to return the english name.
+     * Normal option when the name is used as keyword in netlists.
      * @return Name of the field.
      */
-    wxString GetName( bool aTranslate = true ) const;
+    #define TRANSLATE_FIELD_NAME true
+    #define NATIVE_FIELD_NAME false
+    wxString GetName( bool aTranslate ) const;
 
     /**
-     * Function SetName
-     *
-     * Sets a user definable field name to \a aName.
+     * Set a user definable field name to \a aName.
      *
      * Reserved fields such as value and reference are not renamed.  If the field name is
      * changed, the field modified flag is set.  If the field is the child of a component,
@@ -134,14 +137,9 @@ public:
     void SetName( const wxString& aName );
 
     int GetId() const { return m_id; }
-
     void SetId( int aId ) { m_id = aId; }
 
     int GetPenSize( ) const override;
-
-    bool Save( OUTPUTFORMATTER& aFormatter ) override;
-
-    bool Load( LINE_READER& aLineReader, wxString& errorMsg ) override;
 
     /**
      * Copy parameters of this field to another field. Pointers are not copied.
@@ -150,32 +148,15 @@ public:
      */
     void Copy( LIB_FIELD* aTarget ) const;
 
-    void SetFields( const std::vector <LIB_FIELD> aFields );
-
-    /**
-     * Function IsVoid
-     * @return true if the field value is void (no text in this field)
-     */
-    bool IsVoid() const
-    {
-        return m_Text.IsEmpty();
-    }
-
-    /**
-     * Function IsVisible
-     * @return true is this field is visible, false if flagged invisible
-     */
-    bool IsVisible() const { return EDA_TEXT::IsVisible(); }  // why needed?
+    void ViewGetLayers( int aLayers[], int& aCount ) const override;
 
     const EDA_RECT GetBoundingBox() const override;
 
-    void GetMsgPanelInfo( std::vector< MSG_PANEL_ITEM >& aList ) override;
+    void GetMsgPanelInfo( EDA_UNITS aUnits, std::vector<MSG_PANEL_ITEM>& aList ) override;
 
-    bool HitTest( const wxPoint& aPosition ) const override;
+    bool HitTest( const wxPoint& aPosition, int aAccuracy = 0 ) const override;
 
-    bool HitTest( const wxPoint &aPosition, int aThreshold, const TRANSFORM& aTransform ) const override;
-
-    void operator=( const LIB_FIELD& field );
+    LIB_FIELD& operator=( const LIB_FIELD& field );
 
     /**
      * Return the text of a field.
@@ -184,8 +165,6 @@ public:
      * create a pseudo reference text.  If the base reference field is U,
      * the string U?A will be returned for unit = 1.
      *
-     * @todo This should be handled by the field object.
-     *
      * @param unit - The package unit number.  Only effects reference field.
      * @return Field text.
      */
@@ -193,53 +172,35 @@ public:
 
     COLOR4D GetDefaultColor() override;
 
-    void BeginEdit( STATUS_FLAGS aEditMode, const wxPoint aStartPoint = wxPoint( 0, 0 ) ) override;
+    SCH_LAYER_ID GetDefaultLayer();
 
-    bool ContinueEdit( const wxPoint aNextPoint ) override;
+    void BeginEdit( const wxPoint aStartPoint ) override;
 
-    void EndEdit( const wxPoint& aPosition, bool aAbort = false ) override;
-
-    void Rotate() override;
-
-    /**
-     * Sets the field text to \a aText.
-     *
-     * This method does more than just set the set the field text.  There are special
-     * cases when changing the text string alone is not enough.  If the field is the
-     * value field, the parent component's name is changed as well.  If the field is
-     * being moved, the name change must be delayed until the next redraw to prevent
-     * drawing artifacts.
-     *
-     * @param aText - New text value.
-     */
-    void SetText( const wxString& aText ) override;
-
-    void SetOffset( const wxPoint& aOffset ) override;
+    void Offset( const wxPoint& aOffset ) override;
 
     bool Inside( EDA_RECT& aRect ) const override;
 
-    void Move( const wxPoint& aPosition ) override;
+    void MoveTo( const wxPoint& aPosition ) override;
 
     wxPoint GetPosition() const override { return EDA_TEXT::GetTextPos(); }
 
     void MirrorHorizontal( const wxPoint& aCenter ) override;
-
     void MirrorVertical( const wxPoint& aCenter ) override;
-
     void Rotate( const wxPoint& aCenter, bool aRotateCCW = true ) override;
 
     void Plot( PLOTTER* aPlotter, const wxPoint& aOffset, bool aFill,
                const TRANSFORM& aTransform ) override;
 
     int GetWidth() const override { return GetThickness(); }
-
     void SetWidth( int aWidth ) override { SetThickness( aWidth ); }
 
-    wxString GetSelectMenuText() const override;
+    wxString GetSelectMenuText( EDA_UNITS aUnits ) const override;
 
     BITMAP_DEF GetMenuImage() const override;
 
     EDA_ITEM* Clone() const override;
+
+    bool IsMandatory() const;
 
 private:
 
@@ -255,7 +216,8 @@ private:
      *      - Field width.
      *      - Field height.
      */
-    int compare( const LIB_ITEM& aOther ) const override;
+    int compare( const LIB_ITEM& aOther,
+            LIB_ITEM::COMPARE_FLAGS aCompareFlags = LIB_ITEM::COMPARE_FLAGS::NORMAL ) const override;
 };
 
 typedef std::vector< LIB_FIELD > LIB_FIELDS;

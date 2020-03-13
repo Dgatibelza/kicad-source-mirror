@@ -27,7 +27,7 @@
 #include <geometry/shape_line_chain.h>
 #include <geometry/shape_segment.h>
 #include <geometry/shape_rect.h>
-#include <geometry/shape_convex.h>
+#include <geometry/shape_simple.h>
 
 namespace PNS {
 
@@ -37,6 +37,8 @@ class ITEM;
 class LINE;
 
 /** Various utility functions */
+
+const SHAPE_LINE_CHAIN ArcHull( const SHAPE_ARC& aSeg, int aClearance, int aWalkaroundThickness );
 
 const SHAPE_LINE_CHAIN OctagonalHull( const VECTOR2I& aP0, const VECTOR2I& aSize,
                                       int aClearance, int aChamfer );
@@ -52,7 +54,7 @@ const SHAPE_LINE_CHAIN SegmentHull( const SHAPE_SEGMENT& aSeg, int aClearance,
  * @param aClearance The minimum distance between polygon and hull.
  * @return A closed line chain describing the octagon.
  */
-const SHAPE_LINE_CHAIN ConvexHull( const SHAPE_CONVEX& aConvex, int aClearance );
+const SHAPE_LINE_CHAIN ConvexHull( const SHAPE_SIMPLE& aConvex, int aClearance );
 
 SHAPE_RECT ApproximateSegmentAsRect( const SHAPE_SEGMENT& aSeg );
 

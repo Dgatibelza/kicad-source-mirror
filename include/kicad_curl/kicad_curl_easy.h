@@ -38,7 +38,7 @@ typedef void CURL;
 struct curl_slist;
 
 /**
- * Class KICAD_CURL_EASY
+ * KICAD_CURL_EASY
  * wrapper interface around the curl_easy API
  *
  * Handling of using the curl_easy API to make a request and save the response to
@@ -49,7 +49,7 @@ struct curl_slist;
  *   KICAD_CURL_EASY curl;
  *
  *   curl.SetURL( "http://github.com" );
- *   curl.SetUserAgent( <http-client-indentifier> );
+ *   curl.SetUserAgent( <http-client-identifier> );
  *   curl.SetHeader( "Accept", "application/json" );
  *   curl.Perform();
  * @endcode
@@ -125,6 +125,9 @@ public:
     {
         return m_buffer;
     }
+
+    /// Escapes a string for use as a URL
+    std::string Escape( const std::string& aUrl );
 
 private:
     /**

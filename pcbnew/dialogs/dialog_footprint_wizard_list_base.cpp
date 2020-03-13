@@ -1,8 +1,8 @@
 ///////////////////////////////////////////////////////////////////////////
-// C++ code generated with wxFormBuilder (version May  6 2016)
+// C++ code generated with wxFormBuilder (version Jul 11 2018)
 // http://www.wxformbuilder.org/
 //
-// PLEASE DO "NOT" EDIT THIS FILE!
+// PLEASE DO *NOT* EDIT THIS FILE!
 ///////////////////////////////////////////////////////////////////////////
 
 #include "dialog_footprint_wizard_list_base.h"
@@ -47,7 +47,7 @@ DIALOG_FOOTPRINT_WIZARD_LIST_BASE::DIALOG_FOOTPRINT_WIZARD_LIST_BASE( wxWindow* 
 	// Rows
 	m_footprintGeneratorsGrid->AutoSizeRows();
 	m_footprintGeneratorsGrid->EnableDragRowSize( true );
-	m_footprintGeneratorsGrid->SetRowLabelSize( 1 );
+	m_footprintGeneratorsGrid->SetRowLabelSize( 0 );
 	m_footprintGeneratorsGrid->SetRowLabelAlignment( wxALIGN_CENTRE, wxALIGN_CENTRE );
 	
 	// Label Appearance
@@ -62,21 +62,21 @@ DIALOG_FOOTPRINT_WIZARD_LIST_BASE::DIALOG_FOOTPRINT_WIZARD_LIST_BASE( wxWindow* 
 	m_panelGenerators->SetSizer( bSizerpanelGen );
 	m_panelGenerators->Layout();
 	bSizerpanelGen->Fit( m_panelGenerators );
-	m_notebook->AddPage( m_panelGenerators, _("Available footprint generators"), true );
+	m_notebook->AddPage( m_panelGenerators, _("Available Footprint Generators"), true );
 	m_panelInfo = new wxPanel( m_notebook, wxID_ANY, wxDefaultPosition, wxDefaultSize, wxTAB_TRAVERSAL );
 	wxBoxSizer* m_bsizerPanelInfo;
 	m_bsizerPanelInfo = new wxBoxSizer( wxVERTICAL );
 	
-	m_staticText1 = new wxStaticText( m_panelInfo, wxID_ANY, _("Search paths:"), wxDefaultPosition, wxDefaultSize, 0 );
-	m_staticText1->Wrap( -1 );
-	m_bsizerPanelInfo->Add( m_staticText1, 0, wxTOP|wxRIGHT|wxLEFT, 5 );
+	m_staticTextSearchPaths = new wxStaticText( m_panelInfo, wxID_ANY, _("Search paths:"), wxDefaultPosition, wxDefaultSize, 0 );
+	m_staticTextSearchPaths->Wrap( -1 );
+	m_bsizerPanelInfo->Add( m_staticTextSearchPaths, 0, wxTOP|wxRIGHT|wxLEFT, 5 );
 	
 	m_tcSearchPaths = new wxTextCtrl( m_panelInfo, wxID_ANY, wxEmptyString, wxDefaultPosition, wxDefaultSize, wxTE_MULTILINE|wxTE_READONLY );
 	m_bsizerPanelInfo->Add( m_tcSearchPaths, 1, wxEXPAND|wxBOTTOM|wxRIGHT|wxLEFT, 5 );
 	
-	m_staticText11 = new wxStaticText( m_panelInfo, wxID_ANY, _("Not loadable python scripts:"), wxDefaultPosition, wxDefaultSize, 0 );
-	m_staticText11->Wrap( -1 );
-	m_bsizerPanelInfo->Add( m_staticText11, 0, wxTOP|wxRIGHT|wxLEFT, 5 );
+	m_staticTextNotLoaded = new wxStaticText( m_panelInfo, wxID_ANY, _("Not loadable python scripts:"), wxDefaultPosition, wxDefaultSize, 0 );
+	m_staticTextNotLoaded->Wrap( -1 );
+	m_bsizerPanelInfo->Add( m_staticTextNotLoaded, 0, wxTOP|wxRIGHT|wxLEFT, 5 );
 	
 	m_tcNotLoaded = new wxTextCtrl( m_panelInfo, wxID_ANY, wxEmptyString, wxDefaultPosition, wxDefaultSize, wxTE_MULTILINE|wxTE_READONLY );
 	m_bsizerPanelInfo->Add( m_tcNotLoaded, 1, wxEXPAND|wxBOTTOM|wxRIGHT|wxLEFT, 5 );
@@ -95,14 +95,11 @@ DIALOG_FOOTPRINT_WIZARD_LIST_BASE::DIALOG_FOOTPRINT_WIZARD_LIST_BASE( wxWindow* 
 	wxBoxSizer* bSizerLower;
 	bSizerLower = new wxBoxSizer( wxHORIZONTAL );
 	
-	
-	bSizerLower->Add( 0, 0, 1, wxEXPAND, 5 );
-	
 	m_buttonUpdateModules = new wxButton( this, wxID_ANY, _("Update Python Modules"), wxDefaultPosition, wxDefaultSize, 0 );
-	bSizerLower->Add( m_buttonUpdateModules, 0, wxALL, 5 );
+	bSizerLower->Add( m_buttonUpdateModules, 0, wxALIGN_CENTER_VERTICAL|wxALL, 5 );
 	
 	
-	bSizerLower->Add( 0, 0, 0, wxRIGHT|wxLEFT, 5 );
+	bSizerLower->Add( 0, 0, 1, wxRIGHT|wxLEFT, 5 );
 	
 	m_sdbSizer = new wxStdDialogButtonSizer();
 	m_sdbSizerOK = new wxButton( this, wxID_OK );
@@ -111,10 +108,10 @@ DIALOG_FOOTPRINT_WIZARD_LIST_BASE::DIALOG_FOOTPRINT_WIZARD_LIST_BASE( wxWindow* 
 	m_sdbSizer->AddButton( m_sdbSizerCancel );
 	m_sdbSizer->Realize();
 	
-	bSizerLower->Add( m_sdbSizer, 0, wxALL|wxALIGN_RIGHT, 5 );
+	bSizerLower->Add( m_sdbSizer, 0, wxALL, 5 );
 	
 	
-	bSizerMain->Add( bSizerLower, 0, wxEXPAND, 5 );
+	bSizerMain->Add( bSizerLower, 0, wxEXPAND|wxLEFT, 10 );
 	
 	
 	this->SetSizer( bSizerMain );
@@ -156,7 +153,7 @@ DIALOG_FOOTPRINT_WIZARD_LOG::DIALOG_FOOTPRINT_WIZARD_LOG( wxWindow* parent, wxWi
 	m_sdbSizer->AddButton( m_sdbSizerOK );
 	m_sdbSizer->Realize();
 	
-	bSizerMain->Add( m_sdbSizer, 0, wxALIGN_RIGHT|wxALL, 5 );
+	bSizerMain->Add( m_sdbSizer, 0, wxALL|wxALIGN_RIGHT, 5 );
 	
 	
 	this->SetSizer( bSizerMain );

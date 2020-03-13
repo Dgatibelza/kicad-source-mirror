@@ -27,22 +27,44 @@
 #define __EDIT_TOOL_H
 
 #include <math/vector2d.h>
-#include <tools/pcb_tool.h>
+#include <tools/pcb_tool_base.h>
+#include <tools/selection_tool.h>
+#include <status_popup.h>
 
 
 class BOARD_COMMIT;
 class BOARD_ITEM;
-class SELECTION_TOOL;
 class CONNECTIVITY_DATA;
+class STATUS_TEXT_POPUP;
+
+namespace KIGFX {
+    namespace PREVIEW {
+        class RULER_ITEM;
+    }
+}
 
 /**
- * Class EDIT_TOOL
+ * Function EditToolSelectionFilter
  *
- * The interactive edit tool. Allows to move, rotate, flip and change properties of items selected
+ * A CLIENT_SELECTION_FILTER which promotes pad selections to their parent modules and
+ * optionally excludes locked items and/or transient items (such as markers).
+ */
+
+#define EXCLUDE_LOCKED 0x0001
+#define EXCLUDE_LOCKED_PADS 0x0002
+#define EXCLUDE_TRANSIENTS 0x0004
+#define INCLUDE_PADS_AND_MODULES 0x0008
+
+void EditToolSelectionFilter( GENERAL_COLLECTOR& aCollector, int aFlags );
+
+/**
+ * EDIT_TOOL
+ *
+ * The interactive edit tool. Allows one to move, rotate, flip and change properties of items selected
  * using the pcbnew.InteractiveSelection tool.
  */
 
-class EDIT_TOOL : public PCB_TOOL
+class EDIT_TOOL : public PCB_TOOL_BASE
 {
 public:
     EDIT_TOOL();
@@ -53,88 +75,85 @@ public:
     /// @copydoc TOOL_INTERACTIVE::Init()
     bool Init() override;
 
+    ///> Find an item and start moving.
+    int GetAndPlace( const TOOL_EVENT& aEvent );
+
     /**
-     * Function Main()
-     *
+     * Function Move()
      * Main loop in which events are handled.
-     * @param aEvent is the handled event.
      */
-    int Main( const TOOL_EVENT& aEvent );
+    int Move( const TOOL_EVENT& aEvent );
 
     /**
      * Function Drag()
-     *
-     * todo
+     * Invoke the PNS router to drag tracks.
      */
     int Drag( const TOOL_EVENT& aEvent );
 
     /**
-     * Function Edit()
-     *
+     * Function Properties()
      * Displays properties window for the selected object.
      */
     int Properties( const TOOL_EVENT& aEvent );
 
     /**
      * Function Rotate()
-     *
      * Rotates currently selected items.
      */
     int Rotate( const TOOL_EVENT& aEvent );
 
     /**
      * Function Flip()
-     *
      * Rotates currently selected items. The rotation point is the current cursor position.
      */
     int Flip( const TOOL_EVENT& aEvent );
 
     /**
      * Function Mirror
-     *
      * Mirrors the current selection. The mirror axis passes through the current point.
      */
     int Mirror( const TOOL_EVENT& aEvent );
 
+    int ChangeTrackWidth( const TOOL_EVENT& aEvent );
+
     /**
      * Function Remove()
-     *
      * Deletes currently selected items. The rotation point is the current cursor position.
      */
     int Remove( const TOOL_EVENT& aEvent );
 
     /**
      * Function Duplicate()
-     *
      * Duplicates the current selection and starts a move action.
      */
     int Duplicate( const TOOL_EVENT& aEvent );
 
     /**
      * Function MoveExact()
-     *
      * Invokes a dialog box to allow moving of the item by an exact amount.
      */
     int MoveExact( const TOOL_EVENT& aEvent );
 
     /**
      * Function CreateArray()
-     *
-     * Creates an array of the selected items, invoking the array editor dialog
-     * to set the array options
+     * Creates an array of the selected items, invoking the array editor dialog to set the options.
      */
     int CreateArray( const TOOL_EVENT& aEvent );
 
-    /**
-     * Function ExchangeFootprints()
-     *
-     * Invoke the dialog used to change the footprints used for modules
-     * and update module footprints based on result
-     */
-    int ExchangeFootprints( const TOOL_EVENT& aEvent );
-
     ///> Launches a tool to measure between points
     int MeasureTool( const TOOL_EVENT& aEvent );
+
+    /**
+     * Function FootprintFilter()
+     * A selection filter which prunes the selection to contain only items of type PCB_MODULE_T
+     */
+    static void FootprintFilter( const VECTOR2I&, GENERAL_COLLECTOR& aCollector );
+
+    /**
+     * Function PadFilter()
+     * A selection filter which prunes the selection to contain only items of type PCB_PAD_T
+     */
+    static void PadFilter( const VECTOR2I&, GENERAL_COLLECTOR& aCollector );
 
     ///> Sets up handlers for various events.
     void setTransitions() override;
@@ -143,7 +162,6 @@ public:
      * Function copyToClipboard()
      * Sends the current selection to the clipboard by formatting it as a fake pcb
      * see AppendBoardFromClipboard for importing
-     * @return True if it was sent succesfully
      */
     int copyToClipboard( const TOOL_EVENT& aEvent );
 
@@ -151,85 +169,29 @@ public:
      * Function cutToClipboard()
      * Cuts the current selection to the clipboard by formatting it as a fake pcb
      * see AppendBoardFromClipboard for importing
-     * @return True if it was sent succesfully
      */
     int cutToClipboard( const TOOL_EVENT& aEvent );
 
-    BOARD_COMMIT* GetCurrentCommit() const
-    {
-        return m_commit.get();
-    }
+    BOARD_COMMIT* GetCurrentCommit() const { return m_commit.get(); }
 
 private:
-    ///> Selection tool used for obtaining selected items
-    SELECTION_TOOL* m_selectionTool;
-
-    ///> Flag determining if anything is being dragged right now
-    bool m_dragging;
-
-    ///> Last cursor position (needed for getModificationPoint() to avoid changes
-    ///> of edit reference point).
-    VECTOR2I m_cursor;
-
     ///> Returns the right modification point (e.g. for rotation), depending on the number of
     ///> selected items.
-    bool updateModificationPoint( SELECTION& aSelection );
+    bool updateModificationPoint( PCBNEW_SELECTION& aSelection );
 
-    int editFootprintInFpEditor( const TOOL_EVENT& aEvent );
+    int EditFpInFpEditor( const TOOL_EVENT& aEvent );
 
     bool invokeInlineRouter( int aDragMode );
     bool isInteractiveDragEnabled() const;
 
-    bool changeTrackWidthOnClick( const SELECTION& selection );
-    bool pickCopyReferencePoint( VECTOR2I& aP );
+    bool pickCopyReferencePoint( VECTOR2I& aReferencePoint );
 
-
-    /**
-     * Function hoverSelection()
-     *
-     * If there are no items currently selected, it tries to choose the
-     * item that is under he cursor or displays a disambiguation menu
-     * if there are multiple items.
-     *
-     * @param aSanitize sanitize selection using SanitizeSelection()
-     * @return true if the eventual selection contains any items, or
-     * false if it fails to select any items.
-     */
-    bool hoverSelection( bool aSanitize = true );
-
-    /**
-     * Function uniqueSelected()
-     *
-     * Get a single selected item of a certain type
-     *
-     * @tparam T type of item to select
-     * @return pointer to the item (of type T), or nullptr if there isn't
-     * a single selected item, or it's not of the right type.
-     */
-    template<class T> T* uniqueSelected();
-
-    /**
-     * Function uniqueHoverSelection()
-     *
-     * Get a single unique selection of an item, either from the
-     * current selection, or from the items under cursor via
-     * hoverSelection()
-     *
-     * @tparam T type of item to select
-     * @return pointer to a selected item, or nullptr if none could
-     * be found.
-     */
-    template<class T>
-    T* uniqueHoverSelection( bool aSanitize = true )
-    {
-        if( !hoverSelection( aSanitize ) )
-            return nullptr;
-
-        T* item = uniqueSelected<T>();
-
-        return item;
-    }
-
+private:
+    SELECTION_TOOL* m_selectionTool;   // Selection tool used for obtaining selected items
+    bool            m_dragging;        // Indicates objects are being dragged right now
+    bool            m_lockedSelected;  // Determines if we prompt before removing locked objects
+    VECTOR2I        m_cursor;          // Last cursor position (needed for getModificationPoint()
+                                       // to avoid changes of edit reference point).
     std::unique_ptr<BOARD_COMMIT> m_commit;
 };
 

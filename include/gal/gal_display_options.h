@@ -24,10 +24,14 @@
 #ifndef GAL_DISPLAY_OPTIONS_H__
 #define GAL_DISPLAY_OPTIONS_H__
 
+#include <dpi_scaling.h>
 #include <observable.h>
 
-class wxConfigBase;
+class COMMON_SETTINGS;
+struct WINDOW_SETTINGS;
 class wxString;
+class wxWindow;
+
 
 namespace KIGFX
 {
@@ -50,6 +54,14 @@ namespace KIGFX
         SUPERSAMPLING_X4,
     };
 
+    enum class CAIRO_ANTIALIASING_MODE
+    {
+        NONE,
+        FAST,
+        GOOD,
+        BEST,
+    };
+
     class GAL_DISPLAY_OPTIONS;
 
     class GAL_DISPLAY_OPTIONS_OBSERVER
@@ -66,12 +78,40 @@ namespace KIGFX
     public:
         GAL_DISPLAY_OPTIONS();
 
-        void ReadConfig ( wxConfigBase* aCfg, wxString aBaseName );
-        void WriteConfig( wxConfigBase* aCfg, wxString aBaseName );
+        /**
+         * Read GAL config options from applicaton-level config
+         * @param aCfg      the window settings to load from
+         */
+        void ReadWindowSettings( WINDOW_SETTINGS& aCfg );
+
+        /**
+         * Read GAL config options from the common config store
+         * @param aCommonSettings the common config store
+         * @param aWindow         the wx parent window (used for DPI scaling)
+         */
+        void ReadCommonConfig( COMMON_SETTINGS& aCommonSettings, wxWindow* aWindow );
+
+        /**
+         * Read application and common configs
+         * @param aCommonConfig the common config store
+         * @param aCfg          the application config base
+         * @param aBaseName     the application's GAL options key prefix
+         * @param aWindow       the wx parent window (used for DPI scaling)
+         */
+        void ReadConfig( COMMON_SETTINGS& aCommonConfig, WINDOW_SETTINGS& aWindowConfig,
+                wxWindow* aWindow );
+
+        void WriteConfig( WINDOW_SETTINGS& aCfg );
+
+        void UpdateScaleFactor();
 
         void NotifyChanged();
 
         OPENGL_ANTIALIASING_MODE gl_antialiasing_mode;
+
+        CAIRO_ANTIALIASING_MODE cairo_antialiasing_mode;
+
+        DPI_SCALING m_dpi;
 
         ///> The grid style to draw the grid in
         KIGFX::GRID_STYLE m_gridStyle;
@@ -90,6 +130,9 @@ namespace KIGFX
 
         ///> Force cursor display
         bool m_forceDisplayCursor;
+
+        ///> The pixel scale factor (>1 for hi-DPI scaled displays)
+        double m_scaleFactor;
     };
 
 }

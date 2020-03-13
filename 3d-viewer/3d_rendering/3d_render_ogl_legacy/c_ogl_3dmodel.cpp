@@ -37,6 +37,7 @@
 C_OGL_3DMODEL::C_OGL_3DMODEL( const S3DMODEL &a3DModel,
                               MATERIAL_MODE aMaterialMode )
 {
+    m_ogl_idx_list_meshes = 0;
     m_ogl_idx_list_opaque = 0;
     m_ogl_idx_list_transparent = 0;
     m_nr_meshes = 0;
@@ -112,8 +113,8 @@ C_OGL_3DMODEL::C_OGL_3DMODEL( const S3DMODEL &a3DModel,
                         if( mesh.m_MaterialIdx < a3DModel.m_MaterialsSize )
                             transparency = a3DModel.m_Materials[mesh.m_MaterialIdx].m_Transparency;
 
-                        if( (transparency > FLT_EPSILON) &&
-                            (aMaterialMode ==  MATERIAL_MODE_NORMAL) )
+                        if( ( transparency > FLT_EPSILON )
+                                && ( aMaterialMode == MATERIAL_MODE::NORMAL ) )
                         {
                             // Create a new array of RGBA colors
                             pColorRGBA = new SFVEC4F[mesh.m_VertexSize];
@@ -130,12 +131,12 @@ C_OGL_3DMODEL::C_OGL_3DMODEL( const S3DMODEL &a3DModel,
                         {
                             switch( aMaterialMode )
                             {
-                            case MATERIAL_MODE_NORMAL:
-                            case MATERIAL_MODE_DIFFUSE_ONLY:
+                            case MATERIAL_MODE::NORMAL:
+                            case MATERIAL_MODE::DIFFUSE_ONLY:
                                 // load the original RGB color array
                                 glColorPointer( 3, GL_FLOAT, 0, mesh.m_Color );
                                 break;
-                            case MATERIAL_MODE_CAD_MODE:
+                            case MATERIAL_MODE::CAD_MODE:
                                 // Create a new array of RGBA colors
                                 pColorRGBA = new SFVEC4F[mesh.m_VertexSize];
 
@@ -184,14 +185,14 @@ C_OGL_3DMODEL::C_OGL_3DMODEL( const S3DMODEL &a3DModel,
                     {
                         switch( aMaterialMode )
                         {
-                        case MATERIAL_MODE_NORMAL:
+                        case MATERIAL_MODE::NORMAL:
                             OGL_SetMaterial( a3DModel.m_Materials[mesh.m_MaterialIdx] );
                             break;
-                        case MATERIAL_MODE_DIFFUSE_ONLY:
+                        case MATERIAL_MODE::DIFFUSE_ONLY:
                             OGL_SetDiffuseOnlyMaterial(
                                         a3DModel.m_Materials[mesh.m_MaterialIdx].m_Diffuse );
                             break;
-                        case MATERIAL_MODE_CAD_MODE:
+                        case MATERIAL_MODE::CAD_MODE:
                             OGL_SetDiffuseOnlyMaterial(
                                         MaterialDiffuseToColorCAD(
                                             a3DModel.m_Materials[mesh.m_MaterialIdx].m_Diffuse ) );
@@ -217,7 +218,7 @@ C_OGL_3DMODEL::C_OGL_3DMODEL( const S3DMODEL &a3DModel,
                     glDisableClientState( GL_NORMAL_ARRAY );
                     glDisableClientState( GL_VERTEX_ARRAY );
 
-                    glFinish();
+                    glFlush();
 
                     delete [] pColorRGBA;
                 }
@@ -318,7 +319,7 @@ C_OGL_3DMODEL::C_OGL_3DMODEL( const S3DMODEL &a3DModel,
         for( unsigned int mesh_i = 0; mesh_i < a3DModel.m_MeshesSize; ++mesh_i )
             m_model_bbox.Union( m_meshs_bbox[mesh_i] );
 
-        glFinish();
+        glFlush();
     }
 }
 

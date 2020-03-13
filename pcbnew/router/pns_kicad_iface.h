@@ -31,54 +31,94 @@ class PNS_PCBNEW_DEBUG_DECORATOR;
 
 class BOARD;
 class BOARD_COMMIT;
-class DISPLAY_OPTIONS;
+class PCB_DISPLAY_OPTIONS;
+class PCB_TOOL_BASE;
+class MODULE;
+class D_PAD;
 
 namespace KIGFX
 {
     class VIEW;
-};
+}
 
-class PNS_KICAD_IFACE : public PNS::ROUTER_IFACE {
+class PNS_KICAD_IFACE_BASE : public PNS::ROUTER_IFACE {
 public:
-    PNS_KICAD_IFACE();
-    ~PNS_KICAD_IFACE();
+    PNS_KICAD_IFACE_BASE();
+    ~PNS_KICAD_IFACE_BASE();
 
     void SetRouter( PNS::ROUTER* aRouter ) override;
-    void SetHostFrame( PCB_EDIT_FRAME* aFrame );
+    void SetHostTool( PCB_TOOL_BASE* aTool );
+    void SetDisplayOptions( const PCB_DISPLAY_OPTIONS* aDispOptions );
 
+    void EraseView() override {};
     void SetBoard( BOARD* aBoard );
-    void SetView( KIGFX::VIEW* aView );
     void SyncWorld( PNS::NODE* aWorld ) override;
-    void EraseView() override;
-    void HideItem( PNS::ITEM* aItem ) override;
-    void DisplayItem( const PNS::ITEM* aItem, int aColor = 0, int aClearance = 0 ) override;
+    bool IsAnyLayerVisible( const LAYER_RANGE& aLayer ) override { return true; };
+    bool IsItemVisible( const PNS::ITEM* aItem ) override { return true; }
+    void HideItem( PNS::ITEM* aItem ) override {}
+    void DisplayItem( const PNS::ITEM* aItem, int aColor = 0, int aClearance = 0, bool aEdit = false ) override {}
     void AddItem( PNS::ITEM* aItem ) override;
     void RemoveItem( PNS::ITEM* aItem ) override;
-    void Commit() override;
+    void Commit() override {}
 
-    void UpdateNet( int aNetCode ) override;
+    void UpdateNet( int aNetCode ) override {}
+
+    void SetDebugDecorator( PNS::DEBUG_DECORATOR *aDec );
 
     PNS::RULE_RESOLVER* GetRuleResolver() override;
     PNS::DEBUG_DECORATOR* GetDebugDecorator() override;
 
-private:
+protected:
     PNS_PCBNEW_RULE_RESOLVER* m_ruleResolver;
-    PNS_PCBNEW_DEBUG_DECORATOR* m_debugDecorator;
+    PNS::DEBUG_DECORATOR* m_debugDecorator;
 
-    std::unique_ptr<PNS::SOLID>   syncPad( D_PAD* aPad );
+    std::unique_ptr<PNS::SOLID> syncPad( D_PAD* aPad );
     std::unique_ptr<PNS::SEGMENT> syncTrack( TRACK* aTrack );
-    std::unique_ptr<PNS::VIA>     syncVia( VIA* aVia );
+    std::unique_ptr<PNS::ARC> syncArc( ARC* aArc );
+    std::unique_ptr<PNS::VIA> syncVia( VIA* aVia );
+    bool syncTextItem( PNS::NODE* aWorld, EDA_TEXT* aText, PCB_LAYER_ID aLayer );
+    bool syncGraphicalItem( PNS::NODE* aWorld, DRAWSEGMENT* aItem );
+    bool syncZone( PNS::NODE* aWorld, ZONE_CONTAINER* aZone );
 
+    PNS::ROUTER* m_router;
+    BOARD* m_board;
+};
+
+class PNS_KICAD_IFACE : public PNS_KICAD_IFACE_BASE {
+public:
+    PNS_KICAD_IFACE();
+    ~PNS_KICAD_IFACE();
+
+    void SetHostTool( PCB_TOOL_BASE* aTool );
+    void SetDisplayOptions( const PCB_DISPLAY_OPTIONS* aDispOptions );
+
+    void SetView( KIGFX::VIEW* aView );
+    void EraseView() override;
+    bool IsAnyLayerVisible( const LAYER_RANGE& aLayer ) override;
+    bool IsItemVisible( const PNS::ITEM* aItem ) override;
+    void HideItem( PNS::ITEM* aItem ) override;
+    void DisplayItem( const PNS::ITEM* aItem, int aColor = 0, int aClearance = 0, bool aEdit = false ) override;
+    void Commit() override;
+    void AddItem( PNS::ITEM* aItem ) override;
+    void RemoveItem( PNS::ITEM* aItem ) override;
+    
+    void UpdateNet( int aNetCode ) override;
+
+private:
+    struct OFFSET {
+        VECTOR2I p_old, p_new;  
+    };
+
+    std::map<D_PAD*, OFFSET> m_moduleOffsets;
     KIGFX::VIEW* m_view;
     KIGFX::VIEW_GROUP* m_previewItems;
     std::unordered_set<BOARD_CONNECTED_ITEM*> m_hiddenItems;
 
-    PNS::NODE* m_world;
     PNS::ROUTER* m_router;
-    BOARD* m_board;
-    PCB_EDIT_FRAME* m_frame;
+    PCB_TOOL_BASE* m_tool;
     std::unique_ptr<BOARD_COMMIT> m_commit;
-    DISPLAY_OPTIONS* m_dispOptions;
+    const PCB_DISPLAY_OPTIONS* m_dispOptions;
 };
+
 
 #endif

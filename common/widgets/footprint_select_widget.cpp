@@ -20,21 +20,12 @@
 #include <dialog_shim.h>
 #include <kiway.h>
 #include <kiway_player.h>
-#include <make_unique.h>
 #include <project.h>
 #include <widgets/footprint_choice.h>
 #include <widgets/footprint_select_widget.h>
 
-#include <functional>
-#include <wx/combo.h>
-#include <wx/gauge.h>
-#include <wx/odcombo.h>
-#include <wx/simplebook.h>
-#include <wx/sizer.h>
-#include <wx/timer.h>
-#include <wx/utils.h>
 #include <wx/wupdlock.h>
-
+#include <widgets/progress_reporter.h>
 
 /**
  * Fixed positions for standard items in the list
@@ -47,50 +38,30 @@ enum
 };
 
 
-/**
- * Page numbers in the wxSimplebook
- */
-enum
-{
-    PAGE_PROGRESS,
-    PAGE_SELECT
-};
-
-
 wxDEFINE_EVENT( EVT_FOOTPRINT_SELECTED, wxCommandEvent );
 
 
-FOOTPRINT_SELECT_WIDGET::FOOTPRINT_SELECT_WIDGET( wxWindow* aParent,
-        FOOTPRINT_ASYNC_LOADER& aLoader, std::unique_ptr<FOOTPRINT_LIST>& aFpList, bool aUpdate,
-        int aMaxItems )
-        : wxPanel( aParent ),
-          m_kiway( nullptr ),
-          m_update( aUpdate ),
-          m_finished_loading( false ),
-          m_max_items( aMaxItems ),
-          m_last_item( 0 ),
-          m_fp_loader( aLoader ),
-          m_fp_list( aFpList )
+FOOTPRINT_SELECT_WIDGET::FOOTPRINT_SELECT_WIDGET( wxWindow* aParent, FOOTPRINT_LIST* aFpList,
+                                                  bool aUpdate, int aMaxItems ) :
+        wxPanel( aParent ),
+        m_kiway( nullptr ),
+        m_update( aUpdate ),
+        m_finished_loading( false ),
+        m_max_items( aMaxItems ),
+        m_last_item( 0 ),
+        m_fp_list( aFpList )
 {
+    m_zero_filter = true;
     m_sizer = new wxBoxSizer( wxVERTICAL );
-    m_progress_timer = std::make_unique<wxTimer>( this );
-    m_book = new wxSimplebook( this, wxID_ANY );
-    m_progress_ctrl = new wxGauge( m_book, wxID_ANY, 100 );
-    m_fp_sel_ctrl = new FOOTPRINT_CHOICE( m_book, wxID_ANY );
-
-    m_book->SetEffect( wxSHOW_EFFECT_BLEND );
-    m_book->AddPage( m_progress_ctrl, "", true );
-    m_book->AddPage( m_fp_sel_ctrl, "", false );
-    m_sizer->Add( m_book, 1, wxEXPAND | wxALL, 5 );
+    m_fp_sel_ctrl = new FOOTPRINT_CHOICE( this, wxID_ANY );
+    m_sizer->Add( m_fp_sel_ctrl, 1, wxEXPAND, 5 );
 
     SetSizer( m_sizer );
     Layout();
     m_sizer->Fit( this );
 
-    Bind( wxEVT_TIMER, &FOOTPRINT_SELECT_WIDGET::OnProgressTimer, this, m_progress_timer->GetId() );
     m_fp_sel_ctrl->Bind( wxEVT_COMBOBOX, &FOOTPRINT_SELECT_WIDGET::OnComboBox, this );
-    m_fp_sel_ctrl->Bind(
-            EVT_INTERACTIVE_CHOICE, &FOOTPRINT_SELECT_WIDGET::OnComboInteractive, this );
+    m_fp_sel_ctrl->Bind( EVT_INTERACTIVE_CHOICE, &FOOTPRINT_SELECT_WIDGET::OnComboInteractive, this );
 }
 
 
@@ -101,15 +72,11 @@ void FOOTPRINT_SELECT_WIDGET::Load( KIWAY& aKiway, PROJECT& aProject )
     try
     {
         auto fp_lib_table = aProject.PcbFootprintLibs( aKiway );
+        m_fp_list = FOOTPRINT_LIST::GetInstance( aKiway );
 
-        if( m_fp_loader.GetProgress() == 0 || !m_fp_loader.IsSameTable( fp_lib_table ) )
-        {
-            m_fp_list = FOOTPRINT_LIST::GetInstance( aKiway );
-            m_fp_loader.SetList( &*m_fp_list );
-            m_fp_loader.Start( fp_lib_table );
-        }
-
-        m_progress_timer->Start( 200 );
+        WX_PROGRESS_REPORTER progressReporter( this, _( "Loading Footprint Libraries" ), 2 );
+        m_fp_list->ReadFootprintFiles( fp_lib_table, nullptr, &progressReporter );
+        FootprintsLoaded();
     }
     catch( ... )
     {
@@ -118,25 +85,14 @@ void FOOTPRINT_SELECT_WIDGET::Load( KIWAY& aKiway, PROJECT& aProject )
 }
 
 
-void FOOTPRINT_SELECT_WIDGET::OnProgressTimer( wxTimerEvent& aEvent )
+void FOOTPRINT_SELECT_WIDGET::FootprintsLoaded()
 {
-    int prog = m_fp_loader.GetProgress();
-    m_progress_ctrl->SetValue( prog );
+    m_fp_filter.SetList( *m_fp_list );
 
-    if( prog == 100 )
-    {
-        wxBusyCursor busy;
+    m_finished_loading = true;
 
-        m_fp_loader.Join();
-        m_fp_filter.SetList( *m_fp_list );
-        m_progress_timer->Stop();
-
-        m_book->SetSelection( PAGE_SELECT );
-        m_finished_loading = true;
-
-        if( m_update )
-            UpdateList();
-    }
+    if( m_update )
+        UpdateList();
 }
 
 
@@ -210,7 +166,7 @@ wxString FOOTPRINT_SELECT_WIDGET::ShowPicker()
     // event loop goes all silly.
     wxASSERT( !dsparent || dsparent->IsQuasiModal() );
 
-    auto frame = m_kiway->Player( FRAME_PCB_MODULE_VIEWER_MODAL, true );
+    auto frame = m_kiway->Player( FRAME_FOOTPRINT_VIEWER_MODAL, true );
 
     if( !frame->ShowModal( &fpname, parent ) )
     {
@@ -238,14 +194,10 @@ void FOOTPRINT_SELECT_WIDGET::FilterByPinCount( int aPinCount )
 }
 
 
-void FOOTPRINT_SELECT_WIDGET::FilterByFootprintFilters(
-        wxArrayString const& aFilters, bool aZeroFilters )
+void FOOTPRINT_SELECT_WIDGET::FilterByFootprintFilters( wxArrayString const& aFilters,
+                                                        bool aZeroFilters )
 {
-    if( aZeroFilters && aFilters.size() == 0 )
-        m_zero_filter = true;
-    else
-        m_zero_filter = false;
-
+    m_zero_filter = ( aZeroFilters && aFilters.size() == 0 );
     m_fp_filter.FilterByFootprintFilters( aFilters );
 }
 
@@ -285,7 +237,7 @@ bool FOOTPRINT_SELECT_WIDGET::UpdateList()
     {
         for( auto& fpinfo : m_fp_filter )
         {
-            wxString display_name( fpinfo.GetNickname() + ":" + fpinfo.GetFootprintName() );
+            wxString display_name( fpinfo.GetLibNickname() + ":" + fpinfo.GetFootprintName() );
 
             m_fp_sel_ctrl->Append( display_name, new wxStringClientData( display_name ) );
             ++n_items;

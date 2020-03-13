@@ -25,25 +25,26 @@
 #ifndef CONDITIONAL_MENU_H
 #define CONDITIONAL_MENU_H
 
-#include "selection_conditions.h"
-#include <boost/unordered_map.hpp>
+#include <tool/selection_conditions.h>
+#include <tool/action_menu.h>
 #include <list>
 #include <wx/wx.h>
 
 class SELECTION_TOOL;
 class TOOL_ACTION;
 class TOOL_INTERACTIVE;
-class CONTEXT_MENU;
+class KIFACE_I;
 
-class CONDITIONAL_MENU
+
+class CONDITIONAL_MENU : public ACTION_MENU
 {
 public:
     ///> Constant to indicate that we do not care about an ENTRY location in the menu.
     static const int ANY_ORDER = -1;
 
-    CONDITIONAL_MENU( TOOL_INTERACTIVE* aTool ) :
-        m_tool( aTool )
-    {}
+    CONDITIONAL_MENU( bool isContextMenu, TOOL_INTERACTIVE* aTool );
+
+    ACTION_MENU* create() const override;
 
     /**
      * Function AddItem()
@@ -54,9 +55,26 @@ public:
      * @param aOrder determines location of the added item, higher numbers are put on the bottom.
      * You may use ANY_ORDER here if you think it does not matter.
      */
-    void AddItem( const TOOL_ACTION& aAction,
-                  const SELECTION_CONDITION& aCondition = SELECTION_CONDITIONS::ShowAlways,
+    void AddItem( const TOOL_ACTION& aAction, const SELECTION_CONDITION& aCondition,
                   int aOrder = ANY_ORDER );
+
+    void AddItem( int aId, const wxString& aText, const wxString& aTooltip, BITMAP_DEF aIcon,
+                  const SELECTION_CONDITION& aCondition, int aOrder = ANY_ORDER );
+
+    /**
+     * Function AddCheckItem()
+     *
+     * Adds a checked menu entry to run a TOOL_ACTION on selected items.
+     * @param aAction is a menu entry to be added.
+     * @param aCondition is a condition that has to be fulfilled to check the menu entry.
+     * @param aOrder determines location of the added item, higher numbers are put on the bottom.
+     * You may use ANY_ORDER here if you think it does not matter.
+     */
+    void AddCheckItem( const TOOL_ACTION& aAction, const SELECTION_CONDITION& aCondition,
+                       int aOrder = ANY_ORDER );
+
+    void AddCheckItem( int aId, const wxString& aText, const wxString& aTooltip, BITMAP_DEF aIcon,
+                       const SELECTION_CONDITION& aCondition, int aOrder = ANY_ORDER );
 
     /**
      * Function AddMenu()
@@ -70,7 +88,7 @@ public:
      * @param aOrder determines location of the added menu, higher numbers are put on the bottom.
      * You may use ANY_ORDER here if you think it does not matter.
      */
-    void AddMenu( CONTEXT_MENU* aMenu, bool aExpand = false,
+    void AddMenu( ACTION_MENU* aMenu,
                   const SELECTION_CONDITION& aCondition = SELECTION_CONDITIONS::ShowAlways,
                   int aOrder = ANY_ORDER );
 
@@ -78,56 +96,87 @@ public:
      * Function AddSeparator()
      *
      * Adds a separator to the menu.
-     * @param aCondition is a condition that has to be fulfilled to enable the submenu entry.
-     * @param aOrder determines location of the added menu, higher numbers are put on the bottom.
-     * You may use ANY_ORDER here if you think it does not matter.
+     * @param aOrder determines location of the separator, higher numbers are put on the bottom.
      */
-    void AddSeparator( const SELECTION_CONDITION& aCondition = SELECTION_CONDITIONS::ShowAlways,
-                       int aOrder = ANY_ORDER );
+    void AddSeparator( int aOrder = ANY_ORDER );
 
     /**
-     * Function Generate()
+     * Function AddClose()
      *
-     * Generates a context menu that contains only entries that are satisfying assigned conditions.
-     * @param aSelection is selection for which the conditions are checked against.
-     * @return Menu filtered by the entry conditions.
+     * Add a standard close item to the menu with the accelerator key CTRL-W.
+     * Emits the wxID_CLOSE event.
+     *
+     * @param aAppname is the application name to append to the tooltip
      */
-    CONTEXT_MENU* Generate( SELECTION& aSelection );
+    void AddClose( wxString aAppname = "" );
+
+    /**
+     * Functions AddQuitOrClose()
+     *
+     * Adds either a standard Quit or Close item to the menu. If aKiface is NULL or in
+     * single-instance then Quite (wxID_QUIT) is used, otherwise Close (wxID_CLOSE) is used.
+     *
+     * @param aAppname is the application name to append to the tooltip
+     */
+    void AddQuitOrClose( KIFACE_I* aKiface, wxString aAppname = "" );
+
+    /**
+     * Function Evaluate()
+     *
+     * Updates the contents of the menu based on the supplied conditions.
+     */
+    void Evaluate( SELECTION& aSelection );
+
+    /**
+     * Function Resolve()
+     *
+     * Updates the initial contents so that wxWidgets doesn't get its knickers tied in a knot
+     * over the menu being empty (mainly an issue on GTK, but also on OSX with the preferences
+     * and quit menu items).
+     */
+     void Resolve();
 
 private:
     ///> Helper class to organize menu entries.
     class ENTRY
     {
     public:
-        ENTRY( const TOOL_ACTION* aAction,
-                            const SELECTION_CONDITION& aCondition = SELECTION_CONDITIONS::ShowAlways,
-                            int aOrder = ANY_ORDER ) :
-            m_type( ACTION ), m_condition( aCondition ), m_order( aOrder ), m_expand( false )
+        ENTRY( const TOOL_ACTION* aAction, SELECTION_CONDITION aCondition, int aOrder,
+               bool aCheckmark ) :
+            m_type( ACTION ), m_icon(nullptr),
+            m_condition( aCondition ),
+            m_order( aOrder ),
+            m_isCheckmarkEntry( aCheckmark )
         {
             m_data.action = aAction;
         }
 
-        ENTRY( CONTEXT_MENU* aMenu, bool aExpand = false,
-                            const SELECTION_CONDITION& aCondition = SELECTION_CONDITIONS::ShowAlways,
-                            int aOrder = ANY_ORDER ) :
-            m_type( MENU ), m_condition( aCondition ), m_order( aOrder ), m_expand( aExpand )
+        ENTRY( ACTION_MENU* aMenu, SELECTION_CONDITION aCondition, int aOrder ) :
+            m_type( MENU ), m_icon(nullptr),
+            m_condition( aCondition ),
+            m_order( aOrder ),
+            m_isCheckmarkEntry( false )
         {
             m_data.menu = aMenu;
         }
 
-        ENTRY( wxMenuItem* aItem, const SELECTION_CONDITION& aCondition = SELECTION_CONDITIONS::ShowAlways,
-                            int aOrder = ANY_ORDER ) :
-            m_type( WXITEM ), m_condition( aCondition ), m_order( aOrder ), m_expand( false )
+        ENTRY( wxMenuItem* aItem, const BITMAP_OPAQUE* aWxMenuBitmap,
+                SELECTION_CONDITION aCondition, int aOrder, bool aCheckmark ) :
+            m_type( WXITEM ), m_icon( aWxMenuBitmap ),
+            m_condition( aCondition ),
+            m_order( aOrder ),
+            m_isCheckmarkEntry( aCheckmark )
         {
             m_data.wxItem = aItem;
         }
 
         // Separator
-        ENTRY( const SELECTION_CONDITION& aCondition = SELECTION_CONDITIONS::ShowAlways,
-                            int aOrder = ANY_ORDER ) :
-            m_type( SEPARATOR ), m_condition( aCondition ), m_order( aOrder ), m_expand( false )
+        ENTRY( SELECTION_CONDITION aCondition, int aOrder ) :
+            m_type( SEPARATOR ), m_icon(nullptr),
+            m_condition( aCondition ),
+            m_order( aOrder ),
+            m_isCheckmarkEntry( false )
         {
-            m_data.wxItem = NULL;
         }
 
         ///> Possible entry types.
@@ -143,13 +192,18 @@ private:
             return m_type;
         }
 
+        inline const BITMAP_OPAQUE* GetIcon() const
+        {
+            return m_icon;
+        }
+
         inline const TOOL_ACTION* Action() const
         {
             assert( m_type == ACTION );
             return m_data.action;
         }
 
-        inline CONTEXT_MENU* Menu() const
+        inline ACTION_MENU* Menu() const
         {
             assert( m_type == MENU );
             return m_data.menu;
@@ -161,10 +215,9 @@ private:
             return m_data.wxItem;
         }
 
-        inline bool Expand() const
+        inline bool IsCheckmarkEntry() const
         {
-            assert( m_type == MENU );
-            return m_expand;
+            return m_isCheckmarkEntry;
         }
 
         inline const SELECTION_CONDITION& Condition() const
@@ -184,11 +237,12 @@ private:
 
     private:
         ENTRY_TYPE m_type;
+        const BITMAP_OPAQUE* m_icon;
 
         union {
             const TOOL_ACTION* action;
-            CONTEXT_MENU* menu;
-            wxMenuItem* wxItem;
+            ACTION_MENU*       menu;
+            wxMenuItem*        wxItem;
         } m_data;
 
         ///> Condition to be fulfilled to show the entry in menu.
@@ -197,8 +251,7 @@ private:
         ///> Order number, the higher the number the lower position it takes it is in the menu.
         int m_order;
 
-        ///> CONTEXT_MENU expand flag
-        bool m_expand;
+        bool m_isCheckmarkEntry;
     };
 
     ///> Inserts the entry, preserving the requested order.
@@ -206,9 +259,6 @@ private:
 
     ///> List of all menu entries.
     std::list<ENTRY> m_entries;
-
-    ///> tool owning the menu
-    TOOL_INTERACTIVE* m_tool;
 };
 
 #endif /* CONDITIONAL_MENU_H */

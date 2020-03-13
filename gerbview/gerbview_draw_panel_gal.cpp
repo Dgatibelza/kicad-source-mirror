@@ -1,7 +1,7 @@
 /*
  * This program source code file is part of KiCad, a free EDA CAD application.
  *
- * Copyright (C) 2017 KiCad Developers, see AUTHORS.txt for contributors.
+ * Copyright (C) 2018 KiCad Developers, see AUTHORS.txt for contributors.
  *
  * This program is free software: you can redistribute it and/or modify it
  * under the terms of the GNU General Public License as published by the
@@ -21,13 +21,18 @@
 #include <view/view.h>
 #include <view/wx_view_controls.h>
 #include <gerbview_painter.h>
+#include <ws_proxy_view_item.h>
 
-#include <class_colors_design_settings.h>
 #include <gerbview_frame.h>
-#include <class_gbr_display_options.h>
+#include <gbr_display_options.h>
 #include <gal/graphics_abstraction_layer.h>
+#include <settings/settings_manager.h>
+
+#include <gerber_file_image.h>
+#include <gerber_file_image_list.h>
 
 #include <functional>
+#include <memory>
 using namespace std::placeholders;
 
 
@@ -36,34 +41,34 @@ GERBVIEW_DRAW_PANEL_GAL::GERBVIEW_DRAW_PANEL_GAL( wxWindow* aParentWindow, wxWin
                                         KIGFX::GAL_DISPLAY_OPTIONS& aOptions, GAL_TYPE aGalType ) :
 EDA_DRAW_PANEL_GAL( aParentWindow, aWindowId, aPosition, aSize, aOptions, aGalType )
 {
-    setDefaultLayerDeps();
+    m_view = new KIGFX::VIEW( true );
+    m_view->SetGAL( m_gal );
+    GetGAL()->SetWorldUnitLength( 1.0/IU_PER_MM /* 10 nm */ / 25.4 /* 1 inch in mm */ );
 
-    m_painter = new KIGFX::GERBVIEW_PAINTER( m_gal );
-    m_view->SetPainter( m_painter );
+    m_painter = std::make_unique<KIGFX::GERBVIEW_PAINTER>( m_gal );
+    m_view->SetPainter( m_painter.get() );
+
+    m_viewControls = new KIGFX::WX_VIEW_CONTROLS( m_view, this );
+
+    setDefaultLayerDeps();
 
     // Load display options (such as filled/outline display of items).
     auto frame = static_cast< GERBVIEW_FRAME* >( GetParentEDAFrame() );
 
     if( frame )
     {
-        auto displ_opts = (GBR_DISPLAY_OPTIONS*) frame->GetDisplayOptions();
-        static_cast<KIGFX::GERBVIEW_RENDER_SETTINGS*>( m_view->GetPainter()->GetSettings() )
-                                                     ->LoadDisplayOptions( displ_opts );
-        UseColorScheme( frame->m_colorsSettings );
+        auto& displ_opts = frame->GetDisplayOptions();
+        auto rs = static_cast<KIGFX::GERBVIEW_RENDER_SETTINGS*>(
+                m_view->GetPainter()->GetSettings() );
+
+        rs->LoadDisplayOptions( displ_opts );
+        rs->LoadColors( Pgm().GetSettingsManager().GetColorSettings() );
     }
 }
 
 
 GERBVIEW_DRAW_PANEL_GAL::~GERBVIEW_DRAW_PANEL_GAL()
 {
-}
-
-
-void GERBVIEW_DRAW_PANEL_GAL::UseColorScheme( const COLORS_DESIGN_SETTINGS* aSettings )
-{
-    KIGFX::GERBVIEW_RENDER_SETTINGS* rs;
-    rs = static_cast<KIGFX::GERBVIEW_RENDER_SETTINGS*>( m_view->GetPainter()->GetSettings() );
-    rs->ImportLegacyColors( aSettings );
 }
 
 
@@ -82,7 +87,8 @@ void GERBVIEW_DRAW_PANEL_GAL::SetHighContrastLayer( int aLayer )
 }
 
 
-void GERBVIEW_DRAW_PANEL_GAL::GetMsgPanelInfo( std::vector<MSG_PANEL_ITEM>& aList )
+void GERBVIEW_DRAW_PANEL_GAL::GetMsgPanelInfo(
+        EDA_UNITS aUnits, std::vector<MSG_PANEL_ITEM>& aList )
 {
 
 }
@@ -95,7 +101,7 @@ void GERBVIEW_DRAW_PANEL_GAL::OnShow()
     if( frame )
     {
         SetTopLayer( frame->GetActiveLayer() );
-        GBR_DISPLAY_OPTIONS* displ_opts = (GBR_DISPLAY_OPTIONS*) frame->GetDisplayOptions();
+        auto& displ_opts = frame->GetDisplayOptions();
         static_cast<KIGFX::GERBVIEW_RENDER_SETTINGS*>(
             m_view->GetPainter()->GetSettings() )->LoadDisplayOptions( displ_opts );
     }
@@ -107,7 +113,36 @@ void GERBVIEW_DRAW_PANEL_GAL::OnShow()
 bool GERBVIEW_DRAW_PANEL_GAL::SwitchBackend( GAL_TYPE aGalType )
 {
     bool rv = EDA_DRAW_PANEL_GAL::SwitchBackend( aGalType );
+
+    // The next onPaint event will call m_view->UpdateItems() that is very time consumming
+    // after switching to opengl. Clearing m_view and rebuild it is much faster
+    if( aGalType == GAL_TYPE_OPENGL )
+    {
+        GERBVIEW_FRAME* frame = dynamic_cast<GERBVIEW_FRAME*>( GetParent() );
+
+        if( frame )
+        {
+            m_view->Clear();
+
+            for( int layer = GERBER_DRAWLAYERS_COUNT-1; layer>= 0; --layer )
+            {
+                GERBER_FILE_IMAGE* gerber = frame->GetImagesList()->GetGbrImage( layer );
+
+                if( gerber == NULL )    // Graphic layer not yet used
+                    continue;
+
+                for( GERBER_DRAW_ITEM* item : gerber->GetItems() )
+                {
+                    m_view->Add (item );
+                }
+            }
+        }
+    }
+
     setDefaultLayerDeps();
+
+    GetGAL()->SetWorldUnitLength( 1.0/IU_PER_MM /* 10 nm */ / 25.4 /* 1 inch in mm */ );
+
     return rv;
 }
 
@@ -128,9 +163,20 @@ void GERBVIEW_DRAW_PANEL_GAL::setDefaultLayerDeps()
     m_view->SetLayerDisplayOnly( LAYER_GERBVIEW_GRID );
     m_view->SetLayerDisplayOnly( LAYER_GERBVIEW_AXES );
     m_view->SetLayerDisplayOnly( LAYER_GERBVIEW_BACKGROUND );
+    m_view->SetLayerDisplayOnly( LAYER_WORKSHEET );
+
+    m_view->SetLayerTarget( LAYER_SELECT_OVERLAY, KIGFX::TARGET_OVERLAY );
+    m_view->SetLayerDisplayOnly( LAYER_SELECT_OVERLAY );
 
     m_view->SetLayerTarget( LAYER_GP_OVERLAY, KIGFX::TARGET_OVERLAY );
     m_view->SetLayerDisplayOnly( LAYER_GP_OVERLAY );
+}
+
+
+void GERBVIEW_DRAW_PANEL_GAL::SetWorksheet( KIGFX::WS_PROXY_VIEW_ITEM* aWorksheet )
+{
+    m_worksheet.reset( aWorksheet );
+    m_view->Add( m_worksheet.get() );
 }
 
 
@@ -141,7 +187,7 @@ void GERBVIEW_DRAW_PANEL_GAL::SetTopLayer( int aLayer )
     for( int i = 0; i < GERBER_DRAWLAYERS_COUNT; ++i )
     {
         m_view->SetLayerOrder( GERBER_DCODE_LAYER( GERBER_DRAW_LAYER( i ) ), 2 * i );
-        m_view->SetLayerOrder( i, ( 2 * i ) + 1 );
+        m_view->SetLayerOrder( GERBER_DRAW_LAYER( i ), ( 2 * i ) + 1 );
     }
 
     m_view->SetTopLayer( aLayer );
@@ -149,7 +195,18 @@ void GERBVIEW_DRAW_PANEL_GAL::SetTopLayer( int aLayer )
     // Move DCODE layer to the top
     m_view->SetTopLayer( GERBER_DCODE_LAYER( aLayer ) );
 
+    m_view->SetTopLayer( LAYER_SELECT_OVERLAY );
+
     m_view->SetTopLayer( LAYER_GP_OVERLAY );
 
     m_view->UpdateAllLayersOrder();
+}
+
+
+BOX2I GERBVIEW_DRAW_PANEL_GAL::GetDefaultViewBBox() const
+{
+    if( m_worksheet && m_view->IsLayerVisible( LAYER_WORKSHEET ) )
+        return m_worksheet->ViewBBox();
+
+    return BOX2I();
 }

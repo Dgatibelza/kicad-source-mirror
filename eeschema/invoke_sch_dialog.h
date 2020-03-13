@@ -1,9 +1,8 @@
-
 /*
  * This program source code file is part of KiCad, a free EDA CAD application.
  *
  * Copyright (C) 2013 SoftPLC Corporation, Dick Hollenbeck <dick@softplc.com>
- * Copyright (C) 2013 KiCad Developers, see change_log.txt for contributors.
+ * Copyright (C) 2013-2019 KiCad Developers, see change_log.txt for contributors.
  *
  * This program is free software; you can redistribute it and/or
  * modify it under the terms of the GNU General Public License
@@ -43,12 +42,15 @@
 #include <set>
 #include <vector>
 #include <list>
+#include <class_draw_panel_gal.h>
 
 class wxFrame;
 class wxDialog;
 class LIB_PART;
 class PART_LIBS;
 class SCH_COMPONENT;
+class SCH_TEXT;
+class SCH_SHEET_PATH;
 class RESCUER;
 
 // Often this is not used in the prototypes, since wxFrame is good enough and would
@@ -56,18 +58,17 @@ class RESCUER;
 class SCH_EDIT_FRAME;
 
 /**
- * Function InvokeDialogRescueEach
  * This dialog asks the user which rescuable, cached parts he wants to rescue.
- * Any rejects will be pruned from aCandidates.
- * @param aCaller - the SCH_EDIT_FRAME calling this
+ * Any rejects will be pruned from \a aCandidates.
+ *
+ * @param aParent - the wxWindow object calling this dialog
  * @param aRescuer - the active RESCUER instance
+ * @param aCurrentSheet the current sheet in the schematic editor frame
+ * @param aGalBackEndType the current GAL type used to render symbols
  * @param aAskShowAgain - if true, a "Never Show Again" button will be included
  */
-int InvokeDialogRescueEach( SCH_EDIT_FRAME* aCaller, RESCUER& aRescuer, bool aAskShowAgain );
-
-/// Create and show DIALOG_ANNOTATE and return whatever
-/// DIALOG_ANNOTATE::ShowModal() returns.
-int InvokeDialogAnnotate( SCH_EDIT_FRAME* aCaller, wxString message = "" );
+int InvokeDialogRescueEach( wxWindow* aParent, RESCUER& aRescuer, SCH_SHEET_PATH* aCurrentSheet,
+                            EDA_DRAW_PANEL_GAL::GAL_TYPE aGalBackEndType, bool aAskShowAgain );
 
 /// Create the modeless DIALOG_ERC and show it, return something to
 /// destroy or close it.  The dialog will have ID_DIALOG_ERC from id.h
@@ -81,25 +82,35 @@ int InvokeDialogPrintUsingPrinter( SCH_EDIT_FRAME* aCaller );
 /// DIALOG_BOM::ShowModal() returns.
 int InvokeDialogCreateBOM( SCH_EDIT_FRAME* aCaller );
 
-/// Create and show DIALOG_BOM_EDITOR
-void InvokeDialogCreateBOMEditor( SCH_EDIT_FRAME* aCaller );
+/// Create and show DIALOG_BUS_MANAGER
+void InvokeDialogBusManager( SCH_EDIT_FRAME* aCaller );
 
 /// Update symbol fields
 int InvokeDialogUpdateFields( SCH_EDIT_FRAME* aCaller,
         const std::list<SCH_COMPONENT*> aComponents, bool aCreateUndoEntry );
 
 /**
- * Function InvokeDialogNetList
- * creates and shows NETLIST_DIALOG and returns whatever
+ * Create and shows NETLIST_DIALOG and returns whatever
  * NETLIST_DIALOG::ShowModal() returns.
+ *
  * @param int - NET_PLUGIN_CHANGE means user added or deleted a plugin,
  *              wxID_OK, or wxID_CANCEL.
  */
 #define NET_PLUGIN_CHANGE   1
 int InvokeDialogNetList( SCH_EDIT_FRAME* aCaller );
 
-bool InvokeEeschemaConfig( wxWindow* aParent,
-        wxString* aCallersProjectSpecificLibPaths, wxArrayString* aCallersLibNames );
+/**
+ * Run a dialog to modify the LIB_ID of components for instance when a symbol has
+ * moved from a symbol library to another symbol library
+ * @return true if changes are made, false if no change
+ */
+bool InvokeDialogEditComponentsLibId( SCH_EDIT_FRAME* aCaller );
+
+/**
+ * Launches the "Edit Text/Label" dialog
+ * @return the ShowModal() result (wxID_OK, wxID_CANCEL, etc.)
+ */
+int InvokeDialogLabelEditor( SCH_EDIT_FRAME* aCaller, SCH_TEXT* aText );
 
 
 #endif  // INVOKE_SCH_DIALOG_H_

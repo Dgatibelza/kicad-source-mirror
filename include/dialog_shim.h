@@ -2,7 +2,7 @@
  * This program source code file is part of KiCad, a free EDA CAD application.
  *
  * Copyright (C) 2012 SoftPLC Corporation, Dick Hollenbeck <dick@softplc.com>
- * Copyright (C) 2012-2016 KiCad Developers, see CHANGELOG.TXT for contributors.
+ * Copyright (C) 2012-2019 KiCad Developers, see AUTHORS.txt for contributors.
  *
  * This program is free software; you can redistribute it and/or
  * modify it under the terms of the GNU General Public License
@@ -28,18 +28,41 @@
 #include <wx/dialog.h>
 #include <hashtables.h>
 #include <kiway_player.h>
+class wxGridEvent;
 
-#ifdef  __WXMAC__
-/**
- * MACOS requires this option to be set to 1 in order to set dialogs focus.
- **/
-#define DLGSHIM_USE_SETFOCUS      1
-#else
-#define DLGSHIM_USE_SETFOCUS      0
-#endif
+
+
+struct WINDOW_THAWER
+{
+    WINDOW_THAWER( wxWindow* aWindow )
+    {
+        m_window = aWindow;
+        m_freezeCount = 0;
+
+        while( m_window->IsFrozen() )
+        {
+            m_window->Thaw();
+            m_freezeCount++;
+        }
+    }
+
+    ~WINDOW_THAWER()
+    {
+        while( m_freezeCount > 0 )
+        {
+            m_window->Freeze();
+            m_freezeCount--;
+        }
+    }
+
+protected:
+    wxWindow* m_window;
+    int       m_freezeCount;
+};
+
 
 class WDO_ENABLE_DISABLE;
-class EVENT_LOOP;
+class WX_EVENT_LOOP;
 
 // These macros are for DIALOG_SHIM only, NOT for KIWAY_PLAYER.  KIWAY_PLAYER
 // has its own support for quasi modal and its platform specific issues are different
@@ -49,42 +72,50 @@ class EVENT_LOOP;
 
 
 /**
- * Class DIALOG_SHIM
- * may sit in the inheritance tree between wxDialog and any class written by
- * wxFormBuilder.  To put it there, use wxFormBuilder tool and set:
+ * Dialog helper object to sit in the inheritance tree between wxDialog and any class written
+ * by wxFormBuilder.
+ *
+ * To put it there, use wxFormBuilder tool and set:
  * <br> subclass name = DIALOG_SHIM
  * <br> subclass header = dialog_shim.h
  * <br>
  * in the dialog window's properties.
- **/
+ */
 class DIALOG_SHIM : public wxDialog, public KIWAY_HOLDER
 {
     /**
-     * Function OnCloseWindow
-     *
-     * properly handles the wxCloseEvent when in the quasimodal mode when not calling
+     * Properly handle the wxCloseEvent when in the quasimodal mode when not calling
      * EndQuasiModal which is possible with any dialog derived from #DIALOG_SHIM.
      */
     void OnCloseWindow( wxCloseEvent& aEvent );
 
     /**
-     * Function OnCloseWindow
-     *
-     * properly handles the default button events when in the quasimodal mode when not
+     * Properly handle the default button events when in the quasimodal mode when not
      * calling EndQuasiModal which is possible with any dialog derived from #DIALOG_SHIM.
      */
     void OnButton( wxCommandEvent& aEvent );
+
+    void OnCharHook( wxKeyEvent& aEvt );
 
 public:
 
     DIALOG_SHIM( wxWindow* aParent, wxWindowID id, const wxString& title,
             const   wxPoint& pos = wxDefaultPosition,
             const   wxSize&  size = wxDefaultSize,
-            long    style = wxDEFAULT_DIALOG_STYLE,
+            long    style = wxDEFAULT_FRAME_STYLE|wxRESIZE_BORDER,
             const   wxString& name = wxDialogNameStr
             );
 
     ~DIALOG_SHIM();
+
+    /**
+     * Sets the window (usually a wxTextCtrl) that should be focused when the dialog is
+     * shown.
+     */
+    void SetInitialFocus( wxWindow* aWindow )
+    {
+        m_initialFocusTarget = aWindow;
+    }
 
     int ShowQuasiModal();      // disable only the parent window, otherwise modal.
 
@@ -95,6 +126,25 @@ public:
     bool Show( bool show ) override;
 
     bool Enable( bool enable ) override;
+
+    void OnPaint( wxPaintEvent &event );
+
+    EDA_UNITS GetUserUnits() const
+    {
+        return m_units;
+    }
+
+    static bool IsCtrl( int aChar, const wxKeyEvent& e )
+    {
+        return e.GetKeyCode() == aChar && e.ControlDown() && !e.AltDown() &&
+                !e.ShiftDown() && !e.MetaDown();
+    }
+
+    static bool IsShiftCtrl( int aChar, const wxKeyEvent& e )
+    {
+        return e.GetKeyCode() == aChar && e.ControlDown() && !e.AltDown() &&
+                e.ShiftDown() && !e.MetaDown();
+    }
 
 protected:
 
@@ -115,27 +165,55 @@ protected:
      */
     void FinishDialogSettings();
 
-    /** A ugly hack to fix an issue on OSX:
-     * when typing ctrl+c in a wxTextCtrl inside a dialog, it is closed instead of
-     * copying a text if a button with wxID_CANCEL is used in a wxStdDialogButtonSizer,
-     * when the dlg is created by wxFormBuilder:
-     * the label is &Cancel, and this accelerator key has priority
-     * to copy text standard accelerator, and the dlg is closed when trying to copy text
-     * this function do nothing on other platforms
+    /**
+     * Set the dialog to the given dimensions in "dialog units". These are units equivalent
+     * to 4* the average character width and 8* the average character height, allowing a dialog
+     * to be sized in a way that scales it with the system font.
      */
-    void FixOSXCancelButtonIssue();
+    void SetSizeInDU( int x, int y );
 
-    std::string m_hash_key;     // alternate for class_map when classname re-used.
+    /**
+     * Convert an integer number of dialog units to pixels, horizontally. See SetSizeInDU or
+     * wxDialog documentation for more information.
+     */
+    int HorizPixelsFromDU( int x );
 
-    // variables for quasi-modal behavior support, only used by a few derivatives.
-    EVENT_LOOP*         m_qmodal_loop;      // points to nested event_loop, NULL means not qmodal and dismissed
-    bool                m_qmodal_showing;
-    WDO_ENABLE_DISABLE* m_qmodal_parent_disabler;
+    /**
+     * Convert an integer number of dialog units to pixels, vertically. See SetSizeInDU or
+     * wxDialog documentation for more information.
+     */
+    int VertPixelsFromDU( int y );
 
-#if DLGSHIM_USE_SETFOCUS
+    /**
+     * Clear the existing dialog size and position.
+     *
+     * This will cause the dialog size to be clear so the next time the dialog is shown
+     * the sizers will layout the dialog accordingly.  This useful when there are dialog
+     * windows that size changes due to layout dependency hidden controls.
+     */
+    void ResetSize();
+
+    EDA_UNITS   m_units;    // userUnits for display and parsing
+    std::string m_hash_key; // alternate for class_map when classname re-used
+
+    // On MacOS (at least) SetFocus() calls made in the constructor will fail because a
+    // window that isn't yet visible will return false to AcceptsFocus().  So we must delay
+    // the initial-focus SetFocus() call to the first paint event.
+    bool                   m_firstPaintEvent;
+    wxWindow*              m_initialFocusTarget;
+
+    WX_EVENT_LOOP*         m_qmodal_loop;  // points to nested event_loop, NULL means not qmodal
+                                           // and dismissed
+    bool                   m_qmodal_showing;
+    WDO_ENABLE_DISABLE*    m_qmodal_parent_disabler;
+
+    std::vector<wxWindow*> m_tabOrder;
+
 private:
-    void    onInit( wxInitDialogEvent& aEvent );
-#endif
+    void OnGridEditorShown( wxGridEvent& event );
+    void OnGridEditorHidden( wxGridEvent& event );
+
+    DECLARE_EVENT_TABLE()
 };
 
 #endif  // DIALOG_SHIM_

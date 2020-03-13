@@ -2,7 +2,7 @@
  * This program source code file is part of KiCad, a free EDA CAD application.
  *
  * Copyright (C) 2015-2017 Chris Pavlina <pavlina.chris@gmail.com>
- * Copyright (C) 2015-2017 KiCad Developers, see AUTHORS.txt for contributors.
+ * Copyright (C) 2015-2019 KiCad Developers, see AUTHORS.txt for contributors.
  *
  * This program is free software; you can redistribute it and/or
  * modify it under the terms of the GNU General Public License
@@ -26,7 +26,6 @@
 #include <wx/log.h>
 #include <wx/tokenzr.h>
 #include <climits>
-#include <make_unique.h>
 
 bool EDA_PATTERN_MATCH_SUBSTR::SetPattern( const wxString& aPattern )
 {
@@ -156,6 +155,44 @@ wxString const& EDA_PATTERN_MATCH_WILDCARD::GetPattern() const
 int EDA_PATTERN_MATCH_WILDCARD::Find( const wxString& aCandidate ) const
 {
     return EDA_PATTERN_MATCH_REGEX::Find( aCandidate );
+}
+
+
+bool EDA_PATTERN_MATCH_WILDCARD_EXPLICIT::SetPattern( const wxString& aPattern )
+{
+    m_wildcard_pattern = aPattern;
+
+    // Compile the wildcard string to a regular expression
+    wxString regex;
+    regex.Alloc( 2 * aPattern.Length() );   // no need to keep resizing, we know the size roughly
+
+    const wxString to_replace = wxT( ".*+?^${}()|[]/\\" );
+
+    regex +=  wxT( "^" );
+    for( wxString::const_iterator it = aPattern.begin(); it < aPattern.end(); ++it )
+    {
+        wxUniChar c = *it;
+        if( c == '?' )
+        {
+            regex += wxT( "." );
+        }
+        else if( c == '*' )
+        {
+            regex += wxT( ".*" );
+        }
+        else if( to_replace.Find( c ) != wxNOT_FOUND )
+        {
+            regex += "\\";
+            regex += c;
+        }
+        else
+        {
+            regex += c;
+        }
+    }
+    regex += wxT( "$" );
+
+    return EDA_PATTERN_MATCH_REGEX::SetPattern( regex );
 }
 
 

@@ -10,9 +10,11 @@ endif()
 
 add_definitions( -DPCBNEW )
 
+add_subdirectory(connectivity)
+
 add_subdirectory(router)
 
-# psnrouter depends on make_lexer outputs in common (bug # 1285878 )
+# psnrouter depends on make_lexer outputs in common (bug #1285878 )
 add_dependencies( pnsrouter pcbcommon )
 
 if( KICAD_SCRIPTING OR KICAD_SCRIPTING_MODULES )
@@ -20,7 +22,7 @@ if( KICAD_SCRIPTING OR KICAD_SCRIPTING_MODULES )
 
     # Infrequently needed headers go at end of search paths, append to INC_AFTER
     set( INC_AFTER ${INC_AFTER} swig )
-    set( INC_AFTER ${INC_AFTER} ../common/swig )
+    set( INC_AFTER ${INC_AFTER} ${CMAKE_SOURCE_DIR}/common/swig )
 
     #message( STATUS "pcbnew INC_AFTER:${INC_AFTER}" )
 endif()
@@ -37,288 +39,299 @@ include_directories( BEFORE ${INC_BEFORE} )
 include_directories(
     ./dialogs
     ./autorouter
-    ../3d-viewer
-    ../common
-    ../polygon
-    ../common/dialogs
+    ${CMAKE_SOURCE_DIR}/3d-viewer
+    ${CMAKE_SOURCE_DIR}/common
+    ${CMAKE_SOURCE_DIR}/common/dialogs
     ./exporters
-    ../lib_dxf
-    ./import_dxf
-    ../utils/idftools
+    ${CMAKE_SOURCE_DIR}/utils/idftools
     ${GLM_INCLUDE_DIR}
+    ./specctra_import_export
     ${INC_AFTER}
     )
 
 set( PCBNEW_DIALOGS
-    dialogs/dialog_block_options_base.cpp
-    dialogs/dialog_block_options.cpp
-    dialogs/dialog_cleaning_options_base.cpp
-    dialogs/dialog_cleaning_options.cpp
+    dialogs/dialog_filter_selection.cpp
+    dialogs/dialog_filter_selection_base.cpp
+    dialogs/dialog_board_setup.cpp
+    dialogs/dialog_board_statistics.cpp
+    dialogs/dialog_board_statistics_base.cpp
+    dialogs/dialog_choose_footprint.cpp
+    dialogs/dialog_cleanup_tracks_and_vias.cpp
+    dialogs/dialog_cleanup_tracks_and_vias_base.cpp
     dialogs/dialog_copper_zones.cpp
     dialogs/dialog_copper_zones_base.cpp
     dialogs/dialog_create_array.cpp
     dialogs/dialog_create_array_base.cpp
-    dialogs/dialog_design_rules.cpp
-    dialogs/dialog_design_rules_base.cpp
-    dialogs/dialog_dimension_editor_base.cpp
-    dialogs/dialog_display_options.cpp
-    dialogs/dialog_display_options_base.cpp
-    dialogs/dialog_drc_base.cpp
     dialogs/dialog_drc.cpp
-    dialogs/dialog_edit_module_for_BoardEditor.cpp
-    dialogs/dialog_edit_module_for_BoardEditor_base.cpp
-    dialogs/dialog_edit_module_for_Modedit_base.cpp
-    dialogs/dialog_edit_module_for_Modedit.cpp
-    dialogs/dialog_edit_module_text.cpp
-    dialogs/dialog_edit_module_text_base.cpp
+    dialogs/dialog_drc_base.cpp
+    dialogs/dialog_edit_footprint_for_BoardEditor.cpp
+    dialogs/dialog_edit_footprint_for_BoardEditor_base.cpp
+    dialogs/dialog_edit_footprint_for_fp_editor.cpp
+    dialogs/dialog_edit_footprint_for_fp_editor_base.cpp
     dialogs/dialog_enum_pads.cpp
     dialogs/dialog_enum_pads_base.cpp
-    dialogs/dialog_exchange_modules_base.cpp
-    dialogs/dialog_exchange_modules.cpp
+    dialogs/dialog_exchange_footprints.cpp
+    dialogs/dialog_exchange_footprints_base.cpp
     dialogs/dialog_export_idf.cpp
     dialogs/dialog_export_idf_base.cpp
-    dialogs/dialog_export_vrml_base.cpp
-    dialogs/dialog_export_vrml.cpp
-    dialogs/dialog_export_step_base.cpp
     dialogs/dialog_export_step.cpp
-    dialogs/dialog_find_base.cpp
+    dialogs/dialog_export_step_base.cpp
+    dialogs/dialog_export_svg.cpp
+    dialogs/dialog_export_svg_base.cpp
+    dialogs/dialog_export_vrml.cpp
+    dialogs/dialog_export_vrml_base.cpp
     dialogs/dialog_find.cpp
-    dialogs/dialog_fp_lib_table_base.cpp
-    dialogs/dialog_fp_lib_table.cpp
-    dialogs/dialog_fp_plugin_options_base.cpp
+    dialogs/dialog_find_base.cpp
+    dialogs/dialog_footprint_wizard_list.cpp
+    dialogs/dialog_footprint_wizard_list_base.cpp
+    dialogs/dialog_fp_browser_display_options.cpp
+    dialogs/dialog_fp_browser_display_options_base.cpp
     dialogs/dialog_fp_plugin_options.cpp
-    dialogs/dialog_freeroute_exchange.cpp
-    dialogs/dialog_freeroute_exchange_base.cpp
+    dialogs/dialog_fp_plugin_options_base.cpp
+    dialogs/dialog_gen_footprint_position_file_base.cpp
     dialogs/dialog_gencad_export_options.cpp
     dialogs/dialog_gendrill.cpp
     dialogs/dialog_gendrill_base.cpp
-    dialogs/dialog_gen_module_position_file_base.cpp
-    dialogs/dialog_general_options.cpp
-    dialogs/dialog_general_options_BoardEditor_base.cpp
     dialogs/dialog_get_footprint_by_name_base.cpp
-    dialogs/dialog_global_edit_tracks_and_vias.cpp
-    dialogs/dialog_global_edit_tracks_and_vias_base.cpp
-    dialogs/dialog_global_modules_fields_edition.cpp
-    dialogs/dialog_global_modules_fields_edition_base.cpp
-    dialogs/dialog_global_pads_edition_base.cpp
-    dialogs/dialog_global_pads_edition.cpp
-    dialogs/dialog_graphic_items_options.cpp
-    dialogs/dialog_graphic_items_options_base.cpp
-    dialogs/dialog_graphic_item_properties.cpp
-    dialogs/dialog_graphic_item_properties_base.cpp
-    dialogs/dialog_graphic_item_properties_for_Modedit.cpp
     dialogs/dialog_global_deletion.cpp
     dialogs/dialog_global_deletion_base.cpp
+    dialogs/dialog_global_edit_tracks_and_vias.cpp
+    dialogs/dialog_global_edit_tracks_and_vias_base.cpp
+    dialogs/dialog_global_edit_text_and_graphics.cpp
+    dialogs/dialog_global_edit_text_and_graphics_base.cpp
+    dialogs/dialog_global_fp_lib_table_config.cpp
+    dialogs/dialog_push_pad_properties.cpp
+    dialogs/dialog_push_pad_properties_base.cpp
+    dialogs/dialog_graphic_item_properties.cpp
+    dialogs/dialog_graphic_item_properties_base.cpp
+    dialogs/dialog_import_settings.cpp
+    dialogs/dialog_import_settings_base.cpp
     dialogs/dialog_keepout_area_properties.cpp
     dialogs/dialog_keepout_area_properties_base.cpp
     dialogs/dialog_layer_selection_base.cpp
-    dialogs/dialog_layers_setup.cpp
-    dialogs/dialog_layers_setup_base.cpp
-    dialogs/dialog_modedit_display_options.cpp
-    dialogs/dialog_modedit_options.cpp
-    dialogs/dialog_modedit_options_base.cpp
-    dialogs/dialog_netlist.cpp
-    dialogs/dialog_netlist_fbp.cpp
-    dialogs/dialog_pcb_text_properties.cpp
-    dialogs/dialog_pcb_text_properties_base.cpp
-    dialogs/dialog_pns_settings.cpp
-    dialogs/dialog_pns_settings_base.cpp
     dialogs/dialog_move_exact.cpp
     dialogs/dialog_move_exact_base.cpp
+    dialogs/dialog_netlist.cpp
+    dialogs/dialog_netlist_base.cpp
+    dialogs/dialog_non_copper_zones_properties.cpp
+    dialogs/dialog_non_copper_zones_properties_base.cpp
+    dialogs/dialog_pad_basicshapes_properties.cpp
+    dialogs/dialog_pad_properties.cpp
+    dialogs/dialog_pad_properties_base.cpp
+    dialogs/dialog_plot.cpp
+    dialogs/dialog_plot_base.cpp
     dialogs/dialog_pns_diff_pair_dimensions.cpp
     dialogs/dialog_pns_diff_pair_dimensions_base.cpp
     dialogs/dialog_pns_length_tuning_settings.cpp
     dialogs/dialog_pns_length_tuning_settings_base.cpp
-    dialogs/dialog_non_copper_zones_properties.cpp
-    dialogs/dialog_non_copper_zones_properties_base.cpp
-    dialogs/dialog_pad_properties.cpp
-    dialogs/dialog_pad_properties_base.cpp
-    dialogs/dialog_pad_basicshapes_properties.cpp
-    dialogs/dialog_plot_base.cpp
-    dialogs/dialog_plot.cpp
+    dialogs/dialog_pns_settings.cpp
+    dialogs/dialog_pns_settings_base.cpp
     dialogs/dialog_position_relative.cpp
     dialogs/dialog_position_relative_base.cpp
-    dialogs/dialog_print_for_modedit.cpp
-    dialogs/dialog_print_for_modedit_base.cpp
-    dialogs/dialog_print_using_printer.cpp
-    dialogs/dialog_print_using_printer_base.cpp
-    dialogs/dialog_mask_clearance.cpp
-    dialogs/dialog_mask_clearance_base.cpp
-    dialogs/dialog_SVG_print.cpp
-    dialogs/dialog_SVG_print_base.cpp
-    dialogs/dialog_select_pretty_lib.cpp
-    dialogs/dialog_select_net_from_list_base.cpp
+    dialogs/dialog_print_pcbnew.cpp
     dialogs/dialog_select_net_from_list.cpp
-    dialogs/dialog_select_pretty_lib_base.cpp
+    dialogs/dialog_select_net_from_list_base.cpp
     dialogs/dialog_set_grid.cpp
     dialogs/dialog_set_grid_base.cpp
+    dialogs/dialog_swap_layers.cpp
+    dialogs/dialog_swap_layers_base.cpp
+    dialogs/dialog_target_properties.cpp
     dialogs/dialog_target_properties_base.cpp
+    dialogs/dialog_text_properties.cpp
+    dialogs/dialog_text_properties_base.cpp
     dialogs/dialog_track_via_properties.cpp
     dialogs/dialog_track_via_properties_base.cpp
     dialogs/dialog_track_via_size.cpp
     dialogs/dialog_track_via_size_base.cpp
-    dialogs/dialog_update_pcb_base.cpp
     dialogs/dialog_update_pcb.cpp
+    dialogs/dialog_update_pcb_base.cpp
+    dialogs/panel_fp_lib_table.cpp
+    dialogs/panel_fp_lib_table_base.cpp
+    dialogs/panel_modedit_defaults.cpp
+    dialogs/panel_modedit_defaults_base.cpp
+    dialogs/panel_modedit_display_options.cpp
+    dialogs/panel_modedit_settings.cpp
+    dialogs/panel_modedit_settings_base.cpp
+    dialogs/panel_pcbnew_display_options.cpp
+    dialogs/panel_pcbnew_display_options_base.cpp
+    dialogs/panel_pcbnew_settings.cpp
+    dialogs/panel_pcbnew_settings_base.cpp
+    dialogs/panel_setup_mask_and_paste.cpp
+    dialogs/panel_setup_mask_and_paste_base.cpp
+    dialogs/panel_setup_feature_constraints.cpp
+    dialogs/panel_setup_feature_constraints_base.cpp
+    dialogs/panel_setup_layers.cpp
+    dialogs/panel_setup_layers_base.cpp
+    dialogs/panel_setup_netclasses.cpp
+    dialogs/panel_setup_netclasses_base.cpp
+    dialogs/panel_setup_text_and_graphics.cpp
+    dialogs/panel_setup_text_and_graphics_base.cpp
+    dialogs/panel_setup_tracks_and_vias.cpp
+    dialogs/panel_setup_tracks_and_vias_base.cpp
+    ../common/dialogs/panel_setup_severities.cpp
     footprint_wizard.cpp
     footprint_wizard_frame.cpp
-    dialogs/dialog_footprint_wizard_list_base.cpp
-    dialogs/dialog_footprint_wizard_list.cpp
-    dialogs/wizard_add_fplib_base.cpp
-    dialogs/wizard_add_fplib.cpp
+    footprint_wizard_frame_functions.cpp
     ${GITHUB_3DLIBRARIES_WIZARD}
     )
 
-set( PCBNEW_IMPORT_DXF
-    import_dxf/dialog_dxf_import_base.cpp
-    import_dxf/dialog_dxf_import.cpp
-    import_dxf/dxf2brd_items.cpp
+if( KICAD_SCRIPTING AND KICAD_SCRIPTING_ACTION_MENU )
+    set( PCBNEW_DIALOGS ${PCBNEW_DIALOGS}
+        dialogs/panel_pcbnew_action_plugins.cpp
+        dialogs/panel_pcbnew_action_plugins_base.cpp
+        )
+endif()
+
+set( PCBNEW_BRDSTACKUP_MGR
+    board_stackup_manager/dielectric_material.cpp
+    board_stackup_manager/stackup_predefined_prms.cpp
+    board_stackup_manager/panel_board_stackup.cpp
+    board_stackup_manager/panel_board_stackup_base.cpp
+    board_stackup_manager/board_stackup_reporter.cpp
+    board_stackup_manager/dialog_dielectric_list_manager_base.cpp
+    board_stackup_manager/dialog_dielectric_list_manager.cpp
     )
 
+set( PCBNEW_IMPORT_GFX
+    import_gfx/dialog_import_gfx_base.cpp
+    import_gfx/dialog_import_gfx.cpp
+    import_gfx/graphics_import_mgr.cpp
+    import_gfx/graphics_importer.cpp
+    import_gfx/graphics_importer_pcbnew.cpp
+    import_gfx/graphics_importer_buffer.cpp
+    import_gfx/dxf_import_plugin.cpp
+    import_gfx/svg_import_plugin.cpp
+    )
+
+
 set( PCBNEW_EXPORTERS
+    exporters/export_hyperlynx.cpp
     exporters/export_d356.cpp
+    exporters/export_footprint_associations.cpp
     exporters/export_gencad.cpp
     exporters/export_idf.cpp
     exporters/export_vrml.cpp
+    exporters/export_footprints_placefile.cpp
     exporters/gen_drill_report_files.cpp
-    exporters/gen_modules_placefile.cpp
+    exporters/gen_footprints_placefile.cpp
     exporters/gendrill_Excellon_writer.cpp
     exporters/gendrill_file_writer_base.cpp
     exporters/gendrill_gerber_writer.cpp
     exporters/gerber_jobfile_writer.cpp
+    exporters/gerber_placefile_writer.cpp
     )
 
 set( PCBNEW_MICROWAVE_SRCS
     microwave/microwave_inductor.cpp
     )
 
+set( PCBNEW_DRC_SRCS
+    drc/courtyard_overlap.cpp
+    drc/drc.cpp
+    drc/drc_clearance_test_functions.cpp
+    drc/drc_tree_model.cpp
+    )
+
+set( PCBNEW_NETLIST_SRCS
+    netlist_reader/board_netlist_updater.cpp
+    netlist_reader/netlist.cpp
+    )
+
 set( PCBNEW_CLASS_SRCS
+    ${PCBNEW_DIALOGS}
+    ${PCBNEW_EXPORTERS}
+    ${PCBNEW_DRC_SRCS}
+    ${PCBNEW_IMPORT_GFX}
+    ${PCBNEW_NETLIST_SRCS}
+    ${PCBNEW_BRDSTACKUP_MGR}
+
     autorouter/rect_placement/rect_placement.cpp
     autorouter/spread_footprints.cpp
-    board_commit.cpp
-    tool_modview.cpp
-    modview_frame.cpp
-    pcbframe.cpp
-    pcb_base_edit_frame.cpp
-    append_board_to_current.cpp
+    autorouter/ar_autoplacer.cpp
+    autorouter/ar_matrix.cpp
+    autorouter/autoplacer_tool.cpp
+
+    action_plugin.cpp
     array_creator.cpp
-    attribut.cpp
-    board_items_to_polygon_shape_transform.cpp
-    board_netlist_updater.cpp
-    block.cpp
-    block_module_editor.cpp
+    array_pad_name_provider.cpp
     build_BOM_from_board.cpp
-    class_pcb_layer_widget.cpp
-    class_pcb_layer_box_selector.cpp
-    clean.cpp
-    connect.cpp
-    controle.cpp
-    dimension.cpp
     cross-probing.cpp
-    deltrack.cpp
-    ${PCBNEW_DIALOGS}
-    ${PCBNEW_IMPORT_DXF}
-    ${PCBNEW_EXPORTERS}
-    dragsegm.cpp
-    drc.cpp
-    drc_clearance_test_functions.cpp
-    drc_marker_functions.cpp
-    edgemod.cpp
     edit.cpp
-    editedge.cpp
-    editmod.cpp
-    editrack.cpp
-    editrack-part2.cpp
-    edit_pcb_text.cpp
     edit_track_width.cpp
-    edtxtmod.cpp
-    event_handlers_tracks_vias_sizes.cpp
     files.cpp
     footprint_info_impl.cpp
-    globaleditpad.cpp
-    highlight.cpp
-    hotkeys.cpp
-    hotkeys_board_editor.cpp
-    hotkeys_module_editor.cpp
+    footprint_wizard.cpp
+    footprint_editor_utils.cpp
+    footprint_editor_settings.cpp
+    fp_tree_synchronizing_adapter.cpp
+    footprint_edit_frame.cpp
+    footprint_libraries_utils.cpp
+    footprint_viewer_frame.cpp
+    fp_tree_model_adapter.cpp
+    generate_footprint_info.cpp
+    grid_layer_box_helpers.cpp
+    grid_layer_box_helpers.h
     initpcb.cpp
     layer_widget.cpp
-    librairi.cpp
-    loadcmp.cpp
-    magnetic_tracks_functions.cpp
-    menubar_modedit.cpp
-    menubar_pcbframe.cpp
-    minimun_spanning_tree.cpp
-    modedit.cpp
-    modedit_onclick.cpp
-    modeditoptions.cpp
-    moduleframe.cpp
-    modules.cpp
-    move-drag_pads.cpp
-    move_or_drag_track.cpp
+    load_select_footprint.cpp
+    menubar_footprint_editor.cpp
+    menubar_pcb_editor.cpp
     microwave.cpp
-    muwave_command.cpp
-    netlist.cpp
-    onleftclick.cpp
-    onrightclick.cpp
-    pad_edition_functions.cpp
+    pad_naming.cpp
+    pcb_base_edit_frame.cpp
+    pcb_layer_box_selector.cpp
+    pcb_layer_widget.cpp
+#    pcb_draw_panel_gal.cpp
+#    pcb_view.cpp
+    pcb_edit_frame.cpp
     pcbnew_config.cpp
+    pcbnew_printout.cpp
+    pcbnew_settings.cpp
+    pcb_legacy_draw_utils.cpp
     pcbplot.cpp
-    pcb_draw_panel_gal.cpp
-    pcb_general_settings.cpp
     plot_board_layers.cpp
     plot_brditems_plotter.cpp
-    print_board_functions.cpp
-    printout_controler.cpp
     ratsnest.cpp
-    specctra.cpp
-    specctra_export.cpp
-    specctra_keywords.cpp
-    specctra_import.cpp
-    swap_layers.cpp
-    target_edit.cpp
-    tool_modedit.cpp
-    tool_onrightclick.cpp
-    tool_pcb.cpp
-    toolbars_update_user_interface.cpp
-    tracepcb.cpp
-    tr_modif.cpp
+    specctra_import_export/specctra.cpp
+    specctra_import_export/specctra_export.cpp
+    specctra_import_export/specctra_import.cpp
+    text_mod_grid_table.cpp
+    toolbars_footprint_editor.cpp
+    toolbars_footprint_viewer.cpp
+    toolbars_pcb_editor.cpp
+    tracks_cleaner.cpp
     undo_redo.cpp
-    zones_convert_brd_items_to_polygons_with_Boost.cpp
-    zones_convert_to_polygons_aux_functions.cpp
+    zone_filler.cpp
     zones_by_polygon.cpp
-    zones_by_polygon_fill_functions.cpp
-    zone_filling_algorithm.cpp
     zones_functions_for_undo_redo.cpp
-    zones_polygons_insulated_copper_islands.cpp
     zones_test_and_combine_areas.cpp
-    class_footprint_wizard.cpp
-    class_action_plugin.cpp
 
-    tools/pcb_tool.cpp
-    tools/selection_tool.cpp
-    tools/pcb_selection_conditions.cpp
-    tools/pcb_bright_box.cpp
-    tools/edit_points.cpp
-    tools/edit_constraints.cpp
-    tools/point_editor.cpp
     tools/drawing_tool.cpp
     tools/edit_tool.cpp
-    tools/position_relative_tool.cpp
-    tools/pcbnew_control.cpp
-    tools/pcb_editor_control.cpp
-    tools/microwave_tool.cpp
-    tools/module_editor_tools.cpp
-    tools/placement_tool.cpp
-    tools/pcb_actions.cpp
+    tools/global_edit_tool.cpp
     tools/grid_helper.cpp
+    tools/microwave_tool.cpp
+    tools/footprint_editor_tools.cpp
     tools/pad_tool.cpp
-    tools/picker_tool.cpp
-    tools/zone_create_helper.cpp
-    tools/tools_common.cpp
+    tools/pcb_actions.cpp
+    tools/pcb_bright_box.cpp
+    tools/pcb_editor_control.cpp
+    tools/pcb_inspection_tool.cpp
+    tools/pcb_selection_conditions.cpp
+    tools/pcb_tool_base.cpp
+    tools/pcbnew_control.cpp
+    tools/pcbnew_picker_tool.cpp
+    tools/pcbnew_selection.cpp
+    tools/placement_tool.cpp
+    tools/point_editor.cpp
+    tools/position_relative_tool.cpp
+    tools/selection_tool.cpp
     tools/tool_event_utils.cpp
-
-    tools/size_menu.cpp
+    tools/zone_create_helper.cpp
+    tools/zone_filler_tool.cpp
 
     footprint_preview_panel.cpp
+    footprint_tree_pane.cpp
     )
 
 set( PCBNEW_SRCS
@@ -329,48 +342,35 @@ set( PCBNEW_SRCS
 
 # extra sources from common
 set( PCBNEW_COMMON_SRCS
-    ../common/dialogs/dialog_page_settings.cpp
-    ../common/base_units.cpp
+    ${CMAKE_SOURCE_DIR}/common/dialogs/dialog_page_settings.cpp
+    ${CMAKE_SOURCE_DIR}/common/base_units.cpp
+    ${CMAKE_SOURCE_DIR}/common/hotkeys_basic.cpp
     )
 
 set( PCBNEW_SCRIPTING_DIALOGS
-    dialogs/dialog_scripting_base.cpp
     dialogs/dialog_scripting.cpp
+    dialogs/dialog_scripting_base.cpp
     )
 
 set( PCBNEW_SCRIPTING_PYTHON_HELPERS
-    ../common/swig/wx_python_helpers.cpp
-    swig/python_scripting.cpp
-    swig/pcbnew_scripting_helpers.cpp
-    swig/pcbnew_footprint_wizards.cpp
+    ${CMAKE_SOURCE_DIR}/common/swig/wx_python_helpers.cpp
     swig/pcbnew_action_plugins.cpp
+    swig/pcbnew_footprint_wizards.cpp
+    swig/pcbnew_scripting_helpers.cpp
+    swig/python_scripting.cpp
     )
-
-
-# auto-generate specctra_lexer.h and specctra_keywords.cpp
-make_lexer(
-    ${CMAKE_CURRENT_SOURCE_DIR}/specctra.keywords
-    ${CMAKE_CURRENT_SOURCE_DIR}/specctra_lexer.h
-    ${CMAKE_CURRENT_SOURCE_DIR}/specctra_keywords.cpp
-    DSN
-
-    # Pass header file with dependency on *_lexer.h as extra_arg
-    specctra.h
-    )
-
-add_custom_target(
-    specctra_lexer_source_files ALL
-    DEPENDS
-        ${CMAKE_CURRENT_SOURCE_DIR}/specctra_lexer.h
-        ${CMAKE_CURRENT_SOURCE_DIR}/specctra_keywords.cpp
-    )
-
 
 if( COMPILER_SUPPORTS_WSHADOW )
     # .cpp files are compiled with extra ${WSHADOW_FLAGS}, but not .cxx files
     set_source_files_properties(
         ${PCBNEW_SRCS} ${PCBNEW_COMMON_SRCS} ${PCBNEW_SCRIPTING_DIALOGS} ${PCBNEW_SCRIPTING_PYTHON_HELPERS}
         PROPERTIES COMPILE_FLAGS ${WSHADOW_FLAGS}
+    )
+
+    # There is a lot of 'local variable shadowed' warnings,
+    # but we have no control over the generated code
+    set_source_files_properties( pcbnew_wrap.cxx pcbnewPYTHON_wrap.cxx
+        PROPERTIES COMPILE_FLAGS -Wno-shadow
     )
 endif()
 
@@ -397,10 +397,10 @@ if( KICAD_SCRIPTING OR KICAD_SCRIPTING_MODULES )
 
     set( SWIG_FLAGS
         -I${CMAKE_CURRENT_SOURCE_DIR}
-        -I${CMAKE_CURRENT_SOURCE_DIR}/../include
-        -I${CMAKE_CURRENT_SOURCE_DIR}/../scripting
-        -I${CMAKE_CURRENT_SOURCE_DIR}/../common/swig
-        -I${WXPYTHON_SWIG_DIR}
+        -I${CMAKE_SOURCE_DIR}/include
+        -I${CMAKE_SOURCE_DIR}/scripting
+        -I${CMAKE_SOURCE_DIR}/common/swig
+        -I${CMAKE_SOURCE_DIR}/libs/kimath/include
         )
 
     if( DEBUG )
@@ -419,7 +419,7 @@ endif()
 if( KICAD_SCRIPTING )   # Generate pcbnew.py and pcbnew_wrap.cxx using swig
 
     # We deliberately do not use the CMake support for swig here,
-    # i.e. swig_add_module()) because we want full control.
+    # i.e. swig_add_footprint()) because we want full control.
 
     set( SWIG_OPTS -python -c++ -outdir ${CMAKE_CURRENT_BINARY_DIR} ${SWIG_FLAGS} )
 
@@ -440,12 +440,14 @@ if( KICAD_SCRIPTING )   # Generate pcbnew.py and pcbnew_wrap.cxx using swig
         DEPENDS swig/board_design_settings.i
         DEPENDS swig/board_item.i
         DEPENDS swig/board_item_container.i
+        DEPENDS swig/connectivity.i
         DEPENDS swig/dimension.i
         DEPENDS swig/drawsegment.i
         DEPENDS swig/edge_mod.i
         DEPENDS swig/marker_pcb.i
-        DEPENDS swig/mire.i
-        DEPENDS swig/module.i
+        DEPENDS swig/pcb_target.i
+        DEPENDS swig/pcb_plot_params.i
+        DEPENDS swig/footprint.i
         DEPENDS swig/netclass.i
         DEPENDS swig/netinfo.i
         DEPENDS swig/pad.i
@@ -454,14 +456,14 @@ if( KICAD_SCRIPTING )   # Generate pcbnew.py and pcbnew_wrap.cxx using swig
         DEPENDS swig/text_mod.i
         DEPENDS swig/track.i
         DEPENDS swig/units.i
+        DEPENDS swig/typeinfo.i
         DEPENDS swig/zone.i
         DEPENDS swig/zone_settings.i
 
-        DEPENDS ../common/swig/dlist.i
-        DEPENDS ../common/swig/kicad.i
-        DEPENDS ../common/swig/wx.i
-        DEPENDS ../common/swig/ki_exception.i
-        DEPENDS ../scripting/kicadplugins.i
+        DEPENDS ${CMAKE_SOURCE_DIR}/common/swig/kicad.i
+        DEPENDS ${CMAKE_SOURCE_DIR}/common/swig/wx.i
+        DEPENDS ${CMAKE_SOURCE_DIR}/common/swig/ki_exception.i
+        DEPENDS ${CMAKE_SOURCE_DIR}/scripting/kicadplugins.i
 
         COMMAND ${CMAKE_COMMAND} -E make_directory ${CMAKE_CURRENT_BINARY_DIR}/docstrings
 
@@ -517,14 +519,26 @@ if( DOXYGEN_FOUND )
             DEPENDS doxygen-python-xml
             )
 
-        # create doxygen-python html
+        # The sources to give to the Python Doxygen target
+        set( DOXYGEN_PYTHON_SOURCES
+            ${CMAKE_CURRENT_BINARY_DIR}/pcbnew.py
+            ${CMAKE_CURRENT_SOURCE_DIR}/python/plugins/FootprintWizardBase.py
+            ${CMAKE_CURRENT_SOURCE_DIR}/python/plugins/PadArray.py )
+
+        # The Doxyfile expects a space-separated list in the env var
+        string(REPLACE ";" " " DOXYGEN_PYTHON_SOURCES_STR "${DOXYGEN_PYTHON_SOURCES}")
+
+        # Create doxygen-python html
         add_custom_target( doxygen-python
             ${CMAKE_COMMAND} -E remove_directory doxygen-python
-            COMMAND PYTHON_SOURCES_TO_DOC=${CMAKE_CURRENT_BINARY_DIR}/pcbnew.py ${DOXYGEN_EXECUTABLE} ${CMAKE_CURRENT_SOURCE_DIR}/Doxyfile_python
+            COMMAND ${CMAKE_COMMAND} -E env
+                PYTHON_SOURCES_TO_DOC=${DOXYGEN_PYTHON_SOURCES_STR}
+                CMAKE_SOURCE_DIR=${CMAKE_SOURCE_DIR}
+                ${DOXYGEN_EXECUTABLE} ${CMAKE_CURRENT_SOURCE_DIR}/Doxyfile_python
             WORKING_DIRECTORY ${CMAKE_CURRENT_BINARY_DIR}
             DEPENDS Doxyfile_python
             DEPENDS xml-to-docstrings
-            DEPENDS pcbnew.py
+            DEPENDS ${DOXYGEN_PYTHON_SOURCES}
             COMMENT "building doxygen docs into directory doxygen-python/html"
             )
     endif()
@@ -554,27 +568,10 @@ if( APPLE )
 endif()
 
 
-# Create a C++ compilable string initializer containing html text into a *.h file:
-add_custom_command(
-    OUTPUT ${CMAKE_CURRENT_SOURCE_DIR}/dialogs/dialog_freeroute_exchange_help_html.h
-    COMMAND ${CMAKE_COMMAND}
-        -DinputFile=${CMAKE_CURRENT_SOURCE_DIR}/dialogs/dialog_freeroute_exchange_help.html
-        -DoutputFile=${CMAKE_CURRENT_SOURCE_DIR}/dialogs/dialog_freeroute_exchange_help_html.h
-        -P ${CMAKE_MODULE_PATH}/Html2C.cmake
-    DEPENDS ${CMAKE_CURRENT_SOURCE_DIR}/dialogs/dialog_freeroute_exchange_help.html
-    COMMENT "creating ${CMAKE_CURRENT_SOURCE_DIR}/dialogs/dialog_freeroute_exchange_help_html.h
-       from ${CMAKE_CURRENT_SOURCE_DIR}/dialogs/dialog_freeroute_exchange_help.html"
-    )
-
-set_source_files_properties( dialogs/dialog_freeroute_exchange.cpp PROPERTIES
-    OBJECT_DEPENDS ${CMAKE_CURRENT_SOURCE_DIR}/dialogs/dialog_freeroute_exchange_help_html.h
-    )
-
 add_subdirectory( pcad2kicadpcb_plugin )
 
 if( BUILD_GITHUB_PLUGIN )
     add_subdirectory( github )
-    add_dependencies( github_plugin lib-dependencies )
     # github_plugin depends on make_lexer outputs in common
     add_dependencies( github_plugin pcbcommon )
 endif()
@@ -582,33 +579,67 @@ endif()
 
 # a very small program launcher for pcbnew_kiface
 add_executable( pcbnew WIN32 MACOSX_BUNDLE
-    ../common/single_top.cpp
+    ${CMAKE_SOURCE_DIR}/common/single_top.cpp
     ${PCBNEW_RESOURCES}
     )
-set_source_files_properties( ../common/single_top.cpp pcbnew.cpp PROPERTIES
-    COMPILE_DEFINITIONS "TOP_FRAME=FRAME_PCB;PGM_DATA_FILE_EXT=\"kicad_pcb\";BUILD_KIWAY_DLL"
+set_source_files_properties( ${CMAKE_SOURCE_DIR}/common/single_top.cpp pcbnew.cpp PROPERTIES
+    COMPILE_DEFINITIONS "TOP_FRAME=FRAME_PCB_EDITOR;PGM_DATA_FILE_EXT=\"kicad_pcb\";BUILD_KIWAY_DLL"
     )
 target_link_libraries( pcbnew
     #singletop  # replaces common, giving us restrictive control and link warnings.
     # There's way too much crap coming in from common yet.
     common
-    bitmaps
     gal
     ${wxWidgets_LIBRARIES}
     )
 
+target_include_directories( pcbnew INTERFACE
+    $<TARGET_PROPERTY:nlohmann_json,INTERFACE_INCLUDE_DIRECTORIES>
+    )
+
 if( PCBNEW_LINK_MAPS )
     set_target_properties( pcbnew PROPERTIES
-        LINK_FLAGS "${TO_LINKER},-cref ${TO_LINKER},-Map=pcbnew.map" )
+        LINK_FLAGS "-Wl,-cref,-Map=pcbnew.map" )
 endif()
 
 # the main pcbnew program, in DSO form.
-add_library( pcbnew_kiface MODULE
+add_library( pcbnew_kiface_objects OBJECT
     pcbnew.cpp
     ${PCBNEW_SRCS}
     ${PCBNEW_COMMON_SRCS}
     ${PCBNEW_SCRIPTING_SRCS}
     )
+
+# auto-generate specctra_lexer.h and specctra_keywords.cpp
+make_lexer(
+    pcbnew_kiface_objects
+    specctra_import_export/specctra.keywords
+    specctra_import_export/specctra_lexer.h
+    specctra_import_export/specctra_keywords.cpp
+    DSN
+    )
+
+# CMake <3.9 can't link anything to object libraries,
+# but we only need include directories, as we will link the kiface MODULE
+target_include_directories( pcbnew_kiface_objects PRIVATE
+    $<TARGET_PROPERTY:common,INTERFACE_INCLUDE_DIRECTORIES>
+    $<TARGET_PROPERTY:dxflib_qcad,INTERFACE_INCLUDE_DIRECTORIES>
+    $<TARGET_PROPERTY:nanosvg,INTERFACE_INCLUDE_DIRECTORIES>
+    $<TARGET_PROPERTY:ttl,INTERFACE_INCLUDE_DIRECTORIES>
+    $<TARGET_PROPERTY:tinyspline_lib,INTERFACE_INCLUDE_DIRECTORIES>
+    $<TARGET_PROPERTY:nlohmann_json,INTERFACE_INCLUDE_DIRECTORIES>
+    )
+
+# Since we're not using target_link_libraries, we need to explicitly
+# declare the dependency
+add_dependencies( pcbnew_kiface_objects common )
+add_dependencies( pcbnew_kiface_objects dxflib_qcad )
+add_dependencies( pcbnew_kiface_objects tinyspline_lib )
+add_dependencies( pcbnew_kiface_objects ttl )
+add_dependencies( pcbnew_kiface_objects nanosvg )
+
+add_library( pcbnew_kiface MODULE $<TARGET_OBJECTS:pcbnew_kiface_objects> )
+
 set_target_properties( pcbnew_kiface PROPERTIES
     # Decorate OUTPUT_NAME with PREFIX and SUFFIX, creating something like
     # _pcbnew.so, _pcbnew.dll, or _pcbnew.kiface
@@ -629,31 +660,29 @@ if ( KICAD_BUILD_TESTS )
 
 endif ()
 
-if( ${OPENMP_FOUND} )
-    set_target_properties( pcbnew_kiface PROPERTIES
-        COMPILE_FLAGS   ${OpenMP_CXX_FLAGS}
-        )
-endif()
-
-target_link_libraries( pcbnew_kiface
+set( PCBNEW_KIFACE_LIBRARIES
     3d-viewer
+    connectivity
     pcbcommon
     pnsrouter
     pcad2kicadpcb
     common
-    polygon
-    bitmaps
     gal
-    lib_dxf
+    dxflib_qcad
+    tinyspline_lib
+    ttl
     idf3
+    nanosvg
     ${wxWidgets_LIBRARIES}
     ${GITHUB_PLUGIN_LIBRARIES}
     ${GDI_PLUS_LIBRARIES}
     ${PYTHON_LIBRARIES}
     ${Boost_LIBRARIES}      # must follow GITHUB
     ${PCBNEW_EXTRA_LIBS}    # -lrt must follow Boost
-    ${OPENMP_LIBRARIES}
     )
+
+
+target_link_libraries( pcbnew_kiface ${PCBNEW_KIFACE_LIBRARIES} )
 
 set_source_files_properties( pcbnew.cpp PROPERTIES
     # The KIFACE is in pcbnew.cpp, export it:
@@ -662,24 +691,27 @@ set_source_files_properties( pcbnew.cpp PROPERTIES
 
 if( PCBNEW_LINK_MAPS )
     set_target_properties( pcbnew_kiface PROPERTIES
-        LINK_FLAGS "${TO_LINKER},-cref ${TO_LINKER},-Map=_pcbnew.kiface.map"
+        LINK_FLAGS "-Wl,-cref,-Map=_pcbnew.kiface.map"
         )
     set_target_properties( pcbnew PROPERTIES
-        LINK_FLAGS "${TO_LINKER},-cref ${TO_LINKER},-Map=pcbnew.map"
+        LINK_FLAGS "-Wl,-cref,-Map=pcbnew.map"
         )
 endif()
 
 # if building pcbnew, then also build pcbnew_kiface if out of date.
 add_dependencies( pcbnew pcbnew_kiface )
 
-# add dependency to specctra_lexer_source_files, to force
-# generation of autogenerated file
-add_dependencies( pcbnew_kiface specctra_lexer_source_files )
+if( WIN32 )
+    # Copy dynamic lib dependency to build dir to allow running directly
+    add_custom_command( TARGET pcbnew POST_BUILD
+        COMMAND ${CMAKE_COMMAND} -E copy_if_different "$<TARGET_FILE:kicad_3dsg>" "$<TARGET_FILE_DIR:pcbnew>"
+        )
+endif()
 
 # these 2 binaries are a matched set, keep them together:
 if( APPLE )
     set_target_properties( pcbnew PROPERTIES
-        MACOSX_BUNDLE_INFO_PLIST ${CMAKE_CURRENT_SOURCE_DIR}/Info.plist
+        MACOSX_BUNDLE_INFO_PLIST ${PROJECT_BINARY_DIR}/pcbnew/Info.plist
         )
 
     # puts binaries into the *.app bundle while linking
@@ -715,9 +747,6 @@ else()
         )
 endif()
 
-add_dependencies( pcbnew lib-dependencies )
-
-
 if( KICAD_SCRIPTING )
     if( NOT APPLE )
         install( FILES ${CMAKE_BINARY_DIR}/pcbnew/pcbnew.py DESTINATION ${PYTHON_DEST} )
@@ -728,7 +757,7 @@ if( KICAD_SCRIPTING )
             DEPENDS ${CMAKE_CURRENT_BINARY_DIR}/pcbnew.py
             COMMENT "Copying pcbnew.py into ${PYTHON_DEST}"
             )
-        add_dependencies( ScriptingPcbnewPyCopy ScriptingWxpythonCopy )
+        add_dependencies( ScriptingPcbnewPyCopy ScriptingPythonDirectoryCreation )
     endif()
 
     # python plugins
@@ -738,10 +767,12 @@ if( KICAD_SCRIPTING )
     )
 
     # python shell
-    install( DIRECTORY ${PROJECT_SOURCE_DIR}/pcbnew/python/kicad_pyshell/
-        DESTINATION ${KICAD_DATA}/scripting/kicad_pyshell
-        FILE_PERMISSIONS OWNER_EXECUTE OWNER_READ OWNER_WRITE GROUP_EXECUTE GROUP_READ WORLD_EXECUTE WORLD_READ
-    )
+    if ( KICAD_SCRIPTING_WXPYTHON )
+        install( DIRECTORY ${PROJECT_SOURCE_DIR}/pcbnew/python/kicad_pyshell/
+            DESTINATION ${KICAD_DATA}/scripting/kicad_pyshell
+            FILE_PERMISSIONS OWNER_EXECUTE OWNER_READ OWNER_WRITE GROUP_EXECUTE GROUP_READ WORLD_EXECUTE WORLD_READ
+        )
+    endif()
 endif()
 
 
@@ -773,11 +804,10 @@ if( KICAD_SCRIPTING_MODULES )
             DEPENDS ${CMAKE_CURRENT_BINARY_DIR}/_pcbnew.so
             COMMENT "Copying _pcbnew.so into ${PYTHON_DEST}"
             )
-        add_dependencies( ScriptingModulesPcbnewSoCopy ScriptingWxpythonCopy )
+        add_dependencies( ScriptingModulesPcbnewSoCopy ScriptingPythonDirectoryCreation )
         set( PYMOD_EXT "so" )
-
     else()  # only linux remains among supported platforms
-        install( FILES ${CMAKE_BINARY_DIR}/pcbnew/_pcbnew.so DESTINATION ${PYTHON_DEST} )
+        install( FILES ${CMAKE_CURRENT_BINARY_DIR}/_pcbnew.kiface DESTINATION ${PYTHON_DEST} COMPONENT binary RENAME "_pcbnew.so" )
         set( PYMOD_EXT "so" )
     endif()
 
@@ -792,18 +822,16 @@ if( KICAD_SCRIPTING_MODULES )
             DEPENDS ${CMAKE_CURRENT_BINARY_DIR}/_pcbnew.${PYMOD_EXT}
             )
     else()
-
-
-    # For phase 1, copy _pcbnew.kiface to the python module.
-    add_custom_command( OUTPUT ${CMAKE_CURRENT_BINARY_DIR}/_pcbnew.${PYMOD_EXT}
-        DEPENDS pcbnew_kiface
-        COMMAND ${CMAKE_COMMAND} -E copy _pcbnew.kiface _pcbnew.${PYMOD_EXT}
-        COMMENT "Creating python's pcbnew native module _pcbnew.${PYMOD_EXT} for command line use."
-        )
-    add_custom_target(
-        pcbnew_python_module ALL
-        DEPENDS ${CMAKE_CURRENT_BINARY_DIR}/_pcbnew.${PYMOD_EXT}
-        )
+        # For phase 1, copy _pcbnew.kiface to the python module.
+        add_custom_command( OUTPUT ${CMAKE_CURRENT_BINARY_DIR}/_pcbnew.${PYMOD_EXT}
+            DEPENDS pcbnew_kiface
+            COMMAND ${CMAKE_COMMAND} -E copy _pcbnew.kiface _pcbnew.${PYMOD_EXT}
+            COMMENT "Creating python's pcbnew native module _pcbnew.${PYMOD_EXT} for command line use."
+            )
+        add_custom_target(
+            pcbnew_python_module ALL
+            DEPENDS ${CMAKE_CURRENT_BINARY_DIR}/_pcbnew.${PYMOD_EXT}
+            )
     endif()
 
 endif()
@@ -811,6 +839,14 @@ endif()
 
 if( APPLE )
     if( KICAD_SCRIPTING OR KICAD_SCRIPTING_MODULES )
+        # If we don't have wxPython, then we must create the site-packages directory
+        add_custom_target( ScriptingPythonDirectoryCreation ALL
+            COMMAND ${CMAKE_COMMAND} -E make_directory "${PYTHON_DEST}"
+            COMMENT "Creating Python library directory ${PYTHON_DEST}"
+            )
+    endif()
+
+    if( KICAD_SCRIPTING_WXPYTHON )
         # find wx-X.Y-osx_cocoa path below PYTHON_SITE_PACKAGE_PATH
         file( GLOB WXPYTHON_DIR RELATIVE ${PYTHON_SITE_PACKAGE_PATH} ${PYTHON_SITE_PACKAGE_PATH}/wx-?.?-osx_cocoa )
         if( NOT WXPYTHON_DIR )
@@ -822,5 +858,6 @@ if( APPLE )
             COMMAND ${CMAKE_COMMAND} -E copy "${PYTHON_SITE_PACKAGE_PATH}/wxversion.py" "${PYTHON_DEST}"
             COMMENT "Copying wxPython into ${PYTHON_DEST}"
             )
+        add_dependencies( ScriptingWxpythonCopy ScriptingPythonDirectoryCreation )
     endif()
 endif()

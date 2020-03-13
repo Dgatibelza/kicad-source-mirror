@@ -2,6 +2,7 @@
  * This program source code file is part of KiCad, a free EDA CAD application.
  *
  * Copyright (C) 2014 CERN
+ * Copyright (C) 2020 KiCad Developers, see AUTHORS.txt for contributors.
  * @author Tomasz Wlostowski <tomasz.wlostowski@cern.ch>
  *
  * This program is free software; you can redistribute it and/or
@@ -26,14 +27,12 @@
 #define __GRID_HELPER_H
 
 #include <vector>
-
 #include <math/vector2d.h>
-#include <boost/optional.hpp>
+#include <core/optional.h>
 #include <origin_viewitem.h>
-
 #include <layers_id_colors_and_visibility.h>
-
 #include <geometry/seg.h>
+#include <geometry/shape_arc.h>
 
 class PCB_BASE_FRAME;
 
@@ -43,20 +42,59 @@ public:
     GRID_HELPER( PCB_BASE_FRAME* aFrame );
     ~GRID_HELPER();
 
-    void SetGrid( int aSize );
-    void SetOrigin( const VECTOR2I& aOrigin );
-
     VECTOR2I GetGrid() const;
     VECTOR2I GetOrigin() const;
 
-    void SetAuxAxes( bool aEnable, const VECTOR2I& aOrigin = VECTOR2I( 0, 0 ), bool aEnableDiagonal = false );
+    /**
+     * Function GetSnapped
+     * If the GRID_HELPER has highlighted a snap point (target shown), this function
+     * will return a pointer to the item to which it snapped.
+     *
+     * @return NULL if not snapped.  Pointer to snapped item otherwise
+     */
+    BOARD_ITEM* GetSnapped() const;
+
+    void SetAuxAxes( bool aEnable, const VECTOR2I& aOrigin = VECTOR2I( 0, 0 ) );
 
     VECTOR2I Align( const VECTOR2I& aPoint ) const;
 
     VECTOR2I AlignToSegment ( const VECTOR2I& aPoint, const SEG& aSeg );
 
-    VECTOR2I BestDragOrigin( const VECTOR2I& aMousePos, BOARD_ITEM* aItem );
+    VECTOR2I BestDragOrigin( const VECTOR2I& aMousePos, std::vector<BOARD_ITEM*>& aItem );
+
+    VECTOR2I AlignToArc ( const VECTOR2I& aPoint, const SHAPE_ARC& aSeg );
+
     VECTOR2I BestSnapAnchor( const VECTOR2I& aOrigin, BOARD_ITEM* aDraggedItem );
+    VECTOR2I BestSnapAnchor( const VECTOR2I& aOrigin, const LSET& aLayers,
+                             const std::vector<BOARD_ITEM*>& aSkip = {} );
+
+    void SetSkipPoint( const VECTOR2I& aPoint )
+    {
+        m_skipPoint = aPoint;
+    }
+
+    /**
+     * We clear the skip point by setting it to an unreachable position, thereby preventing matching
+     */
+    void ClearSkipPoint()
+    {
+        m_skipPoint = VECTOR2I( std::numeric_limits<int>::min(), std::numeric_limits<int>::min() );
+    }
+
+    void SetSnap( bool aSnap )
+    {
+        m_enableSnap = aSnap;
+    }
+
+    void SetSnapLine( bool aSnap )
+    {
+        m_enableSnapLine = aSnap;
+    }
+
+    void SetUseGrid( bool aGrid = true )
+    {
+        m_enableGrid = aGrid;
+    }
 
 private:
     enum ANCHOR_FLAGS {
@@ -68,8 +106,11 @@ private:
 
     struct ANCHOR
     {
-        ANCHOR( VECTOR2I aPos, int aFlags = CORNER | SNAPPABLE, BOARD_ITEM* aItem = NULL ):
-            pos( aPos ), flags( aFlags ), item( aItem ) {} ;
+        ANCHOR( VECTOR2I aPos, int aFlags = CORNER | SNAPPABLE, BOARD_ITEM* aItem = NULL ) :
+            pos( aPos ),
+            flags( aFlags ),
+            item( aItem )
+        { };
 
         VECTOR2I pos;
         int flags;
@@ -79,22 +120,29 @@ private:
         {
             return ( aP - pos ).EuclideanNorm();
         }
-
-        //bool CanSnapItem( const BOARD_ITEM* aItem ) const;
     };
 
     std::vector<ANCHOR> m_anchors;
 
-    std::set<BOARD_ITEM*> queryVisible( const BOX2I& aArea ) const;
+    std::set<BOARD_ITEM*> queryVisible( const BOX2I& aArea,
+                                        const std::vector<BOARD_ITEM*>& aSkip ) const;
 
-    void addAnchor( const VECTOR2I& aPos, int aFlags = CORNER | SNAPPABLE, BOARD_ITEM* aItem = NULL )
+    void addAnchor( const VECTOR2I& aPos, int aFlags, BOARD_ITEM* aItem )
     {
-        m_anchors.push_back( ANCHOR( aPos, aFlags, aItem ) );
+        m_anchors.emplace_back( ANCHOR( aPos, aFlags, aItem ) );
     }
 
     ANCHOR* nearestAnchor( const VECTOR2I& aPos, int aFlags, LSET aMatchLayers );
 
-    void computeAnchors( BOARD_ITEM* aItem, const VECTOR2I& aRefPos );
+    /**
+     * computeAnchors inserts the local anchor points in to the grid helper for the specified
+     * board item, given the reference point and the direction of use for the point.
+     *
+     * @param aItem The board item for which to compute the anchors
+     * @param aRefPos The point for which to compute the anchors (if used by the component)
+     * @param aFrom Is this for an anchor that is designating a source point (aFrom=true) or not
+     */
+    void computeAnchors( BOARD_ITEM* aItem, const VECTOR2I& aRefPos, bool aFrom = false );
 
     void clearAnchors()
     {
@@ -102,9 +150,18 @@ private:
     }
 
     PCB_BASE_FRAME* m_frame;
-    boost::optional<VECTOR2I> m_auxAxis;
-    bool m_diagonalAuxAxesEnable;
-    KIGFX::ORIGIN_VIEWITEM m_viewSnapPoint, m_viewAxis;
+    OPT<VECTOR2I>   m_auxAxis;
+
+    bool     m_enableSnap;          ///< If true, allow snapping to other items on the layers
+    bool     m_enableGrid;          ///< If true, allow snapping to grid
+    bool     m_enableSnapLine;      ///< If true, allow drawing lines from snap points
+    int      m_snapSize;            ///< Sets the radius in screen units for snapping to items
+    ANCHOR*  m_snapItem;            ///< Pointer to the currently snapped item in m_anchors (NULL if not snapped)
+    VECTOR2I m_skipPoint;           ///< When drawing a line, we avoid snapping to the source point
+
+    KIGFX::ORIGIN_VIEWITEM m_viewSnapPoint;
+    KIGFX::ORIGIN_VIEWITEM m_viewSnapLine;
+    KIGFX::ORIGIN_VIEWITEM m_viewAxis;
 };
 
 #endif

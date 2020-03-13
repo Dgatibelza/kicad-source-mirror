@@ -1,7 +1,7 @@
 /*
  * This program source code file is part of KiCad, a free EDA CAD application.
  *
- * Copyright (C) 2013-2016 CERN
+ * Copyright (C) 2013-2018 CERN
  * @author Tomasz Wlostowski <tomasz.wlostowski@cern.ch>
  * @author Maciej Suminski <maciej.suminski@cern.ch>
  *
@@ -23,18 +23,16 @@
  * 51 Franklin Street, Fifth Floor, Boston, MA  02110-1301, USA
  */
 
-/**
- * @file class_draw_panel_gal.h:
- * @brief EDA_DRAW_PANEL_GAL class definition.
- */
-
 #ifndef  PANELGAL_WXSTRUCT_H
 #define  PANELGAL_WXSTRUCT_H
 
 #include <wx/window.h>
 #include <wx/timer.h>
+#include <math/box2.h>
 #include <math/vector2d.h>
 #include <msgpanel.h>
+#include <memory>
+#include <common.h>
 
 class BOARD;
 class EDA_DRAW_FRAME;
@@ -48,17 +46,18 @@ class WX_VIEW_CONTROLS;
 class VIEW_CONTROLS;
 class PAINTER;
 class GAL_DISPLAY_OPTIONS;
-};
+}
 
 
 class EDA_DRAW_PANEL_GAL : public wxScrolledCanvas
 {
 public:
     enum GAL_TYPE {
-        GAL_TYPE_NONE,      ///< Not used
-        GAL_TYPE_OPENGL,    ///< OpenGL implementation
-        GAL_TYPE_CAIRO,     ///< Cairo implementation
-        GAL_TYPE_LAST       ///< Sentinel, do not use as a parameter
+        GAL_TYPE_UNKNOWN = -1,  ///< not specified: a GAL engine must be set by the client
+        GAL_TYPE_NONE = 0,      ///< GAL not used (the legacy wxDC engine is used)
+        GAL_TYPE_OPENGL,        ///< OpenGL implementation
+        GAL_TYPE_CAIRO,         ///< Cairo implementation
+        GAL_TYPE_LAST           ///< Sentinel, do not use as a parameter
     };
 
     EDA_DRAW_PANEL_GAL( wxWindow* aParentWindow, wxWindowID aWindowId, const wxPoint& aPosition,
@@ -79,30 +78,21 @@ public:
      * Function GetBackend
      * Returns the type of backend currently used by GAL canvas.
      */
-    inline GAL_TYPE GetBackend() const
-    {
-        return m_backend;
-    }
+    inline GAL_TYPE GetBackend() const { return m_backend; }
 
     /**
      * Function GetGAL()
      * Returns a pointer to the GAL instance used in the panel.
      * @return The instance of GAL.
      */
-    KIGFX::GAL* GetGAL() const
-    {
-        return m_gal;
-    }
+    KIGFX::GAL* GetGAL() const { return m_gal; }
 
     /**
      * Function GetView()
      * Returns a pointer to the VIEW instance used in the panel.
      * @return The instance of VIEW.
      */
-    KIGFX::VIEW* GetView() const
-    {
-        return m_view;
-    }
+    virtual KIGFX::VIEW* GetView() const { return m_view; }
 
     /**
      * Function GetViewControls()
@@ -115,7 +105,7 @@ public:
     }
 
     /// @copydoc wxWindow::Refresh()
-    void Refresh( bool aEraseBackground = true, const wxRect* aRect = NULL ) override;
+    virtual void Refresh( bool aEraseBackground = true, const wxRect* aRect = NULL ) override;
 
     /**
      * Function ForceRefresh()
@@ -157,9 +147,9 @@ public:
      */
     virtual void SetTopLayer( int aLayer );
 
-    virtual void GetMsgPanelInfo( std::vector<MSG_PANEL_ITEM>& aList )
+    virtual void GetMsgPanelInfo( EDA_UNITS aUnits, std::vector<MSG_PANEL_ITEM>& aList )
     {
-        assert( false );
+        wxASSERT( false );
     }
 
     /**
@@ -172,10 +162,7 @@ public:
      * Function GetParentEDAFrame()
      * Returns parent EDA_DRAW_FRAME, if available or NULL otherwise.
      */
-    EDA_DRAW_FRAME* GetParentEDAFrame() const
-    {
-        return m_edaFrame;
-    }
+    EDA_DRAW_FRAME* GetParentEDAFrame() const { return m_edaFrame; }
 
     /**
      * Function OnShow()
@@ -188,78 +175,53 @@ public:
      * be true (and is by default) for any primary canvas, but can be false to make
      * well-behaved preview panes and the like.
      */
-    void SetStealsFocus( bool aStealsFocus )
-    {
-        m_stealsFocus = aStealsFocus;
-    }
-
-    /**
-     * Get whether focus is taken on certain events (see SetStealsFocus()).
-     */
-    bool GetStealsFocus() const
-    {
-        return m_stealsFocus;
-    }
+    void SetStealsFocus( bool aStealsFocus ) { m_stealsFocus = aStealsFocus; }
 
     /**
      * Function SetCurrentCursor
      * Set the current cursor shape for this panel
      */
-    void SetCurrentCursor( int aCursor )
-    {
-        m_currentCursor = aCursor;
-        SetCursor( (wxStockCursor) m_currentCursor );
-    }
+    void SetCurrentCursor( wxStockCursor aStockCursorID );
+    void SetCurrentCursor( const wxCursor& aCursor );
 
     /**
-     * Function GetDefaultCursor
-     * @return the default cursor shape
+     * Returns the bounding box of the view that should be used if model is not valid
+     * For example, the worksheet bounding box for an empty PCB
+     *
+     * @return the default bounding box for the panel
      */
-    int GetDefaultCursor() const { return m_defaultCursor; }
+    virtual BOX2I GetDefaultViewBBox() const { return BOX2I(); }
 
     /**
-     * Function GetCurrentCursor
-     * @return the current cursor shape, depending on the current selected tool
+     * Used to forward events to the canvas from popups, etc.
      */
-    int GetCurrentCursor() const { return m_currentCursor; }
-
+    void OnEvent( wxEvent& aEvent );
 
 protected:
-    void onPaint( wxPaintEvent& WXUNUSED( aEvent ) );
+    virtual void onPaint( wxPaintEvent& WXUNUSED( aEvent ) );
     void onSize( wxSizeEvent& aEvent );
-    void onEvent( wxEvent& aEvent );
     void onEnter( wxEvent& aEvent );
     void onLostFocus( wxFocusEvent& aEvent );
     void onRefreshTimer( wxTimerEvent& aEvent );
     void onShowTimer( wxTimerEvent& aEvent );
+    void onSetCursor( wxSetCursorEvent& event );
 
     static const int MinRefreshPeriod = 17;             ///< 60 FPS.
 
-    /// Current mouse cursor shape id.
-    int     m_currentCursor;
-    /// The default mouse cursor shape id.
-    int     m_defaultCursor;
+    wxCursor                 m_currentCursor;    /// Current mouse cursor shape id.
 
-    /// Pointer to the parent window
-    wxWindow*                m_parent;
+    wxWindow*                m_parent;           /// Pointer to the parent window
+    EDA_DRAW_FRAME*          m_edaFrame;         /// Parent EDA_DRAW_FRAME (if available)
 
-    /// Parent EDA_DRAW_FRAME (if available)
-    EDA_DRAW_FRAME*          m_edaFrame;
-
-    /// Last timestamp when the panel was refreshed
-    wxLongLong               m_lastRefresh;
-
-    /// Is there a redraw event requested?
-    bool                     m_pendingRefresh;
+    wxLongLong               m_lastRefresh;      /// Last timestamp when the panel was refreshed
+    bool                     m_pendingRefresh;   /// Is there a redraw event requested?
+    wxTimer                  m_refreshTimer;     /// Timer to prevent too-frequent refreshing
 
     /// True if GAL is currently redrawing the view
     bool                     m_drawing;
 
     /// Flag that determines if VIEW may use GAL for redrawing the screen.
     bool                     m_drawingEnabled;
-
-    /// Timer responsible for preventing too frequent refresh
-    wxTimer                  m_refreshTimer;
 
     /// Timer used to execute OnShow() when the window finally appears on the screen.
     wxTimer                  m_onShowTimer;
@@ -271,7 +233,7 @@ protected:
     KIGFX::VIEW*             m_view;
 
     /// Contains information about how to draw items using GAL
-    KIGFX::PAINTER*          m_painter;
+    std::unique_ptr<KIGFX::PAINTER> m_painter;
 
     /// Control for VIEW (moving, zooming, etc.)
     KIGFX::WX_VIEW_CONTROLS* m_viewControls;

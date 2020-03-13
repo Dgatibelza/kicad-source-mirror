@@ -2,8 +2,8 @@
  * This program source code file is part of KiCad, a free EDA CAD application.
  *
  * Copyright (C) 2004 Jean-Pierre Charras, jp.charras ar wanadoo.fr
- * Copyright (C) 2008-2017 Wayne Stambaugh <stambaughw@verizon.net>
- * Copyright (C) 2004-2017 KiCad Developers, see AUTHORS.txt for contributors.
+ * Copyright (C) 2008 Wayne Stambaugh <stambaughw@gmail.com>
+ * Copyright (C) 2004-2019 KiCad Developers, see AUTHORS.txt for contributors.
  *
  * This program is free software; you can redistribute it and/or
  * modify it under the terms of the GNU General Public License
@@ -30,14 +30,13 @@
 
 #include <fctsys.h>
 #include <confirm.h>
-#include <class_sch_screen.h>
-#include <wxstruct.h>
-#include <schframe.h>
+#include <wildcards_and_files_ext.h>
 
+#include <sch_edit_frame.h>
+#include <symbol_lib_table.h>
 #include <class_library.h>
 #include <sch_component.h>
 #include <sch_sheet.h>
-#include <wildcards_and_files_ext.h>
 
 
 bool SCH_EDIT_FRAME::CreateArchiveLibraryCacheFile( bool aUseCurrentSheetFilename )
@@ -65,9 +64,9 @@ bool SCH_EDIT_FRAME::CreateArchiveLibraryCacheFile( bool aUseCurrentSheetFilenam
 
 bool SCH_EDIT_FRAME::CreateArchiveLibrary( const wxString& aFileName )
 {
-    wxString        msg;
-    SCH_SCREENS     screens;
-    PART_LIBS*      libs = Prj().SchLibs();
+    wxString          tmp;
+    wxString          errorMsg;
+    SCH_SCREENS       screens;
 
     // Create a new empty library to archive components:
     std::unique_ptr<PART_LIB> archLib( new PART_LIB( LIBRARY_TYPE_EESCHEMA, aFileName ) );
@@ -82,46 +81,81 @@ bool SCH_EDIT_FRAME::CreateArchiveLibrary( const wxString& aFileName )
      */
     for( SCH_SCREEN* screen = screens.GetFirst(); screen; screen = screens.GetNext() )
     {
-        for( SCH_ITEM* item = screen->GetDrawItems(); item; item = item->Next() )
+
+        for( auto aItem : screen->Items().OfType( SCH_COMPONENT_T ) )
         {
-            if( item->Type() != SCH_COMPONENT_T )
-                continue;
+            LIB_PART* part = nullptr;
+            auto      component = static_cast<SCH_COMPONENT*>( aItem );
 
-            SCH_COMPONENT* component = (SCH_COMPONENT*) item;
-
-            if( !archLib->FindAlias( component->GetLibId().GetLibItemName() ) )
+            try
             {
-                LIB_PART* part = NULL;
+                if( archLib->FindPart( component->GetLibId() ) )
+                    continue;
 
-                try
-                {
-                    part = libs->FindLibPart( component->GetLibId() );
+                part = GetLibPart( component->GetLibId(), true );
+            }
+            catch( const IO_ERROR& )
+            {
+                // Queue up error messages for later.
+                tmp.Printf( _( "Failed to add symbol \"%s\" to library file \"%s\"." ),
+                            component->GetLibId().GetUniStringLibItemName(), aFileName );
 
-                    if( part )
-                    {
-                        // AddPart() does first clone the part before adding.
-                        archLib->AddPart( part );
-                    }
-                }
-                catch( ... /* IO_ERROR ioe */ )
-                {
-                    msg.Printf( _( "Failed to add symbol %s to library file '%s'" ),
-                                component->GetLibId().GetLibItemName().wx_str(), aFileName );
-                    DisplayError( this, msg );
-                    return false;
-                }
+                // Don't bail out here.  Attempt to add as many of the symbols to the library
+                // as possible.
+            }
+            catch( ... )
+            {
+                tmp = _( "Unexpected exception occurred." );
+            }
+
+            if( part )
+            {
+                // Use the full LIB_ID as the symbol name to prevent symbol name collisions.
+                wxString oldName = part->GetName();
+                part->SetName( component->GetLibId().GetUniStringLibId() );
+
+                // AddPart() does first clone the part before adding.
+                archLib->AddPart( part );
+                part->SetName( oldName );
+            }
+            else
+            {
+                tmp.Printf( _( "Symbol %s not found in any library or cache." ),
+                            component->GetLibId().GetUniStringLibId() );
+            }
+
+            if( !tmp.empty() && !errorMsg.Contains( component->GetLibId().GetUniStringLibId() ) )
+            {
+                if( errorMsg.empty() )
+                    errorMsg += tmp;
+                else
+                    errorMsg += "\n" + tmp;
             }
         }
     }
+
+    if( !errorMsg.empty() )
+    {
+        tmp.Printf( _( "Errors occurred creating symbol library %s." ), aFileName );
+        DisplayErrorMessage( this, tmp, errorMsg );
+    }
+
+    archLib->EnableBuffering( false );
 
     try
     {
         archLib->Save( false );
     }
-    catch( ... /* IO_ERROR ioe */ )
+    catch( const IO_ERROR& ioe )
     {
-        msg.Printf( _( "Failed to save symbol library file '%s'" ), aFileName );
-        DisplayError( this, msg );
+        errorMsg.Printf( _( "Failed to save symbol library file \"%s\"" ), aFileName );
+        DisplayErrorMessage( this, errorMsg, ioe.What() );
+        return false;
+    }
+    catch( std::exception& error )
+    {
+        errorMsg.Printf( _( "Failed to save symbol library file \"%s\"" ), aFileName );
+        DisplayErrorMessage( this, errorMsg, error.what() );
         return false;
     }
 

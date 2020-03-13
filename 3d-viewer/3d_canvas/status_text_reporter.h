@@ -30,9 +30,9 @@
 #define STATUS_TEXT_REPORTER_H_
 
 #include <reporter.h>
- 
+
 /**
- * Class STATUS_TEXT_REPORTER
+ * STATUS_TEXT_REPORTER
  * is a wrapper for reporting to a wxString in a wxFrame status text.
  */
 class STATUS_TEXT_REPORTER : public REPORTER
@@ -50,7 +50,7 @@ public:
         m_hasMessage = false;
     }
 
-    REPORTER& Report( const wxString& aText, SEVERITY aSeverity = RPT_UNDEFINED ) override
+    REPORTER& Report( const wxString& aText, SEVERITY aSeverity = RPT_SEVERITY_UNDEFINED ) override
     {
         if( !aText.IsEmpty() )
             m_hasMessage = true;
@@ -61,7 +61,7 @@ public:
         return *this;
     }
 
-    bool HasMessage() const { return m_hasMessage; }
+    bool HasMessage() const override { return m_hasMessage; }
 };
 
 

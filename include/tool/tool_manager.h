@@ -36,11 +36,12 @@
 
 class TOOL_BASE;
 class ACTION_MANAGER;
-class CONTEXT_MENU;
-class wxWindow;
+class ACTION_MENU;
+class EDA_BASE_FRAME;
+
 
 /**
- * Class TOOL_MANAGER.
+ * TOOL_MANAGER.
  * Master controller class:
  * - registers editing tools
  * - pumps UI events to tools requesting them
@@ -94,21 +95,34 @@ public:
     bool InvokeTool( const std::string& aToolName );
 
     /**
-     * Function RegisterAction()
-     * Registers an action that can be used to control tools (eg. invoke, trigger specific
-     * behaviours).
-     *
-     * @param aAction is the action to be registered.
+     * Shutdown all tools with a currently registered event loop in this tool manager
+     * by waking them up with a null event.
      */
-    void RegisterAction( TOOL_ACTION* aAction );
+    void ShutdownAllTools();
 
     /**
-     * Function UnregisterAction()
-     * Unregisters an action, so it is no longer active.
+     * Shutdown the specified tool by waking it up with a null event to terminate
+     * the processing loop.
      *
-     * @param aAction is the action to be unregistered.
+     * @param aTool is the tool to shutdown
      */
-    void UnregisterAction( TOOL_ACTION* aAction );
+    void ShutdownTool( TOOL_BASE* aTool );
+
+    /**
+     * Shutdown the specified tool by waking it up with a null event to terminate
+     * the processing loop.
+     *
+     * @param aToolId is the ID of the tool to shutdown
+     */
+    void ShutdownTool( TOOL_ID aToolId );
+
+    /**
+     * Shutdown the specified tool by waking it up with a null event to terminate
+     * the processing loop.
+     *
+     * @param aToolName is name of the tool to shutdown
+     */
+    void ShutdownTool( const std::string& aToolName );
 
     /**
      * Function RunAction()
@@ -138,30 +152,45 @@ public:
      * Function RunAction()
      * Runs the specified action.
      *
+     * This function will only return if the action has been handled when the action is run
+     * immediately (aNow = true), otherwise it will always return false.
+     *
      * @param aAction is the action to be invoked.
      * @param aNow decides if the action has to be run immediately or after the current coroutine
      * is preemptied.
      * @param aParam is an optional parameter that might be used by the invoked action. Its meaning
      * depends on the action.
+     *
+     * @return True if the action was handled immediately
      */
-    template<typename T>
-    void RunAction( const TOOL_ACTION& aAction, bool aNow = false, T aParam = NULL )
+    template <typename T>
+    bool RunAction( const TOOL_ACTION& aAction, bool aNow = false, T aParam = NULL )
     {
-        RunAction( aAction, aNow, reinterpret_cast<void*>( aParam ) );
+        return RunAction( aAction, aNow, reinterpret_cast<void*>( aParam ) );
     }
 
-    void RunAction( const TOOL_ACTION& aAction, bool aNow, void* aParam );
+    bool RunAction( const TOOL_ACTION& aAction, bool aNow, void* aParam );
 
-    void RunAction( const TOOL_ACTION& aAction, bool aNow = false )
+    bool RunAction( const TOOL_ACTION& aAction, bool aNow = false )
     {
-        RunAction( aAction, aNow, (void*) NULL );
+        return RunAction( aAction, aNow, (void*) NULL );
     }
+
+    const std::map<std::string, TOOL_ACTION*>& GetActions();
+
+    /**
+     * Function PrimeTool()
+     * "Primes" a tool by sending a cursor left-click event with the mouse position set
+     * to the passed in position.
+     *
+     * @param aPosition is the mouse position to use in the event
+     */
+    void PrimeTool( const VECTOR2D& aPosition );
 
     ///> @copydoc ACTION_MANAGER::GetHotKey()
     int GetHotKey( const TOOL_ACTION& aAction );
 
-    ///> @copydoc ACTION_MANAGER::UpdateHotKeys()
-    void UpdateHotKeys();
+    ACTION_MANAGER* GetActionManager() { return m_actionMgr; }
 
     /**
      * Function FindTool()
@@ -242,11 +271,10 @@ public:
 
     /**
      * Sets the work environment (model, view, view controls and the parent window).
-     * These are made available to the tool. Called by the parent frame (PCB_EDIT_FRAME)
-     * when the board is set up.
+     * These are made available to the tool. Called by the parent frame when it is set up.
      */
     void SetEnvironment( EDA_ITEM* aModel, KIGFX::VIEW* aView,
-            KIGFX::VIEW_CONTROLS* aViewControls, wxWindow* aFrame );
+                         KIGFX::VIEW_CONTROLS* aViewControls, EDA_BASE_FRAME* aFrame );
 
     /* Accessors for the environment objects (view, model, etc.) */
     KIGFX::VIEW* GetView() const
@@ -259,14 +287,17 @@ public:
         return m_viewControls;
     }
 
+    VECTOR2D GetMousePosition();
+    VECTOR2D GetCursorPosition();
+
     inline EDA_ITEM* GetModel() const
     {
         return m_model;
     }
 
-    inline wxWindow* GetEditFrame() const
+    inline EDA_BASE_FRAME* GetEditFrame() const
     {
-        return m_editFrame;
+        return m_frame;
     }
 
     /**
@@ -325,12 +356,16 @@ public:
     void RunMainStack( TOOL_BASE* aTool, std::function<void()> aFunc );
 
     /**
+     * Updates the status bar and synchronizes toolbars.
+     */
+    void UpdateUI( const TOOL_EVENT& aEvent );
+
+    /**
      * Pauses execution of a given tool until one or more events matching aConditions arrives.
      * The pause/resume operation is done through COROUTINE object.
      * Called only from coroutines.
      */
-    boost::optional<TOOL_EVENT> ScheduleWait( TOOL_BASE* aTool,
-            const TOOL_EVENT_LIST& aConditions );
+    TOOL_EVENT* ScheduleWait( TOOL_BASE* aTool, const TOOL_EVENT_LIST& aConditions );
 
     /**
      * Sets behaviour of the tool's context popup menu.
@@ -342,21 +377,12 @@ public:
      *  CMENU_OFF: menu is disabled.
      * May be called from a coroutine context.
      */
-    void ScheduleContextMenu( TOOL_BASE* aTool, CONTEXT_MENU* aMenu,
-            CONTEXT_MENU_TRIGGER aTrigger );
-
-    /**
-     * Allows a tool to pass the already handled event to the next tool on the stack.
-     */
-    void PassEvent()
-    {
-        m_passEvent = true;
-    }
+    void ScheduleContextMenu( TOOL_BASE* aTool, ACTION_MENU* aMenu, CONTEXT_MENU_TRIGGER aTrigger );
 
     /**
      * Stores an information to the system clipboard.
      * @param aText is the information to be stored.
-     * @return False if error occured.
+     * @return False if error occurred.
      */
     bool SaveClipboard( const std::string& aText );
 
@@ -366,6 +392,36 @@ public:
      */
     std::string GetClipboard() const;
 
+    /**
+     * Returns the view controls settings for the current tool or the general settings if there is
+     * no active tool.
+     */
+    const KIGFX::VC_SETTINGS& GetCurrentToolVC() const;
+
+    /**
+     * True while processing a context menu.
+     */
+    bool IsContextMenuActive()
+    {
+        return m_menuActive;
+    }
+
+    /**
+     * Disables mouse warping after the current context menu is closed.
+     * Must be called before invoking each context menu.
+     * It's a good idea to call this from non-modal dialogs (e.g. DRC window).
+     */
+    void VetoContextMenuMouseWarp()
+    {
+        m_warpMouseAfterContextMenu = false;
+    }
+
+    /**
+     * Function DispatchContextMenu()
+     * Handles context menu related events.
+     */
+    void DispatchContextMenu( const TOOL_EVENT& aEvent );
+
 private:
     typedef std::pair<TOOL_EVENT_LIST, TOOL_STATE_FUNC> TRANSITION;
 
@@ -373,15 +429,15 @@ private:
      * Function dispatchInternal
      * Passes an event at first to the active tools, then to all others.
      */
-    void dispatchInternal( const TOOL_EVENT& aEvent );
+    bool dispatchInternal( const TOOL_EVENT& aEvent );
 
     /**
      * Function dispatchStandardEvents()
      * Handles specific events, that are intended for TOOL_MANAGER rather than tools.
      * @param aEvent is the event to be processed.
-     * @return False if the event was processed and should not go any further.
+     * @return true if the event was processed and should not go any further.
      */
-    bool dispatchStandardEvents( const TOOL_EVENT& aEvent );
+    bool dispatchHotKey( const TOOL_EVENT& aEvent );
 
     /**
      * Function dispatchActivation()
@@ -390,12 +446,6 @@ private:
      * @return True if a tool was invoked, false otherwise.
      */
     bool dispatchActivation( const TOOL_EVENT& aEvent );
-
-    /**
-     * Function dispatchContextMenu()
-     * Handles context menu related events.
-     */
-    void dispatchContextMenu( const TOOL_EVENT& aEvent );
 
     /**
      * Function invokeTool()
@@ -479,21 +529,16 @@ private:
      */
     void applyViewControls( TOOL_STATE* aState );
 
-    /**
-     * Function pushViewControls()
-     * Stores the current VIEW_CONTROLS settings on the stack.
-     */
-    void pushViewControls();
-
-    /**
-     * Function pushViewControls()
-     * Restores VIEW_CONTROLS settings from the stack.
-     */
-    void popViewControls();
-
     ///> Main function for event processing.
     ///> @return true if a hotkey was handled
     bool processEvent( const TOOL_EVENT& aEvent );
+
+    /**
+     * Saves the previous active state and sets a new one.
+     * @param aState is the new active state. Might be null to indicate there is no new
+     * active state.
+     */
+    void setActiveState( TOOL_STATE* aState );
 
     /// Index of registered tools current states, associated by tools' objects.
     TOOL_STATE_MAP m_toolState;
@@ -514,24 +559,29 @@ private:
     ACTION_MANAGER* m_actionMgr;
 
     /// Original cursor position, if overridden by the context menu handler
-    boost::optional<VECTOR2D> m_origCursor;
+    std::map<TOOL_ID, OPT<VECTOR2D>> m_cursorSettings;
 
     EDA_ITEM* m_model;
     KIGFX::VIEW* m_view;
     KIGFX::VIEW_CONTROLS* m_viewControls;
-    wxWindow* m_editFrame;
+    EDA_BASE_FRAME* m_frame;
 
     /// Queue that stores events to be processed at the end of the event processing cycle.
     std::list<TOOL_EVENT> m_eventQueue;
 
-    ///> VIEW_CONTROLS settings stack
-    std::stack<KIGFX::VC_SETTINGS> m_vcStack;
+    /// Right click context menu position.
+    VECTOR2D m_menuCursor;
 
-    /// Flag saying if the currently processed event should be passed to other tools.
-    bool m_passEvent;
+    bool m_warpMouseAfterContextMenu;
 
-    /// Flag indicating whether a context menu is currently displayed
+    /// Flag indicating whether a context menu is currently displayed.
     bool m_menuActive;
+
+    /// Tool currently displaying a popup menu. It is negative when there is no menu displayed.
+    TOOL_ID m_menuOwner;
+
+    /// Pointer to the state object corresponding to the currently executed tool.
+    TOOL_STATE* m_activeState;
 };
 
 #endif

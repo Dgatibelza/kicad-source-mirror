@@ -1,8 +1,8 @@
 /*
  * This program source code file is part of KiCad, a free EDA CAD application.
  *
- * Copyright (C) 2017 Wayne Stambaugh <stambaughw@gmail.com>
- * Copyright (C) 2017 KiCad Developers, see AUTHORS.txt for contributors.
+ * Copyright (C) 2019 Wayne Stambaugh <stambaughw@gmail.com>
+ * Copyright (C) 2017-2019 KiCad Developers, see AUTHORS.txt for contributors.
  *
  * This program is free software: you can redistribute it and/or modify it
  * under the terms of the GNU General Public License as published by the
@@ -21,34 +21,15 @@
 #include "dialog_global_sym_lib_table_config.h"
 
 #include <confirm.h>
-#include <grid_tricks.h>
 #include <kiface_i.h>
-#include <lib_table_grid.h>
-#include <lib_table_lexer.h>
 #include <macros.h>
-
-#include <wx/filename.h>
 
 #include "symbol_lib_table.h"
 
 
 DIALOG_GLOBAL_SYM_LIB_TABLE_CONFIG::DIALOG_GLOBAL_SYM_LIB_TABLE_CONFIG( wxWindow* aParent ) :
-    DIALOG_GLOBAL_SYM_LIB_TABLE_CONFIG_BASE( aParent )
+    DIALOG_GLOBAL_LIB_TABLE_CONFIG( aParent, _( "symbol" ) )
 {
-    wxFileName fn = SYMBOL_LIB_TABLE::GetGlobalTableFileName();
-
-    // Attempt to find the default global file table from the KiCad template folder.
-    wxString fileName = Kiface().KifaceSearch().FindValidPath( fn.GetName() );
-
-    m_defaultFileFound = wxFileName::FileExists( fileName );
-    m_filePicker1->SetFileName( wxFileName( fileName ) );
-
-    wxButton* okButton = (wxButton *) FindWindowById( wxID_OK );
-
-    if( okButton )
-        okButton->SetDefault();
-
-    FinishDialogSettings();
 }
 
 
@@ -57,15 +38,9 @@ DIALOG_GLOBAL_SYM_LIB_TABLE_CONFIG::~DIALOG_GLOBAL_SYM_LIB_TABLE_CONFIG()
 }
 
 
-void DIALOG_GLOBAL_SYM_LIB_TABLE_CONFIG::onUpdateFilePicker( wxUpdateUIEvent& aEvent )
+wxFileName DIALOG_GLOBAL_SYM_LIB_TABLE_CONFIG::GetGlobalTableFileName()
 {
-    aEvent.Enable( m_customRb->GetValue() );
-}
-
-
-void DIALOG_GLOBAL_SYM_LIB_TABLE_CONFIG::onUpdateDefaultSelection( wxUpdateUIEvent& aEvent )
-{
-    aEvent.Enable( m_defaultFileFound );
+    return SYMBOL_LIB_TABLE::GetGlobalTableFileName();
 }
 
 
@@ -107,7 +82,7 @@ bool DIALOG_GLOBAL_SYM_LIB_TABLE_CONFIG::TransferDataFromWindow()
     if( !fn.FileExists() )
     {
         DisplayError( this,
-                      wxString::Format( _( "File '%s' not found." ), fn.GetFullPath() ) );
+                      wxString::Format( _( "File \"%s\" not found." ), fn.GetFullPath() ) );
         return false;
     }
 
@@ -121,7 +96,7 @@ bool DIALOG_GLOBAL_SYM_LIB_TABLE_CONFIG::TransferDataFromWindow()
     catch( const IO_ERROR& ioe )
     {
         DisplayError( this,
-                      wxString::Format( _( "File '%s' is not a valid symbol library table "
+                      wxString::Format( _( "File \"%s\" is not a valid symbol library table "
                                            "file.\n\n%s" ), fn.GetFullPath(), ioe.What() ) );
         return false;
     }
@@ -132,7 +107,7 @@ bool DIALOG_GLOBAL_SYM_LIB_TABLE_CONFIG::TransferDataFromWindow()
     if( !symTableFileName.DirExists() && !symTableFileName.Mkdir( 0x777, wxPATH_MKDIR_FULL ) )
     {
         DisplayError( this,
-                      wxString::Format( _( "Cannot create global library table path '%s'." ),
+                      wxString::Format( _( "Cannot create global library table path \"%s\"." ),
                                             symTableFileName.GetPath() ) );
         return false;
     }
@@ -142,7 +117,7 @@ bool DIALOG_GLOBAL_SYM_LIB_TABLE_CONFIG::TransferDataFromWindow()
     {
         DisplayError( this,
                       wxString::Format( _( "Cannot copy global symbol library table "
-                                           "file:\n\n '%s'\n\n:to:\n\n%s." ),
+                                           "file:\n\n \"%s\"\n\n:to:\n\n\"%s\"." ),
                                         fn.GetFullPath(), symTableFileName.GetFullPath() ) );
         return false;
     }

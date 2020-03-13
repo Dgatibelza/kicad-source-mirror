@@ -129,14 +129,14 @@ as such!  As such, it is OK to use UTF8 characters:
 
 class wxConfigBase;
 class wxWindow;
-class wxConfigBase;
 class PGM_BASE;
 class KIWAY;
 class KIWAY_PLAYER;
+class wxTopLevelWindow;
 
 
 /**
- * Class KIFACE
+ * KIFACE
  * is used by a participant in the KIWAY alchemy.  KIWAY is a minimalistic
  * software bus for communications between various DLLs/DSOs (DSOs) within the same
  * KiCad process.  It makes it possible to call between DSOs without having to link
@@ -207,8 +207,24 @@ struct KIFACE
      *  and old school cast.  dynamic_cast is problematic since it needs typeinfo probably
      *  not contained in the caller's link image.
      */
-    VTBL_ENTRY  wxWindow* CreateWindow( wxWindow* aParent, int aClassId,
-            KIWAY* aKIWAY, int aCtlBits = 0 ) = 0;
+    VTBL_ENTRY wxWindow* CreateWindow( wxWindow* aParent, int aClassId,
+                                       KIWAY* aKIWAY, int aCtlBits = 0 ) = 0;
+
+    /**
+     * Function SaveFileAs
+     * Saving a file under a different name is delegated to the various KIFACEs because
+     * the project doesn't know the internal format of the various files (which may have
+     * paths in them that need updating).
+     */
+    VTBL_ENTRY void SaveFileAs( const wxString& srcProjectBasePath,
+                                const wxString& srcProjectName,
+                                const wxString& newProjectBasePath,
+                                const wxString& newProjectName,
+                                const wxString& srcFilePath,
+                                wxString& aErrors )
+    {
+        // If a KIFACE owns files then it needs to implement this....
+    }
 
     /**
      * Function IfaceOrAddress
@@ -227,7 +243,7 @@ struct KIFACE
 
 
 /**
- * Class KIWAY
+ * KIWAY
  * is a minimalistic software bus for communications between various
  * DLLs/DSOs (DSOs) within the same KiCad process.  It makes it possible
  * to call between DSOs without having to link them together, and without
@@ -304,14 +320,16 @@ public:
      * @param doCreate when true asks that the player be created if it is not
      *   already created, false means do not create and maybe return NULL.
      * @param aParent is a parent for modal KIWAY_PLAYER frames, otherwise NULL
-     *  used only when doCreate = true
+     *  used only when doCreate = true and by KIWAY_PLAYER frames created in modal form
+     * because the are using the wxFLOAT_ON_PARENT style
      *
      * @return KIWAY_PLAYER* - a valid opened KIWAY_PLAYER or NULL if there
      *  is something wrong or doCreate was false and the player has yet to be created.
      *
      * @throw IO_ERROR if the *.kiface file could not be found, filled with text saying what.
      */
-    VTBL_ENTRY KIWAY_PLAYER* Player( FRAME_T aFrameType, bool doCreate = true, KIWAY_PLAYER* aParent = NULL );
+    VTBL_ENTRY KIWAY_PLAYER* Player( FRAME_T aFrameType, bool doCreate = true,
+                                     wxTopLevelWindow* aParent = NULL );
 
     /**
      * Function PlayerClose
@@ -341,7 +359,7 @@ public:
      * aCommand in there.
      */
     VTBL_ENTRY void ExpressMail( FRAME_T aDestination, MAIL_T aCommand,
-            const std::string& aPayload, wxWindow* aSource = NULL );
+                                 std::string& aPayload, wxWindow* aSource = NULL );
 
     /**
      * Function Prj
@@ -358,12 +376,11 @@ public:
     VTBL_ENTRY void SetLanguage( int aLanguage );
 
     /**
-     * Function ShowChangedIcons
-     * Calls ShowChangedIcons() on all KIWAY_PLAYERs.
-     * Used after changing options related to icons in menus and toolbars
-     * (like enable/disable icons in menus)
+     * Function CommonSettingsChanged
+     * Calls CommonSettingsChanged() on all KIWAY_PLAYERs.
+     * Used after changing suite-wide options such as panning, autosave interval, etc.
      */
-    VTBL_ENTRY void ShowChangedIcons();
+    VTBL_ENTRY void CommonSettingsChanged( bool aEnvVarsChanged );
 
     KIWAY( PGM_BASE* aProgram, int aCtlBits, wxFrame* aTop = NULL );
 
@@ -376,6 +393,8 @@ public:
      * @param aTop is the top most wxFrame in the entire program.
      */
     void SetTop( wxFrame* aTop );
+
+    void OnKiCadExit();
 
     void OnKiwayEnd();
 
@@ -393,7 +412,7 @@ private:
 
     bool set_kiface( FACE_T aFaceType, KIFACE* aKiface )
     {
-        if( unsigned( aFaceType ) < unsigned( KIWAY_FACE_COUNT ) )
+        if( (unsigned) aFaceType < (unsigned) KIWAY_FACE_COUNT )
         {
             m_kiface[aFaceType] = aKiface;
             return true;

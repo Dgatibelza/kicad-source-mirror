@@ -167,7 +167,10 @@ void MEANDERED_LINE::MeanderSegment( const SEG& aBase, int aBaseIndex )
 
 int MEANDER_SHAPE::cornerRadius() const
 {
-    return (int64_t) spacing() * Settings().m_cornerRadiusPercentage / 200;
+    // TODO: fix diff-pair meandering so we can use non-100% radii
+    int rPercent = m_dual ? 100 : Settings().m_cornerRadiusPercentage;
+
+    return (int64_t) spacing() * rPercent / 200;
 }
 
 
@@ -410,7 +413,7 @@ SHAPE_LINE_CHAIN MEANDER_SHAPE::genMeanderShape( VECTOR2D aP, VECTOR2D aDir,
         SEG axis( aP, aP + aDir );
 
         for( int i = 0; i < lc.PointCount(); i++ )
-            lc.Point( i ) = reflect( lc.CPoint( i ), axis );
+            lc.SetPoint( i, reflect( lc.CPoint( i ), axis ) );
     }
 
     return lc;

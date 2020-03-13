@@ -2,7 +2,7 @@
  * This program source code file is part of KiCad, a free EDA CAD application.
  *
  * Copyright (C) 2016 Chris Pavlina <pavlina.chris@gmail.com>
- * Copyright (C) 2016-2017 KiCad Developers, see AUTHORS.txt for contributors.
+ * Copyright (C) 2016-2019 KiCad Developers, see AUTHORS.txt for contributors.
  *
  * This program is free software; you can redistribute it and/or
  * modify it under the terms of the GNU General Public License
@@ -23,12 +23,10 @@
  */
 
 #include <cctype>
-
 #include <widgets/widget_hotkey_list.h>
-
 #include <wx/statline.h>
-
-#include <draw_frame.h>
+#include <tool/tool_action.h>
+#include <eda_draw_frame.h>
 #include <dialog_shim.h>
 
 
@@ -43,37 +41,34 @@ static const int HOTKEY_MIN_WIDTH = 100;
  */
 enum ID_WHKL_MENU_IDS
 {
-    ID_EDIT = 2001,
+    ID_EDIT_HOTKEY = 2001,
     ID_RESET,
     ID_DEFAULT,
-    ID_RESET_ALL,
-    ID_DEFAULT_ALL,
+    ID_CLEAR
 };
 
 
 /**
- * Class WIDGET_HOTKEY_CLIENT_DATA
- * Stores the hotkey and section tag associated with each row. To change a
- * hotkey, edit it in the row's client data, then call WIDGET_HOTKEY_LIST::UpdateFromClientData().
+ * WIDGET_HOTKEY_CLIENT_DATA
+ * Stores the hotkey change data associated with each row. To change a
+ * hotkey, edit it via GetCurrentValue() in the row's client data, then call
+ * WIDGET_HOTKEY_LIST::UpdateFromClientData().
  */
 class WIDGET_HOTKEY_CLIENT_DATA : public wxClientData
 {
-    EDA_HOTKEY  m_hotkey;
-    wxString    m_section_tag;
+    HOTKEY&  m_changed_hotkey;
 
 public:
-    WIDGET_HOTKEY_CLIENT_DATA( const EDA_HOTKEY& aHotkey, const wxString& aSectionTag )
-        :   m_hotkey( aHotkey ), m_section_tag( aSectionTag )
+    WIDGET_HOTKEY_CLIENT_DATA( HOTKEY& aChangedHotkey )
+        :   m_changed_hotkey( aChangedHotkey )
     {}
 
-
-    EDA_HOTKEY& GetHotkey() { return m_hotkey; }
-    const wxString& GetSectionTag() const { return m_section_tag; }
+    HOTKEY& GetChangedHotkey() { return m_changed_hotkey; }
 };
 
 
 /**
- * Class HK_PROMPT_DIALOG
+ * HK_PROMPT_DIALOG
  * Dialog to prompt the user to enter a key.
  */
 class HK_PROMPT_DIALOG : public DIALOG_SHIM
@@ -163,9 +158,9 @@ public:
 
         int key = aEvent.GetKeyCode();
 
-        for( size_t i = 0; i < sizeof( skipped_keys ) / sizeof( skipped_keys[0] ); ++i )
+        for( wxKeyCode skipped_key : skipped_keys )
         {
-            if( key == skipped_keys[i] )
+            if( key == skipped_key )
                 return;
         }
 
@@ -213,15 +208,55 @@ public:
         HK_PROMPT_DIALOG dialog( aParent, wxID_ANY, _( "Set Hotkey" ), aName, aCurrentKey );
 
         if( dialog.ShowModal() == wxID_OK )
-        {
             return dialog.m_event;
-        }
         else
-        {
-            wxKeyEvent dummy;
-            return dummy;
-        }
+            return wxKeyEvent();
     }
+};
+
+
+/**
+ * HOTKEY_FILTER
+ *
+ * Class to manage logic for filtering hotkeys based on user input
+ */
+class HOTKEY_FILTER
+{
+public:
+    HOTKEY_FILTER( const wxString& aFilterStr )
+    {
+        m_normalised_filter_str = aFilterStr.Upper();
+        m_valid = m_normalised_filter_str.size() > 0;
+    }
+
+    /**
+     * Method FilterMatches
+     *
+     * Checks if the filter matches the given hotkey
+     *
+     * @return true on match (or if filter is disabled)
+     */
+    bool FilterMatches( const HOTKEY& aHotkey ) const
+    {
+        if( !m_valid )
+            return true;
+
+        // Match in the (translated) filter string
+        const auto normedInfo = wxGetTranslation( aHotkey.m_Actions[ 0 ]->GetLabel() ).Upper();
+        if( normedInfo.Contains( m_normalised_filter_str ) )
+            return true;
+
+        const wxString keyName = KeyNameFromKeyCode( aHotkey.m_EditKeycode );
+        if( keyName.Upper().Contains( m_normalised_filter_str ) )
+            return true;
+
+        return false;
+    }
+
+private:
+
+    bool m_valid;
+    wxString m_normalised_filter_str;
 };
 
 
@@ -231,25 +266,23 @@ WIDGET_HOTKEY_CLIENT_DATA* WIDGET_HOTKEY_LIST::GetHKClientData( wxTreeListItem a
     {
         wxClientData* data = GetItemData( aItem );
 
-        if( !data )
-        {
-            return NULL;
-        }
-        else
-        {
+        if( data )
             return static_cast<WIDGET_HOTKEY_CLIENT_DATA*>( data );
-        }
     }
-    else
-    {
-        return NULL;
-    }
+
+    return nullptr;
 }
 
 
-WIDGET_HOTKEY_CLIENT_DATA* WIDGET_HOTKEY_LIST::GetSelHKClientData()
+WIDGET_HOTKEY_CLIENT_DATA* WIDGET_HOTKEY_LIST::getExpectedHkClientData( wxTreeListItem aItem )
 {
-    return GetHKClientData( GetSelection() );
+    const auto hkdata = GetHKClientData( aItem );
+
+    // This probably means a hotkey-only action is being attempted on
+    // a row that is not a hotkey (like a section heading)
+    wxASSERT_MSG( hkdata != nullptr, "No hotkey data found for list item" );
+
+    return hkdata;
 }
 
 
@@ -261,37 +294,48 @@ void WIDGET_HOTKEY_LIST::UpdateFromClientData()
 
         if( hkdata )
         {
-            EDA_HOTKEY& hk = hkdata->GetHotkey();
+            const auto& changed_hk = hkdata->GetChangedHotkey();
+            wxString    label = changed_hk.m_Actions[ 0 ]->GetLabel();
+            wxString    key_text = KeyNameFromKeyCode( changed_hk.m_EditKeycode );
 
-            SetItemText( i, 0, wxGetTranslation( hk.m_InfoMsg ) );
-            SetItemText( i, 1, KeyNameFromKeyCode( hk.m_KeyCode ) );
+            if( label.IsEmpty() )
+                label = changed_hk.m_Actions[ 0 ]->GetName();
+
+            // mark unsaved changes
+            if( changed_hk.m_EditKeycode != changed_hk.m_Actions[ 0 ]->GetHotKey() )
+                key_text += " *";
+
+            SetItemText( i, 0, label );
+            SetItemText( i, 1, key_text);
         }
     }
+
+    // Trigger a resize in case column widths have changed
+    wxSizeEvent dummy_evt;
+    TWO_COLUMN_TREE_LIST::OnSize( dummy_evt );
 }
 
 
-void WIDGET_HOTKEY_LIST::LoadSection( EDA_HOTKEY_CONFIG* aSection )
+void WIDGET_HOTKEY_LIST::changeHotkey( HOTKEY& aHotkey, long aKey )
 {
-    HOTKEY_LIST list;
+    // See if this key code is handled in hotkeys names list
+    bool exists;
+    KeyNameFromKeyCode( aKey, &exists );
 
-    for( EDA_HOTKEY** info_ptr = aSection->m_HK_InfoList; *info_ptr; ++info_ptr )
+    if( exists && aHotkey.m_EditKeycode != aKey )
     {
-        list.push_back( **info_ptr );
+        if( aKey == 0 || ResolveKeyConflicts( aHotkey.m_Actions[ 0 ], aKey ) )
+            aHotkey.m_EditKeycode = aKey;
     }
-
-    m_hotkeys.push_back( list );
 }
 
 
 void WIDGET_HOTKEY_LIST::EditItem( wxTreeListItem aItem )
 {
-    WIDGET_HOTKEY_CLIENT_DATA* hkdata = GetHKClientData( aItem );
+    WIDGET_HOTKEY_CLIENT_DATA* hkdata = getExpectedHkClientData( aItem );
 
     if( !hkdata )
-    {
-        // Activated item was not a hotkey row
         return;
-    }
 
     wxString    name = GetItemText( aItem, 0 );
     wxString    current_key = GetItemText( aItem, 1 );
@@ -299,66 +343,30 @@ void WIDGET_HOTKEY_LIST::EditItem( wxTreeListItem aItem )
     wxKeyEvent key_event = HK_PROMPT_DIALOG::PromptForKey( GetParent(), name, current_key );
     long key = MapKeypressToKeycode( key_event );
 
-    if( hkdata && key )
+    if( key )
     {
-        // See if this key code is handled in hotkeys names list
-        bool exists;
-        KeyNameFromKeyCode( key, &exists );
-
-        if( exists && hkdata->GetHotkey().m_KeyCode != key )
-        {
-            wxString tag = hkdata->GetSectionTag();
-            bool canUpdate = ResolveKeyConflicts( key, tag );
-
-            if( canUpdate )
-            {
-                hkdata->GetHotkey().m_KeyCode = key;
-            }
-        }
-
+        changeHotkey( hkdata->GetChangedHotkey(), key );
         UpdateFromClientData();
-
-        // Trigger a resize in case column widths have changed
-        wxSizeEvent dummy_evt;
-        TWO_COLUMN_TREE_LIST::OnSize( dummy_evt );
     }
 }
 
 
-void WIDGET_HOTKEY_LIST::ResetItem( wxTreeListItem aItem )
+void WIDGET_HOTKEY_LIST::ResetItem( wxTreeListItem aItem, int aResetId )
 {
-    WIDGET_HOTKEY_CLIENT_DATA* hkdata = GetHKClientData( aItem );
-    EDA_HOTKEY* hk = &hkdata->GetHotkey();
+    WIDGET_HOTKEY_CLIENT_DATA* hkdata = getExpectedHkClientData( aItem );
 
-    for( size_t sec_index = 0; sec_index < m_sections.size(); ++sec_index )
-    {
-        wxString& section_tag = *( m_sections[sec_index].m_section->m_SectionTag );
+    if( !hkdata )
+        return;
 
-        if( section_tag != hkdata->GetSectionTag() )
-            continue;
+    auto& changed_hk = hkdata->GetChangedHotkey();
 
-        HOTKEY_LIST& each_list = m_hotkeys[sec_index];
-        HOTKEY_LIST::iterator hk_it;
+    if( aResetId == ID_RESET )
+        changeHotkey( changed_hk, changed_hk.m_Actions[ 0 ]->GetHotKey() );
+    else if( aResetId == ID_CLEAR )
+        changeHotkey( changed_hk, 0 );
+    else if( aResetId == ID_DEFAULT )
+        changeHotkey( changed_hk, changed_hk.m_Actions[ 0 ]->GetDefaultHotKey() );
 
-        for( hk_it = each_list.begin(); hk_it != each_list.end(); ++hk_it )
-        {
-            if( hk_it->m_Idcommand == hk->m_Idcommand )
-            {
-                hk->m_KeyCode = hk_it->m_KeyCode;
-                break;
-            }
-        }
-    }
-
-    UpdateFromClientData();
-}
-
-
-void WIDGET_HOTKEY_LIST::ResetItemToDefault( wxTreeListItem aItem )
-{
-    WIDGET_HOTKEY_CLIENT_DATA* hkdata = GetHKClientData( aItem );
-    EDA_HOTKEY* hk = &hkdata->GetHotkey();
-    hk->ResetKeyCodeToDefault();
     UpdateFromClientData();
 }
 
@@ -376,14 +384,19 @@ void WIDGET_HOTKEY_LIST::OnContextMenu( wxTreeListEvent& aEvent )
 
     wxMenu menu;
 
-    menu.Append( ID_EDIT, _( "Edit..." ) );
-    menu.Append( ID_RESET, _( "Undo Changes" ) );
-    menu.Append( ID_DEFAULT, _( "Restore Default" ) );
-    menu.Append( wxID_SEPARATOR );
-    menu.Append( ID_RESET_ALL, _( "Undo All Changes" ) );
-    menu.Append( ID_DEFAULT_ALL, _( "Restore All to Default" ) );
+    WIDGET_HOTKEY_CLIENT_DATA* hkdata = GetHKClientData( m_context_menu_item );
 
-    PopupMenu( &menu );
+    // Some actions only apply if the row is hotkey data
+    if( hkdata )
+    {
+        menu.Append( ID_EDIT_HOTKEY, _( "Edit..." ) );
+        menu.Append( ID_RESET, _( "Undo Changes" ) );
+        menu.Append( ID_CLEAR, _( "Clear Assigned Hotkey" ) );
+        menu.Append( ID_DEFAULT, _( "Restore Default" ) );
+        menu.Append( wxID_SEPARATOR );
+
+        PopupMenu( &menu );
+    }
 }
 
 
@@ -391,24 +404,14 @@ void WIDGET_HOTKEY_LIST::OnMenu( wxCommandEvent& aEvent )
 {
     switch( aEvent.GetId() )
     {
-    case ID_EDIT:
+    case ID_EDIT_HOTKEY:
         EditItem( m_context_menu_item );
         break;
 
     case ID_RESET:
-        ResetItem( m_context_menu_item );
-        break;
-
+    case ID_CLEAR:
     case ID_DEFAULT:
-        ResetItemToDefault( m_context_menu_item );
-        break;
-
-    case ID_RESET_ALL:
-        TransferDataToControl();
-        break;
-
-    case ID_DEFAULT_ALL:
-        TransferDefaultsToControl();
+        ResetItem( m_context_menu_item, aEvent.GetId() );
         break;
 
     default:
@@ -417,179 +420,111 @@ void WIDGET_HOTKEY_LIST::OnMenu( wxCommandEvent& aEvent )
 }
 
 
-bool WIDGET_HOTKEY_LIST::CheckKeyConflicts( long aKey, const wxString& aSectionTag,
-        EDA_HOTKEY** aConfKey, EDA_HOTKEY_CONFIG** aConfSect )
+bool WIDGET_HOTKEY_LIST::ResolveKeyConflicts( TOOL_ACTION* aAction, long aKey )
 {
-    EDA_HOTKEY* conflicting_key = NULL;
-    struct EDA_HOTKEY_CONFIG* conflicting_section = NULL;
+    HOTKEY* conflictingHotKey = nullptr;
 
-    for( wxTreeListItem item = GetFirstItem(); item.IsOk(); item = GetNextItem( item ) )
+    m_hk_store.CheckKeyConflicts( aAction, aKey, &conflictingHotKey );
+
+    if( !conflictingHotKey )
+        return true;
+
+    TOOL_ACTION* conflictingAction = conflictingHotKey->m_Actions[ 0 ];
+    wxString msg = wxString::Format( _( "\"%s\" is already assigned to \"%s\" in section \"%s\". "
+                                        "Are you sure you want to change its assignment?" ),
+                                     KeyNameFromKeyCode( aKey ),
+                                     conflictingAction->GetLabel(),
+                                     HOTKEY_STORE::GetSectionName( conflictingAction ) );
+
+    wxMessageDialog dlg( GetParent(), msg, _( "Confirm change" ), wxYES_NO | wxNO_DEFAULT );
+
+    if( dlg.ShowModal() == wxID_YES )
     {
-        WIDGET_HOTKEY_CLIENT_DATA* hkdata = GetHKClientData( item );
-
-        if( !hkdata )
-            continue;
-
-        EDA_HOTKEY& hk = hkdata->GetHotkey();
-        wxString tag = hkdata->GetSectionTag();
-
-        if( aSectionTag != g_CommonSectionTag
-            && tag != g_CommonSectionTag
-            && tag != aSectionTag )
-        {
-            // This key and its conflict candidate are in orthogonal sections, so skip.
-            continue;
-        }
-
-        if( aKey == hk.m_KeyCode )
-        {
-            conflicting_key = &hk;
-
-            // Find the section
-            HOTKEY_SECTIONS::iterator it;
-
-            for( it = m_sections.begin(); it != m_sections.end(); ++it )
-            {
-                if( *it->m_section->m_SectionTag == tag )
-                {
-                    conflicting_section = it->m_section;
-                    break;
-                }
-            }
-        }
-    }
-
-    // Write the outparams
-    if( aConfKey )
-        *aConfKey = conflicting_key;
-
-    if( aConfSect )
-        *aConfSect = conflicting_section;
-
-    return conflicting_key == NULL;
-}
-
-
-bool WIDGET_HOTKEY_LIST::ResolveKeyConflicts( long aKey, const wxString& aSectionTag )
-{
-    EDA_HOTKEY* conflicting_key = NULL;
-    EDA_HOTKEY_CONFIG* conflicting_section = NULL;
-
-    CheckKeyConflicts( aKey, aSectionTag, &conflicting_key, &conflicting_section );
-
-    if( conflicting_key != NULL )
-    {
-        wxString    info    = wxGetTranslation( conflicting_key->m_InfoMsg );
-        wxString    msg     = wxString::Format(
-                _( "<%s> is already assigned to \"%s\" in section \"%s\". Are you sure you want "
-                   "to change its assignment?" ),
-                KeyNameFromKeyCode( aKey ), GetChars( info ),
-                *(conflicting_section->m_Title) );
-
-        wxMessageDialog dlg( GetParent(), msg, _( "Confirm change" ), wxYES_NO | wxNO_DEFAULT );
-
-        if( dlg.ShowModal() == wxID_YES )
-        {
-            conflicting_key->m_KeyCode = 0;
-            UpdateFromClientData();
-            return true;
-        }
-        else
-        {
-            return false;
-        }
-    }
-    else
-    {
+        // Reset the other hotkey
+        conflictingHotKey->m_EditKeycode = 0;
+        UpdateFromClientData();
         return true;
     }
+
+    return false;
 }
 
 
-WIDGET_HOTKEY_LIST::WIDGET_HOTKEY_LIST( wxWindow* aParent, const HOTKEY_SECTIONS& aSections )
+WIDGET_HOTKEY_LIST::WIDGET_HOTKEY_LIST( wxWindow* aParent, HOTKEY_STORE& aHotkeyStore,
+                                        bool aReadOnly )
     :   TWO_COLUMN_TREE_LIST( aParent, wxID_ANY, wxDefaultPosition, wxDefaultSize, wxTL_SINGLE ),
-        m_sections( aSections )
+        m_hk_store( aHotkeyStore ),
+        m_readOnly( aReadOnly )
 {
-    AppendColumn( _( "Command" ) );
+    wxString command_header = _( "Command" );
+
+    if( !m_readOnly )
+        command_header << " " << _( "(double-click to edit)" );
+
+    AppendColumn( command_header );
     AppendColumn( _( "Hotkey" ) );
     SetRubberBandColumn( 0 );
     SetClampedMinWidth( HOTKEY_MIN_WIDTH );
 
-    Bind( wxEVT_TREELIST_ITEM_ACTIVATED, &WIDGET_HOTKEY_LIST::OnActivated, this );
-    Bind( wxEVT_TREELIST_ITEM_CONTEXT_MENU, &WIDGET_HOTKEY_LIST::OnContextMenu, this );
-    Bind( wxEVT_MENU, &WIDGET_HOTKEY_LIST::OnMenu, this );
-}
-
-
-HOTKEY_SECTIONS WIDGET_HOTKEY_LIST::GenSections( EDA_HOTKEY_CONFIG* aHotkeys )
-{
-    HOTKEY_SECTIONS sections;
-
-    for( EDA_HOTKEY_CONFIG* section = aHotkeys; section->m_HK_InfoList; ++section )
+    if( !m_readOnly )
     {
-        HOTKEY_SECTION sec;
-        sec.m_name = wxGetTranslation( *section->m_Title );
-        sec.m_section = section;
-        sections.push_back( sec );
+        // The event only apply if the widget is in editable mode
+        Bind( wxEVT_TREELIST_ITEM_ACTIVATED, &WIDGET_HOTKEY_LIST::OnActivated, this );
+        Bind( wxEVT_TREELIST_ITEM_CONTEXT_MENU, &WIDGET_HOTKEY_LIST::OnContextMenu, this );
+        Bind( wxEVT_MENU, &WIDGET_HOTKEY_LIST::OnMenu, this );
     }
-
-    return sections;
 }
 
 
-void WIDGET_HOTKEY_LIST::InstallOnPanel( wxPanel* aPanel )
+void WIDGET_HOTKEY_LIST::ApplyFilterString( const wxString& aFilterStr )
 {
-    wxBoxSizer* sizer = new wxBoxSizer( wxVERTICAL );
-
-    sizer->Add( this, 1, wxALL | wxEXPAND, 0 );
-    aPanel->SetSizer( sizer );
+    updateShownItems( aFilterStr );
 }
 
 
-bool WIDGET_HOTKEY_LIST::TransferDefaultsToControl()
+void WIDGET_HOTKEY_LIST::ResetAllHotkeys( bool aResetToDefault )
 {
     Freeze();
 
-    for( wxTreeListItem item = GetFirstItem(); item.IsOk(); item = GetNextItem( item ) )
-    {
-        WIDGET_HOTKEY_CLIENT_DATA* hkdata = GetHKClientData( item );
-        if( hkdata == NULL)
-            continue;
-
-        hkdata->GetHotkey().ResetKeyCodeToDefault();
-    }
+    // Reset all the hotkeys, not just the ones shown
+    // Should not need to check conflicts, as the state we're about
+    // to set to a should be consistent
+    if( aResetToDefault )
+        m_hk_store.ResetAllHotkeysToDefault();
+    else
+        m_hk_store.ResetAllHotkeysToOriginal();
 
     UpdateFromClientData();
     Thaw();
-
-    return true;
 }
 
 
 bool WIDGET_HOTKEY_LIST::TransferDataToControl()
 {
+    updateShownItems( "" );
+    return true;
+}
+
+
+void WIDGET_HOTKEY_LIST::updateShownItems( const wxString& aFilterStr )
+{
     Freeze();
     DeleteAllItems();
-    m_hotkeys.clear();
 
-    for( size_t sec_index = 0; sec_index < m_sections.size(); ++sec_index )
+    HOTKEY_FILTER filter( aFilterStr );
+
+    for( HOTKEY_SECTION& section: m_hk_store.GetSections() )
     {
-        // LoadSection pushes into m_hotkeys
-        LoadSection( m_sections[sec_index].m_section );
-        wxASSERT( m_hotkeys.size() == sec_index + 1 );
-
-        wxString section_tag = *( m_sections[sec_index].m_section->m_SectionTag );
-
         // Create parent tree item
-        wxTreeListItem parent = AppendItem( GetRootItem(), m_sections[sec_index].m_name );
+        wxTreeListItem parent = AppendItem( GetRootItem(), section.m_SectionName );
 
-        HOTKEY_LIST& each_list = m_hotkeys[sec_index];
-        HOTKEY_LIST::iterator hk_it;
-
-        for( hk_it = each_list.begin(); hk_it != each_list.end(); ++hk_it )
+        for( HOTKEY& hotkey: section.m_HotKeys )
         {
-            wxTreeListItem item = AppendItem( parent, wxEmptyString );
-            SetItemData( item, new WIDGET_HOTKEY_CLIENT_DATA( &*hk_it, section_tag ) );
+            if( filter.FilterMatches( hotkey ) )
+            {
+                wxTreeListItem item = AppendItem( parent, wxEmptyString );
+                SetItemData( item, new WIDGET_HOTKEY_CLIENT_DATA( hotkey ) );
+            }
         }
 
         Expand( parent );
@@ -597,39 +532,12 @@ bool WIDGET_HOTKEY_LIST::TransferDataToControl()
 
     UpdateFromClientData();
     Thaw();
-
-    return true;
 }
 
 
 bool WIDGET_HOTKEY_LIST::TransferDataFromControl()
 {
-    for( size_t sec_index = 0; sec_index < m_sections.size(); ++sec_index )
-    {
-        EDA_HOTKEY_CONFIG* section = m_sections[sec_index].m_section;
-
-        for( EDA_HOTKEY** info_ptr = section->m_HK_InfoList; *info_ptr; ++info_ptr )
-        {
-            EDA_HOTKEY* info = *info_ptr;
-
-            for( wxTreeListItem item = GetFirstItem(); item.IsOk(); item = GetNextItem( item ) )
-            {
-                WIDGET_HOTKEY_CLIENT_DATA* hkdata = GetHKClientData( item );
-
-                if( !hkdata )
-                    continue;
-
-                EDA_HOTKEY& hk = hkdata->GetHotkey();
-
-                if( hk.m_Idcommand == info->m_Idcommand )
-                {
-                    info->m_KeyCode = hk.m_KeyCode;
-                    break;
-                }
-            }
-        }
-    }
-
+    m_hk_store.SaveAllHotkeys();
     return true;
 }
 
@@ -661,13 +569,13 @@ long WIDGET_HOTKEY_LIST::MapKeypressToKeycode( const wxKeyEvent& aEvent )
         bool keyIsLetter = key >= 'A' && key <= 'Z';
 
         if( aEvent.ShiftDown() && ( keyIsLetter || key > 256 ) )
-            key |= GR_KB_SHIFT;
+            key |= MD_SHIFT;
 
         if( aEvent.ControlDown() )
-            key |= GR_KB_CTRL;
+            key |= MD_CTRL;
 
         if( aEvent.AltDown() )
-            key |= GR_KB_ALT;
+            key |= MD_ALT;
 
         return key;
     }

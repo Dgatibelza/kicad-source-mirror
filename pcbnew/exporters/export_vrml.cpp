@@ -3,8 +3,8 @@
  *
  * Copyright (C) 2009-2013  Lorenzo Mercantonio
  * Copyright (C) 2014-2017  Cirilo Bernardo
- * Copyright (C) 2013 Jean-Pierre Charras jp.charras at wanadoo.fr
- * Copyright (C) 2004-2016 KiCad Developers, see AUTHORS.txt for contributors.
+ * Copyright (C) 2018 Jean-Pierre Charras jp.charras at wanadoo.fr
+ * Copyright (C) 2004-2018 KiCad Developers, see AUTHORS.txt for contributors.
  *
  * This program is free software; you can redistribute it and/or
  * modify it under the terms of the GNU General Public License
@@ -40,17 +40,22 @@
 #include "class_track.h"
 #include "class_zone.h"
 #include "convert_to_biu.h"
-#include "drawtxt.h"
+#include <filename_resolver.h>
+#include "gr_text.h"
 #include "macros.h"
 #include "pgm_base.h"
 #include "plugins/3dapi/ifsg_all.h"
 #include "streamwrapper.h"
 #include "vrml_layer.h"
-#include "wxPcbStruct.h"
-#include "../../kicad/kicad.h"
+#include "pcb_edit_frame.h"
+
+#include <convert_basic_shapes_to_polygon.h>
+#include <geometry/geometry_utils.h>
+
+#include <zone_filler.h>
 
 // minimum width (mm) of a VRML line
-#define MIN_VRML_LINEWIDTH 0.12
+#define MIN_VRML_LINEWIDTH 0.05  // previously 0.12
 
 // offset for art layers, mm (silk, paste, etc)
 #define  ART_OFFSET 0.025
@@ -88,19 +93,19 @@ struct VRML_COLOR
     VRML_COLOR()
     {
         // default green
-        diffuse_red = 0.13;
-        diffuse_grn = 0.81;
-        diffuse_blu = 0.22;
-        spec_red = 0.01;
-        spec_grn = 0.08;
-        spec_blu = 0.02;
-        emit_red = 0.0;
-        emit_grn = 0.0;
-        emit_blu = 0.0;
+        diffuse_red = 0.13f;
+        diffuse_grn = 0.81f;
+        diffuse_blu = 0.22f;
+        spec_red = 0.01f;
+        spec_grn = 0.08f;
+        spec_blu = 0.02f;
+        emit_red = 0.0f;
+        emit_grn = 0.0f;
+        emit_blu = 0.0f;
 
-        ambient = 0.8;
-        transp  = 0;
-        shiny   = 0.02;
+        ambient = 0.8f;
+        transp = 0.0f;
+        shiny = 0.02f;
     }
 
     VRML_COLOR( float dr, float dg, float db,
@@ -173,7 +178,7 @@ public:
 
     MODEL_VRML() : m_OutputPCB( (SGNODE*) NULL )
     {
-        for( unsigned i = 0; i < DIM( m_layer_z );  ++i )
+        for( unsigned i = 0; i < arrayDim( m_layer_z );  ++i )
             m_layer_z[i] = 0;
 
         m_holes.GetArcParams( m_iMaxSeg, m_arcMinLen, m_arcMaxLen );
@@ -182,17 +187,17 @@ public:
         m_brd_thickness = 1.6;
 
         // pcb green
-        colors[ VRML_COLOR_PCB ]    = VRML_COLOR( .07, .3, .12, .01, .03, .01,
-                                                  0, 0, 0, 0.8, 0, 0.02 );
+        colors[VRML_COLOR_PCB] = VRML_COLOR(
+                0.07f, 0.3f, 0.12f, 0.01f, 0.03f, 0.01f, 0.0f, 0.0f, 0.0f, 0.8f, 0.0f, 0.02f );
         // track green
-        colors[ VRML_COLOR_TRACK ]  = VRML_COLOR( .08, .5, .1, .01, .05, .01,
-                                                  0, 0, 0, 0.8, 0, 0.02 );
+        colors[VRML_COLOR_TRACK] = VRML_COLOR(
+                0.08f, 0.5f, 0.1f, 0.01f, 0.05f, 0.01f, 0.0f, 0.0f, 0.0f, 0.8f, 0.0f, 0.02f );
         // silkscreen white
-        colors[ VRML_COLOR_SILK ]   = VRML_COLOR( .9, .9, .9, .1, .1, .1,
-                                                  0, 0, 0, 0.9, 0, 0.02 );
+        colors[VRML_COLOR_SILK] = VRML_COLOR(
+                0.9f, 0.9f, 0.9f, 0.1f, 0.1f, 0.1f, 0.0f, 0.0f, 0.0f, 0.9f, 0.0f, 0.02f );
         // pad silver
-        colors[ VRML_COLOR_TIN ]    = VRML_COLOR( .749, .756, .761, .749, .756, .761,
-                                                  0, 0, 0, 0.8, 0, 0.8 );
+        colors[VRML_COLOR_TIN] = VRML_COLOR( 0.749f, 0.756f, 0.761f, 0.749f, 0.756f, 0.761f, 0.0f,
+                0.0f, 0.0f, 0.8f, 0.0f, 0.8f );
 
         m_plainPCB = false;
         SetOffset( 0.0, 0.0 );
@@ -250,7 +255,7 @@ public:
 
     double GetLayerZ( LAYER_NUM aLayer )
     {
-        if( unsigned( aLayer ) >= DIM( m_layer_z ) )
+        if( unsigned( aLayer ) >= arrayDim( m_layer_z ) )
             return 0;
 
         return m_layer_z[ aLayer ];
@@ -672,6 +677,43 @@ static void export_vrml_arc( MODEL_VRML& aModel, LAYER_NUM layer,
 }
 
 
+static void export_vrml_polygon( MODEL_VRML& aModel, LAYER_NUM layer,
+        DRAWSEGMENT *aOutline, double aOrientation, wxPoint aPos )
+{
+    if( aOutline->IsPolyShapeValid() )
+    {
+        SHAPE_POLY_SET shape = aOutline->GetPolyShape();
+        VRML_LAYER* vlayer;
+
+        if( !GetLayer( aModel, layer, &vlayer ) )
+                return;
+
+        if( aOutline->GetWidth() )
+        {
+            int numSegs = std::max(
+                    GetArcToSegmentCount( aOutline->GetWidth() / 2, ARC_HIGH_DEF, 360.0 ), 6 );
+            shape.Inflate( aOutline->GetWidth() / 2, numSegs );
+            shape.Fracture( SHAPE_POLY_SET::PM_STRICTLY_SIMPLE );
+        }
+
+        shape.Rotate( -aOrientation, VECTOR2I( 0, 0 ) );
+        shape.Move( aPos );
+        const SHAPE_LINE_CHAIN& outline = shape.COutline( 0 );
+
+        int seg = vlayer->NewContour();
+
+        for( int j = 0; j < outline.PointCount(); j++ )
+        {
+            if( !vlayer->AddVertex( seg, outline.CPoint( j ).x * BOARD_SCALE,
+                                     -outline.CPoint( j ).y * BOARD_SCALE ) )
+                throw( std::runtime_error( vlayer->GetError() ) );
+        }
+
+        vlayer->EnsureWinding( seg, false );
+    }
+}
+
+
 static void export_vrml_drawsegment( MODEL_VRML& aModel, DRAWSEGMENT* drawseg )
 {
     LAYER_NUM layer = drawseg->GetLayer();
@@ -704,6 +746,10 @@ static void export_vrml_drawsegment( MODEL_VRML& aModel, DRAWSEGMENT* drawseg )
         export_vrml_arc( aModel, layer, x, y, x, y+r, w, 180.0 );
         break;
 
+    case S_POLYGON:
+        export_vrml_polygon( aModel, layer, drawseg, 0.0, wxPoint( 0, 0 ) );
+        break;
+
     default:
         export_vrml_line( aModel, layer, x, y, xf, yf, w );
         break;
@@ -713,7 +759,7 @@ static void export_vrml_drawsegment( MODEL_VRML& aModel, DRAWSEGMENT* drawseg )
 
 /* C++ doesn't have closures and neither continuation forms... this is
  * for coupling the vrml_text_callback with the common parameters */
-static void vrml_text_callback( int x0, int y0, int xf, int yf )
+static void vrml_text_callback( int x0, int y0, int xf, int yf, void* aData )
 {
     LAYER_NUM m_text_layer = model_vrml->m_text_layer;
     int m_text_width = model_vrml->m_text_width;
@@ -735,7 +781,7 @@ static void export_vrml_pcbtext( MODEL_VRML& aModel, TEXTE_PCB* text )
     if( text->IsMirrored() )
         size.x = -size.x;
 
-    COLOR4D color = COLOR4D::BLACK;  // not actually used, but needed by DrawGraphicText
+    COLOR4D color = COLOR4D::BLACK;  // not actually used, but needed by GRText
 
     if( text->IsMultilineAllowed() )
     {
@@ -748,22 +794,16 @@ static void export_vrml_pcbtext( MODEL_VRML& aModel, TEXTE_PCB* text )
         for( unsigned ii = 0; ii < strings_list.Count(); ii++ )
         {
             wxString& txt = strings_list.Item( ii );
-            DrawGraphicText( NULL, NULL, positions[ii], color,
-                             txt, text->GetTextAngle(), size,
-                             text->GetHorizJustify(), text->GetVertJustify(),
-                             text->GetThickness(), text->IsItalic(),
-                             true,
-                             vrml_text_callback );
+            GRText( NULL, positions[ii], color, txt, text->GetTextAngle(), size,
+                    text->GetHorizJustify(), text->GetVertJustify(), text->GetThickness(),
+                    text->IsItalic(), true, vrml_text_callback );
         }
     }
     else
     {
-        DrawGraphicText( NULL, NULL, text->GetTextPos(), color,
-                         text->GetShownText(), text->GetTextAngle(), size,
-                         text->GetHorizJustify(), text->GetVertJustify(),
-                         text->GetThickness(), text->IsItalic(),
-                         true,
-                         vrml_text_callback );
+        GRText( NULL, text->GetTextPos(), color, text->GetShownText(), text->GetTextAngle(),
+                size, text->GetHorizJustify(), text->GetVertJustify(), text->GetThickness(),
+                text->IsItalic(), true, vrml_text_callback );
     }
 }
 
@@ -921,7 +961,7 @@ static void export_vrml_via( MODEL_VRML& aModel, BOARD* aPcb, const VIA* aVia )
 
 static void export_vrml_tracks( MODEL_VRML& aModel, BOARD* pcb )
 {
-    for( TRACK* track = pcb->m_Track; track; track = track->Next() )
+    for( auto track : pcb->Tracks() )
     {
         if( track->Type() == PCB_VIA_T )
         {
@@ -951,10 +991,13 @@ static void export_vrml_zones( MODEL_VRML& aModel, BOARD* aPcb )
         if( !GetLayer( aModel, zone->GetLayer(), &vl ) )
             continue;
 
+        // fixme: this modifies the board where it shouldn't, but I don't have the time
+        // to clean this up - TW
         if( !zone->IsFilled() )
         {
-            zone->SetFillMode( 0 ); // use filled polygons
-            zone->BuildFilledSolidAreasPolygons( aPcb );
+            ZONE_FILLER filler( aPcb );
+            zone->SetFillMode( ZONE_FILL_MODE::POLYGONS ); // use filled polygons
+            filler.Fill( { zone } );
         }
 
         const SHAPE_POLY_SET& poly = zone->GetFilledPolysList();
@@ -979,30 +1022,27 @@ static void export_vrml_zones( MODEL_VRML& aModel, BOARD* aPcb )
 }
 
 
-static void export_vrml_text_module( TEXTE_MODULE* module )
+static void export_vrml_text_module( TEXTE_MODULE* item )
 {
-    if( module->IsVisible() )
+    if( item->IsVisible() )
     {
-        wxSize size = module->GetTextSize();
+        wxSize size = item->GetTextSize();
 
-        if( module->IsMirrored() )
+        if( item->IsMirrored() )
             size.x = -size.x;  // Text is mirrored
 
-        model_vrml->m_text_layer    = module->GetLayer();
-        model_vrml->m_text_width    = module->GetThickness();
+        model_vrml->m_text_layer = item->GetLayer();
+        model_vrml->m_text_width = item->GetThickness();
 
-        DrawGraphicText( NULL, NULL, module->GetTextPos(), BLACK,
-                         module->GetShownText(), module->GetDrawRotation(), size,
-                         module->GetHorizJustify(), module->GetVertJustify(),
-                         module->GetThickness(), module->IsItalic(),
-                         true,
-                         vrml_text_callback );
+        GRText( NULL, item->GetTextPos(), BLACK, item->GetShownText(), item->GetDrawRotation(),
+                size, item->GetHorizJustify(), item->GetVertJustify(), item->GetThickness(),
+                item->IsItalic(), true, vrml_text_callback );
     }
 }
 
 
 static void export_vrml_edge_module( MODEL_VRML& aModel, EDGE_MODULE* aOutline,
-                                     double aOrientation )
+                                     MODULE* aModule )
 {
     LAYER_NUM layer = aOutline->GetLayer();
     double  x   = aOutline->GetStart().x * BOARD_SCALE;
@@ -1026,39 +1066,8 @@ static void export_vrml_edge_module( MODEL_VRML& aModel, EDGE_MODULE* aOutline,
         break;
 
     case S_POLYGON:
-        {
-            VRML_LAYER* vl;
-
-            if( !GetLayer( aModel, layer, &vl ) )
-                break;
-
-            int nvert = aOutline->GetPolyPoints().size() - 1;
-            int i = 0;
-
-            if( nvert < 3 ) break;
-
-            int seg = vl->NewContour();
-
-            if( seg < 0 )
-                break;
-
-            while( i < nvert )
-            {
-                CPolyPt corner( aOutline->GetPolyPoints()[i] );
-                RotatePoint( &corner.x, &corner.y, aOrientation );
-                corner.x += aOutline->GetPosition().x;
-                corner.y += aOutline->GetPosition().y;
-
-                x = corner.x * BOARD_SCALE;
-                y = - ( corner.y * BOARD_SCALE );
-
-                if( !vl->AddVertex( seg, x, y ) )
-                    throw( std::runtime_error( vl->GetError() ) );
-
-                ++i;
-            }
-            vl->EnsureWinding( seg, false );
-        }
+        export_vrml_polygon( aModel, layer, aOutline, aModule->GetOrientationRadians(),
+                aModule->GetPosition() );
         break;
 
     default:
@@ -1098,13 +1107,64 @@ static void export_vrml_padshape( MODEL_VRML& aModel, VRML_LAYER* aTinLayer, D_P
 
         break;
 
+    case PAD_SHAPE_ROUNDRECT:
+    case PAD_SHAPE_CHAMFERED_RECT:
+    {
+        SHAPE_POLY_SET polySet;
+        const int corner_radius = aPad->GetRoundRectCornerRadius( aPad->GetSize() );
+        TransformRoundChamferedRectToPolygon( polySet, wxPoint( 0, 0 ), aPad->GetSize(),
+                0.0, corner_radius, 0.0, 0, ARC_HIGH_DEF );
+        std::vector< wxRealPoint > cornerList;
+        // TransformRoundChamferedRectToPolygon creates only one convex polygon
+        SHAPE_LINE_CHAIN poly( polySet.Outline( 0 ) );
+
+        cornerList.reserve( poly.PointCount() );
+        for( int ii = 0; ii < poly.PointCount(); ++ii )
+            cornerList.emplace_back(
+                    poly.CPoint( ii ).x * BOARD_SCALE, -poly.CPoint( ii ).y * BOARD_SCALE );
+
+        // Close polygon
+        cornerList.push_back( cornerList[0] );
+        if( !aTinLayer->AddPolygon( cornerList, pad_x, -pad_y, aPad->GetOrientation() ) )
+            throw( std::runtime_error( aTinLayer->GetError() ) );
+
+        break;
+    }
+
+    case PAD_SHAPE_CUSTOM:
+    {
+        SHAPE_POLY_SET polySet;
+        std::vector< wxRealPoint > cornerList;
+        aPad->MergePrimitivesAsPolygon( &polySet );
+
+        for( int cnt = 0; cnt < polySet.OutlineCount(); ++cnt )
+        {
+            SHAPE_LINE_CHAIN& poly = polySet.Outline( cnt );
+            cornerList.clear();
+
+            for( int ii = 0; ii < poly.PointCount(); ++ii )
+                cornerList.emplace_back(
+                        poly.CPoint( ii ).x * BOARD_SCALE, -poly.CPoint( ii ).y * BOARD_SCALE );
+
+            // Close polygon
+            cornerList.push_back( cornerList[0] );
+
+            if( !aTinLayer->AddPolygon( cornerList, pad_x, -pad_y, aPad->GetOrientation() ) )
+                throw( std::runtime_error( aTinLayer->GetError() ) );
+        }
+
+        break;
+    }
+
     case PAD_SHAPE_RECT:
         // Just to be sure :D
         pad_dx  = 0;
         pad_dy  = 0;
 
+        // Intentionally fall through and treat a rectangle as a trapezoid with no sloped sides
+
     case PAD_SHAPE_TRAPEZOID:
-    {
+        {
         double coord[8] =
         {
             -pad_w + pad_dy, -pad_h - pad_dx,
@@ -1143,10 +1203,7 @@ static void export_vrml_padshape( MODEL_VRML& aModel, VRML_LAYER* aTinLayer, D_P
             throw( std::runtime_error( aTinLayer->GetError() ) );
 
         break;
-    }
-
-    default:
-        break;
+        }
     }
 }
 
@@ -1214,13 +1271,19 @@ static void export_vrml_pad( MODEL_VRML& aModel, BOARD* aPcb, D_PAD* aPad )
 
     if( layer_mask[B_Cu] )
     {
-        export_vrml_padshape( aModel, &aModel.m_bot_tin, aPad );
+        if( layer_mask[B_Mask] )
+            export_vrml_padshape( aModel, &aModel.m_bot_tin, aPad );
+        else
+            export_vrml_padshape( aModel, &aModel.m_bot_copper, aPad );
     }
-
     if( layer_mask[F_Cu] )
     {
-        export_vrml_padshape( aModel, &aModel.m_top_tin, aPad );
+        if( layer_mask[F_Mask] )
+            export_vrml_padshape( aModel, &aModel.m_top_tin, aPad );
+        else
+            export_vrml_padshape( aModel, &aModel.m_top_copper, aPad );
     }
+
 }
 
 
@@ -1278,7 +1341,8 @@ static void export_vrml_module( MODEL_VRML& aModel, BOARD* aPcb,
             export_vrml_text_module( &aModule->Value() );
 
         // Export module edges
-        for( EDA_ITEM* item = aModule->GraphicalItemsList(); item; item = item->Next() )
+
+        for( auto item : aModule->GraphicalItems() )
         {
             switch( item->Type() )
             {
@@ -1288,7 +1352,7 @@ static void export_vrml_module( MODEL_VRML& aModel, BOARD* aPcb,
 
                 case PCB_MODULE_EDGE_T:
                     export_vrml_edge_module( aModel, static_cast<EDGE_MODULE*>( item ),
-                                             aModule->GetOrientation() );
+                                             aModule );
                     break;
 
                 default:
@@ -1298,14 +1362,14 @@ static void export_vrml_module( MODEL_VRML& aModel, BOARD* aPcb,
     }
 
     // Export pads
-    for( D_PAD* pad = aModule->PadsList(); pad; pad = pad->Next() )
+    for( auto pad : aModule->Pads() )
         export_vrml_pad( aModel, aPcb, pad );
 
     bool isFlipped = aModule->GetLayer() == B_Cu;
 
     // Export the object VRML model(s)
-    std::list<S3D_INFO>::iterator sM = aModule->Models().begin();
-    std::list<S3D_INFO>::iterator eM = aModule->Models().end();
+    auto sM = aModule->Models().begin();
+    auto eM = aModule->Models().end();
 
     wxFileName subdir( SUBDIR_3D, "" );
 
@@ -1349,11 +1413,13 @@ static void export_vrml_module( MODEL_VRML& aModel, BOARD* aPcb,
         compose_quat( q1, q2, q1 );
         from_quat( q1, rot );
 
+        double offsetFactor = 1000.0f * IU_PER_MILS / 25.4f;
+
         // adjust 3D shape local offset position
-        // they are given in inch, so they are converted in board IU.
-        double offsetx = sM->m_Offset.x * IU_PER_MILS * 1000.0;
-        double offsety = sM->m_Offset.y * IU_PER_MILS * 1000.0;
-        double offsetz = sM->m_Offset.z * IU_PER_MILS * 1000.0;
+        // they are given in mm, so they are converted in board IU.
+        double offsetx = sM->m_Offset.x * offsetFactor;
+        double offsety = sM->m_Offset.y * offsetFactor;
+        double offsetz = sM->m_Offset.z * offsetFactor;
 
         if( isFlipped )
             offsetz = -offsetz;
@@ -1560,7 +1626,7 @@ bool PCB_EDIT_FRAME::ExportVRML_File( const wxString& aFullFileName, double aMMt
             output_file << "  children [\n";
 
             // Export footprints
-            for( MODULE* module = pcb->m_Modules; module != 0; module = module->Next() )
+            for( auto module : pcb->Modules() )
                 export_vrml_module( model3d, pcb, module, &output_file );
 
             // write out the board and all layers
@@ -1574,7 +1640,7 @@ bool PCB_EDIT_FRAME::ExportVRML_File( const wxString& aFullFileName, double aMMt
         else
         {
             // Export footprints
-            for( MODULE* module = pcb->m_Modules; module != 0; module = module->Next() )
+            for( auto module : pcb->Modules() )
                 export_vrml_module( model3d, pcb, module, NULL );
 
             // write out the board and all layers
@@ -1618,7 +1684,7 @@ static SGNODE* getSGColor( VRML_COLOR_INDEX colorIdx )
     sgmaterial[colorIdx] = vcolor.GetRawPtr();
 
     return sgmaterial[colorIdx];
-};
+}
 
 
 static void create_vrml_plane( IFSG_TRANSFORM& PcbOutput, VRML_COLOR_INDEX colorID,
@@ -1626,9 +1692,8 @@ static void create_vrml_plane( IFSG_TRANSFORM& PcbOutput, VRML_COLOR_INDEX color
 {
     std::vector< double > vertices;
     std::vector< int > idxPlane;
-    std::vector< int > idxSide;
 
-    if( !(*layer).Get2DTriangles( vertices, idxPlane, top_z, aTopPlane ) )
+    if( !( *layer ).Get2DTriangles( vertices, idxPlane, top_z, aTopPlane ) )
     {
 #ifdef DEBUG
         do {
@@ -1642,7 +1707,7 @@ static void create_vrml_plane( IFSG_TRANSFORM& PcbOutput, VRML_COLOR_INDEX color
         return;
     }
 
-    if( ( idxPlane.size() % 3 ) || ( idxSide.size() % 3 ) )
+    if( ( idxPlane.size() % 3 ) )
     {
 #ifdef DEBUG
         do {
@@ -1661,7 +1726,7 @@ static void create_vrml_plane( IFSG_TRANSFORM& PcbOutput, VRML_COLOR_INDEX color
     size_t j = 0;
 
     for( size_t i = 0; i < nvert; ++i, j+= 3 )
-        vlist.push_back( SGPOINT( vertices[j], vertices[j+1], vertices[j+2] ) );
+        vlist.emplace_back( vertices[j], vertices[j+1], vertices[j+2] );
 
     // create the intermediate scenegraph
     IFSG_TRANSFORM tx0( PcbOutput.GetRawPtr() );    // tx0 = Transform for this outline
@@ -1714,7 +1779,8 @@ static void create_vrml_shell( IFSG_TRANSFORM& PcbOutput, VRML_COLOR_INDEX color
         bottom_z = tmp;
     }
 
-    if( !(*layer).Get3DTriangles( vertices, idxPlane, idxSide, top_z, bottom_z ) )
+    if( !( *layer ).Get3DTriangles( vertices, idxPlane, idxSide, top_z, bottom_z )
+            || idxPlane.empty() || idxSide.empty() )
     {
 #ifdef DEBUG
         do {
@@ -1747,7 +1813,7 @@ static void create_vrml_shell( IFSG_TRANSFORM& PcbOutput, VRML_COLOR_INDEX color
     size_t j = 0;
 
     for( size_t i = 0; i < nvert; ++i, j+= 3 )
-        vlist.push_back( SGPOINT( vertices[j], vertices[j+1], vertices[j+2] ) );
+        vlist.emplace_back( vertices[j], vertices[j+1], vertices[j+2] );
 
     // create the intermediate scenegraph
     IFSG_TRANSFORM tx0( PcbOutput.GetRawPtr() );    // tx0 = Transform for this outline

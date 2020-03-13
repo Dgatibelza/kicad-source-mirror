@@ -2,7 +2,7 @@
  * This program source code file is part of KiCad, a free EDA CAD application.
  *
  * Copyright (C) 2015 Chris Pavlina <pavlina.chris@gmail.com>
- * Copyright (C) 2015 KiCad Developers, see change_log.txt for contributors.
+ * Copyright (C) 2015, 2019 KiCad Developers, see change_log.txt for contributors.
  *
  * This program is free software; you can redistribute it and/or
  * modify it under the terms of the GNU General Public License
@@ -52,26 +52,28 @@
 
 #include <boost/range/adaptor/reversed.hpp>
 
-#include <schframe.h>
+#include <sch_edit_frame.h>
 #include <hotkeys_basic.h>
 #include <sch_component.h>
 #include <sch_line.h>
 #include <lib_pin.h>
-#include <class_drawpanel.h>
+#include <sch_draw_panel.h>
 #include <class_libentry.h>
 #include <eeschema_config.h>
 #include <kiface_i.h>
 #include <vector>
 #include <algorithm>
+#include <tool/tool_manager.h>
+#include <tools/ee_selection_tool.h>
+#include <eeschema_settings.h>
 
-#define FIELD_PADDING 10            // arbitrarily chosen for aesthetics
-#define FIELD_PADDING_ALIGNED 18    // aligns 50 mil text to a 100 mil grid
-#define WIRE_V_SPACING 100
-#define HPADDING 25
-#define VPADDING 25
+#define FIELD_PADDING Mils2iu( 10 )            // arbitrarily chosen for aesthetics
+#define FIELD_PADDING_ALIGNED Mils2iu( 18 )    // aligns 50 mil text to a 100 mil grid
+#define WIRE_V_SPACING Mils2iu( 100 )
+#define HPADDING Mils2iu( 25 )
+#define VPADDING Mils2iu( 25 )
 
 /**
- * Function round_n
  * Round up/down to the nearest multiple of n
  */
 template<typename T> T round_n( const T& value, const T& n, bool aRoundUp )
@@ -84,8 +86,7 @@ template<typename T> T round_n( const T& value, const T& n, bool aRoundUp )
 
 
 /**
- * Function TO_HJUSTIFY
- * Converts an integer to a horizontal justification; neg=L zero=C pos=R
+ * Convert an integer to a horizontal justification; neg=L zero=C pos=R
  */
 EDA_TEXT_HJUSTIFY_T TO_HJUSTIFY( int x )
 {
@@ -126,8 +127,10 @@ public:
         :m_screen( aScreen ), m_component( aComponent )
     {
         m_component->GetFields( m_fields, /* aVisibleOnly */ true );
-        Kiface().KifaceSettings()->Read( AutoplaceJustifyEntry, &m_allow_rejustify, true );
-        Kiface().KifaceSettings()->Read( AutoplaceAlignEntry, &m_align_to_grid, false );
+
+        auto cfg = dynamic_cast<EESCHEMA_SETTINGS*>( Kiface().KifaceSettings() );
+        m_allow_rejustify = cfg->m_AutoplaceFields.allow_rejustify;
+        m_align_to_grid = cfg->m_AutoplaceFields.align_to_grid;
 
         m_comp_bbox = m_component->GetBodyBoundingBox();
         m_fbox_size = ComputeFBoxSize( /* aDynamic */ true );
@@ -169,8 +172,8 @@ public:
 
             if( m_align_to_grid )
             {
-                pos.x = round_n( pos.x, 50, field_side.x >= 0 );
-                pos.y = round_n( pos.y, 50, field_side.y == 1 );
+                pos.x = round_n( pos.x, Mils2iu( 50 ), field_side.x >= 0 );
+                pos.y = round_n( pos.y, Mils2iu( 50 ), field_side.y == 1 );
             }
 
             field->SetPosition( pos );
@@ -219,7 +222,6 @@ protected:
 
 
     /**
-     * Function get_pin_side
      * Return the side that a pin is on.
      */
     SIDE get_pin_side( LIB_PIN* aPin )
@@ -239,7 +241,6 @@ protected:
 
 
     /**
-     * Function pins_on_side
      * Count the number of pins on a side of the component.
      */
     unsigned pins_on_side( SIDE aSide )
@@ -262,32 +263,33 @@ protected:
 
 
     /**
-     * Function get_possible_colliders
      * Populate a list of all drawing items that *may* collide with the fields. That is,
      * all drawing items, including other fields, that are not the current component or
      * its own fields.
      */
     void get_possible_colliders( std::vector<SCH_ITEM*>& aItems )
     {
-        wxASSERT_MSG( m_screen, "get_possible_colliders() with null m_screen" );
-        for( SCH_ITEM* item = m_screen->GetDrawItems(); item; item = item->Next() )
+        wxCHECK_RET( m_screen, "get_possible_colliders() with null m_screen" );
+
+        for( auto item : m_screen->Items().Overlapping( m_component->GetBoundingBox() ) )
         {
             if( SCH_COMPONENT* comp = dynamic_cast<SCH_COMPONENT*>( item ) )
             {
-                if( comp == m_component ) continue;
+                if( comp == m_component )
+                    continue;
 
                 std::vector<SCH_FIELD*> fields;
                 comp->GetFields( fields, /* aVisibleOnly */ true );
                 for( SCH_FIELD* field : fields )
                     aItems.push_back( field );
             }
+
             aItems.push_back( item );
         }
     }
 
 
     /**
-     * Function filtered_colliders
      * Filter a list of possible colliders to include only those that actually collide
      * with a given rectangle. Returns the new vector.
      */
@@ -310,7 +312,6 @@ protected:
 
 
     /**
-     * Function get_preferred_sides
      * Return a list with the preferred field sides for the component, in
      * decreasing order of preference.
      */
@@ -322,7 +323,7 @@ protected:
             { SIDE_LEFT,    pins_on_side( SIDE_LEFT ) },
             { SIDE_BOTTOM,  pins_on_side( SIDE_BOTTOM ) },
         };
-        std::vector<SIDE_AND_NPINS> sides( sides_init, sides_init + DIM( sides_init ) );
+        std::vector<SIDE_AND_NPINS> sides( sides_init, sides_init + arrayDim( sides_init ) );
 
         int orient = m_component->GetOrientation();
         int orient_angle = orient & 0xff; // enum is a bitmask
@@ -380,13 +381,12 @@ protected:
 
 
     /**
-     * Function get_colliding_sides
      * Return a list of the sides where a field set would collide with another item.
      */
     std::vector<SIDE_AND_COLL> get_colliding_sides()
     {
         SIDE sides_init[] = { SIDE_RIGHT, SIDE_TOP, SIDE_LEFT, SIDE_BOTTOM };
-        std::vector<SIDE> sides( sides_init, sides_init + DIM( sides_init ) );
+        std::vector<SIDE> sides( sides_init, sides_init + arrayDim( sides_init ) );
         std::vector<SIDE_AND_COLL> colliding;
 
         // Iterate over all sides and find the ones that collide
@@ -419,7 +419,6 @@ protected:
 
 
     /**
-     * Function choose_side_filtered
      * Choose a side for the fields, filtered on only one side collision type.
      * Removes the sides matching the filter from the list.
      */
@@ -455,7 +454,6 @@ protected:
 
 
     /**
-     * Function choose_side_for_fields
      * Look where a component's pins are to pick a side to put the fields on
      * @param aAvoidCollisions - if true, pick last the sides where the label will collide
      *      with other items.
@@ -493,7 +491,6 @@ protected:
 
 
     /**
-     * Function justify_field
      * Set the justification of a field based on the side it's supposed to be on, taking
      * into account whether the field will be displayed with flipped justification due to
      * mirroring.
@@ -509,8 +506,7 @@ protected:
 
 
     /**
-     * Function field_box_placement
-     * Returns the position of the field bounding box.
+     * Return the position of the field bounding box.
      */
     wxPoint field_box_placement( SIDE aFieldSide )
     {
@@ -530,7 +526,6 @@ protected:
 
 
     /**
-     * Function fit_fields_between_wires
      * Shift a field box up or down a bit to make the fields fit between some wires.
      * Returns true if a shift was made.
      */
@@ -586,9 +581,7 @@ protected:
 
 
     /**
-     * Function field_horiz_placement
-     * Place a field horizontally, taking into account the field width and
-     * justification.
+     * Place a field horizontally, taking into account the field width and justification.
      *
      * @param aField - the field to place.
      * @param aFieldBox - box in which fields will be placed
@@ -625,7 +618,6 @@ protected:
     }
 
     /**
-     * Function field_vert_placement
      * Place a field vertically. Because field vertical placements accumulate,
      * this takes a pointer to a vertical position accumulator.
      *
@@ -662,7 +654,6 @@ protected:
     }
 
     /**
-     * Function get_field_padding
      * Return the desired padding between fields.
      */
     int get_field_padding()
@@ -681,44 +672,12 @@ const AUTOPLACER::SIDE AUTOPLACER::SIDE_LEFT( -1, 0 );
 const AUTOPLACER::SIDE AUTOPLACER::SIDE_RIGHT( 1, 0 );
 
 
-void SCH_EDIT_FRAME::OnAutoplaceFields( wxCommandEvent& aEvent )
-{
-    SCH_SCREEN* screen = GetScreen();
-    SCH_ITEM* item = screen->GetCurItem();
-
-    // Get the item under cursor if we're not currently moving something
-    if( !item )
-    {
-        if( aEvent.GetInt() == 0 )
-            return;
-
-        EDA_HOTKEY_CLIENT_DATA& data = dynamic_cast<EDA_HOTKEY_CLIENT_DATA&>(
-                *aEvent.GetClientObject() );
-        item = LocateItem( data.GetPosition(), SCH_COLLECTOR::MovableItems, aEvent.GetInt() );
-        screen->SetCurItem( NULL );
-        if( !item || item->GetFlags() )
-            return;
-    }
-
-    SCH_COMPONENT* component = dynamic_cast<SCH_COMPONENT*>( item );
-    if( !component )
-        return;
-
-    if( !component->IsNew() )
-        SaveCopyInUndoList( component, UR_CHANGED );
-
-    component->AutoplaceFields( screen, /* aManual */ true );
-
-    GetCanvas()->Refresh();
-    OnModify();
-}
-
-
 void SCH_COMPONENT::AutoplaceFields( SCH_SCREEN* aScreen, bool aManual )
 {
     if( aManual )
         wxASSERT_MSG( aScreen, "A SCH_SCREEN pointer must be given for manual autoplacement" );
+
     AUTOPLACER autoplacer( this, aScreen );
     autoplacer.DoAutoplace( aManual );
-    m_fieldsAutoplaced = ( aManual? AUTOPLACED_MANUAL : AUTOPLACED_AUTO );
+    m_fieldsAutoplaced = ( aManual ? FIELDS_AUTOPLACED_MANUAL : FIELDS_AUTOPLACED_AUTO );
 }

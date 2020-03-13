@@ -75,7 +75,8 @@ enum PCB_LAYER_ID: int
     UNDEFINED_LAYER = -1,
     UNSELECTED_LAYER = -2,
 
-    F_Cu = 0,           // 0
+    PCBNEW_LAYER_ID_START = 0,
+    F_Cu = PCBNEW_LAYER_ID_START,
     In1_Cu,
     In2_Cu,
     In3_Cu,
@@ -133,6 +134,8 @@ enum PCB_LAYER_ID: int
     B_Fab,
     F_Fab,
 
+    Rescue,
+
     PCB_LAYER_ID_COUNT
 };
 
@@ -171,7 +174,7 @@ enum GAL_LAYER_ID: int
     LAYER_VIA_MICROVIA,         ///< to draw micro vias
     LAYER_VIA_BBLIND,           ///< to draw blind/buried vias
     LAYER_VIA_THROUGH,          ///< to draw usual through hole vias
-    LAYER_NON_PLATED,           ///< handle color for not plated holes
+    LAYER_NON_PLATEDHOLES,      ///< handle color for not plated holes (holes, not pads)
     LAYER_MOD_TEXT_FR,
     LAYER_MOD_TEXT_BK,
     LAYER_MOD_TEXT_INVISIBLE,   ///< text marked as invisible
@@ -187,19 +190,25 @@ enum GAL_LAYER_ID: int
     LAYER_MOD_VALUES,           ///< show modules values (when texts are visibles)
     LAYER_MOD_REFERENCES,       ///< show modules references (when texts are visibles)
     LAYER_TRACKS,
-    LAYER_PADS,                 ///< multilayer pads, usually with holes
-    LAYER_PADS_HOLES,           ///< to draw pad holes (plated or not plated)
+    LAYER_PADS_TH,              ///< multilayer pads, usually with holes
+    LAYER_PADS_PLATEDHOLES,     ///< to draw pad holes (plated)
     LAYER_VIAS_HOLES,           ///< to draw via holes (pad holes do not use this layer)
-    LAYER_DRC,                  ///< drc markers
+    LAYER_DRC_ERROR,            ///< layer for drc markers with SEVERITY_ERROR
+    LAYER_DRC_WARNING,          ///< layer for drc markers with SEVERITY_WARNING
     LAYER_WORKSHEET,            ///< worksheet frame
     LAYER_GP_OVERLAY,           ///< general purpose overlay
+    LAYER_SELECT_OVERLAY,       ///< currently selected items overlay
     LAYER_PCB_BACKGROUND,       ///< PCB background color
     LAYER_CURSOR,               ///< PCB cursor
-    LAYER_AUX_ITEMS,            ///< Auxillary items (guides, rule, etc)
+    LAYER_AUX_ITEMS,            ///< Auxiliary items (guides, rule, etc)
+    LAYER_DRAW_BITMAPS,         ///< to handle and draw images bitmaps
 
     /// This is the end of the layers used for visibility bitmasks in Pcbnew
     /// There can be at most 32 layers above here.
     GAL_LAYER_ID_BITMASK_END,
+
+    LAYER_WORKSHEET_PAGE1,      ///< for pageLayout editor previewing
+    LAYER_WORKSHEET_PAGEn,      ///< for pageLayout editor previewing
 
     /// Add new GAL layers here
 
@@ -246,14 +255,20 @@ enum SCH_LAYER_ID: int
     LAYER_SHEET,
     LAYER_SHEETNAME,
     LAYER_SHEETFILENAME,
+    LAYER_SHEETFIELDS,
     LAYER_SHEETLABEL,
     LAYER_NOCONNECT,
     LAYER_ERC_WARN,
     LAYER_ERC_ERR,
     LAYER_DEVICE_BACKGROUND,
+    LAYER_SHEET_BACKGROUND,
     LAYER_SCHEMATIC_GRID,
     LAYER_SCHEMATIC_BACKGROUND,
+    LAYER_SCHEMATIC_CURSOR,
     LAYER_BRIGHTENED,
+    LAYER_HIDDEN,
+    LAYER_SELECTION_SHADOWS,
+    LAYER_SCHEMATIC_WORKSHEET,
 
     SCH_LAYER_ID_END
 };
@@ -269,7 +284,7 @@ inline SCH_LAYER_ID operator++( SCH_LAYER_ID& a )
 }
 
 // number of draw layers in Gerbview
-#define GERBER_DRAWLAYERS_COUNT 32
+#define GERBER_DRAWLAYERS_COUNT PCB_LAYER_ID_COUNT
 
 /// GerbView draw layers
 enum GERBVIEW_LAYER_ID: int
@@ -284,6 +299,7 @@ enum GERBVIEW_LAYER_ID: int
     LAYER_GERBVIEW_GRID,
     LAYER_GERBVIEW_AXES,
     LAYER_GERBVIEW_BACKGROUND,
+    LAYER_GERBVIEW_WORKSHEET,
 
     GERBVIEW_LAYER_ID_END
 };
@@ -294,21 +310,55 @@ enum GERBVIEW_LAYER_ID: int
 
 #define GERBER_DRAW_LAYER_INDEX( x ) ( x - GERBVIEW_LAYER_ID_START )
 
+// TODO(JE) Remove after we have color themes
+// Temporary virtual layers to store color themes for footprint editor
+enum FPEDIT_LAYER_ID : int
+{
+    FPEDIT_LAYER_ID_START = GERBVIEW_LAYER_ID_END,
+
+    // Reserve a copy of the board and netname layers...
+    FPEDIT_LAYER_ID_RESERVED = FPEDIT_LAYER_ID_START + ( 2 * PCB_LAYER_ID_COUNT ),
+
+    // And a copy of the GAL layers
+    FPEDIT_GAL_RESERVED = FPEDIT_LAYER_ID_RESERVED + ( GAL_LAYER_ID_END - GAL_LAYER_ID_START ),
+
+    FPEDIT_LAYER_ID_END
+};
+
+/// 3D Viewer virtual layers for color settings
+enum LAYER_3D_ID : int
+{
+        LAYER_3D_START = FPEDIT_LAYER_ID_END,
+
+        LAYER_3D_BACKGROUND_BOTTOM,
+        LAYER_3D_BACKGROUND_TOP,
+        LAYER_3D_BOARD,
+        LAYER_3D_COPPER,
+        LAYER_3D_SILKSCREEN_BOTTOM,
+        LAYER_3D_SILKSCREEN_TOP,
+        LAYER_3D_SOLDERMASK,
+        LAYER_3D_SOLDERPASTE,
+
+        LAYER_3D_END = LAYER_3D_SOLDERPASTE
+};
+
 /// Must update this if you add any enums after GerbView!
-#define LAYER_ID_COUNT GERBVIEW_LAYER_ID_END
+#define LAYER_ID_COUNT FPEDIT_LAYER_ID_END
+
+
+/// Returns the string equivalent of a given layer
+wxString LayerName( SCH_LAYER_ID aLayer );
 
 
 // Some elements do not have yet a visibility control
 // from a dialog, but have a visibility control flag.
 // Here is a mask to set them visible, to be sure they are displayed
 // after loading a board for instance
-#define MIN_VISIBILITY_MASK int( (1 << GAL_LAYER_INDEX( LAYER_TRACKS ) ) +\
-                 ( 1 << GAL_LAYER_INDEX( LAYER_PADS ) ) +\
-                 ( 1 << GAL_LAYER_INDEX( LAYER_PADS_HOLES ) ) +\
+#define MIN_VISIBILITY_MASK int( ( 1 << GAL_LAYER_INDEX( LAYER_PADS_PLATEDHOLES ) ) +\
                  ( 1 << GAL_LAYER_INDEX( LAYER_VIAS_HOLES ) ) +\
-                 ( 1 << GAL_LAYER_INDEX( LAYER_DRC ) ) +\
-                 ( 1 << GAL_LAYER_INDEX( LAYER_WORKSHEET ) ) +\
-                 ( 1 << GAL_LAYER_INDEX( LAYER_GP_OVERLAY ) ) )
+                 ( 1 << GAL_LAYER_INDEX( LAYER_SELECT_OVERLAY ) ) +\
+                 ( 1 << GAL_LAYER_INDEX( LAYER_GP_OVERLAY ) ) +\
+                 ( 1 << GAL_LAYER_INDEX( LAYER_RATSNEST ) ) )
 
 
 /// A sequence of layers, a sequence provides a certain order.
@@ -316,7 +366,7 @@ typedef std::vector<PCB_LAYER_ID>   BASE_SEQ;
 
 
 /**
- * Class LSEQ
+ * LSEQ
  * is a sequence (and therefore also a set) of PCB_LAYER_IDs.  A sequence provides
  * a certain order.
  * <p>
@@ -366,7 +416,7 @@ typedef std::bitset<PCB_LAYER_ID_COUNT>     BASE_SET;
 
 
 /**
- * Class LSET
+ * LSET
  * is a set of PCB_LAYER_IDs.  It can be converted to numerous purpose LSEQs using
  * the various member functions, most of which are based on Seq(). The advantage
  * of converting to LSEQ using purposeful code, is it removes any dependency
@@ -526,6 +576,19 @@ public:
 
     static LSET UserMask();
 
+    /**
+     * Function ForbiddenFootprintLayers
+     * Layers which are not allowed within footprint definitions.  Currently internal
+     * copper layers, Edge.Cuts and Margin.
+     */
+
+    static LSET ForbiddenFootprintLayers();
+
+    /**
+     * Function ForbiddenTextLayers
+     * Layers which are now allowed to have text on them.  Currently Edge.Cuts and Margin.
+     */
+    static LSET ForbiddenTextLayers();
 
     /**
      * Function CuStack
@@ -545,6 +608,9 @@ public:
 
     /// *_User layers.
     LSEQ Users() const;
+
+    /// Returns the technical and user layers in the order shown in layer widget
+    LSEQ TechAndUserUIOrder() const;
 
     LSEQ UIOrder() const;
 
@@ -755,7 +821,7 @@ inline int GetNetnameLayer( int aLayer )
 {
     if( IsCopperLayer( aLayer ) )
         return NETNAMES_LAYER_INDEX( aLayer );
-    else if( aLayer == LAYER_PADS )
+    else if( aLayer == LAYER_PADS_TH )
         return LAYER_PADS_NETNAMES;
     else if( aLayer == LAYER_PAD_FR )
         return LAYER_PAD_FR_NETNAMES;

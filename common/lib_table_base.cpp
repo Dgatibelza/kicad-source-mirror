@@ -25,15 +25,17 @@
 
 
 #include <wx/filename.h>
+#include <wx/uri.h>
 
 #include <set>
 
-#include <fctsys.h>
 #include <common.h>
-#include <macros.h>
+#include <fctsys.h>
 #include <kiface_i.h>
-#include <lib_table_lexer.h>
 #include <lib_table_base.h>
+#include <lib_table_lexer.h>
+#include <macros.h>
+#include <settings/app_settings.h>
 
 
 #define OPT_SEP     '|'         ///< options separator character
@@ -87,114 +89,21 @@ void LIB_TABLE_ROW::Format( OUTPUTFORMATTER* out, int nestLevel ) const
     wxString uri = GetFullURI();
     uri.Replace( '\\', '/' );
 
-    out->Print( nestLevel, "(lib (name %s)(type %s)(uri %s)(options %s)(descr %s))\n",
+    wxString extraOptions;
+
+    if( !GetIsEnabled() )
+    {
+        extraOptions += "(disabled)";
+    }
+
+    out->Print( nestLevel, "(lib (name %s)(type %s)(uri %s)(options %s)(descr %s)%s)\n",
                 out->Quotew( GetNickName() ).c_str(),
                 out->Quotew( GetType() ).c_str(),
                 out->Quotew( uri ).c_str(),
                 out->Quotew( GetOptions() ).c_str(),
-                out->Quotew( GetDescr() ).c_str()
+                out->Quotew( GetDescr() ).c_str(),
+                extraOptions.ToStdString().c_str()
                 );
-}
-
-
-void LIB_TABLE_ROW::Parse( std::unique_ptr< LIB_TABLE_ROW >& aRow, LIB_TABLE_LEXER* in )
-{
-    /*
-     * (lib (name NICKNAME)(descr DESCRIPTION)(type TYPE)(full_uri FULL_URI)(options OPTIONS))
-     *
-     *  Elements after (name) are order independent.
-     */
-
-    T tok = in->NextTok();
-
-    if( tok != T_lib )
-        in->Expecting( T_lib );
-
-    // (name NICKNAME)
-    in->NeedLEFT();
-
-    if( ( tok = in->NextTok() ) != T_name )
-        in->Expecting( T_name );
-
-    in->NeedSYMBOLorNUMBER();
-
-    aRow->SetNickName( in->FromUTF8() );
-
-    in->NeedRIGHT();
-
-    // After (name), remaining (lib) elements are order independent, and in
-    // some cases optional.
-    bool    sawType = false;
-    bool    sawOpts = false;
-    bool    sawDesc = false;
-    bool    sawUri  = false;
-
-    while( ( tok = in->NextTok() ) != T_RIGHT )
-    {
-        if( tok == T_EOF )
-            in->Unexpected( T_EOF );
-
-        if( tok != T_LEFT )
-            in->Expecting( T_LEFT );
-
-        tok = in->NeedSYMBOLorNUMBER();
-
-        switch( tok )
-        {
-        case T_uri:
-            if( sawUri )
-                in->Duplicate( tok );
-            sawUri = true;
-            in->NeedSYMBOLorNUMBER();
-            // Saved path and file names use the Unix notation (separator = '/')
-            // However old files, and files edited by hands can use the woindows
-            // separator. Force the unix notation
-            // (It works on windows, and moreover, wxFileName and wxDir takes care to that
-            // on windows)
-            // moreover, URLs use the '/' as separator
-            {
-            wxString uri = in->FromUTF8();
-            uri.Replace( '\\', '/' );
-            aRow->SetFullURI( uri );
-            }
-            break;
-
-        case T_type:
-            if( sawType )
-                in->Duplicate( tok );
-            sawType = true;
-            in->NeedSYMBOLorNUMBER();
-            aRow->SetType( in->FromUTF8() );
-            break;
-
-        case T_options:
-            if( sawOpts )
-                in->Duplicate( tok );
-            sawOpts = true;
-            in->NeedSYMBOLorNUMBER();
-            aRow->SetOptions( in->FromUTF8() );
-            break;
-
-        case T_descr:
-            if( sawDesc )
-                in->Duplicate( tok );
-            sawDesc = true;
-            in->NeedSYMBOLorNUMBER();
-            aRow->SetDescr( in->FromUTF8() );
-            break;
-
-        default:
-            in->Unexpected( tok );
-        }
-
-        in->NeedRIGHT();
-    }
-
-    if( !sawType )
-        in->Expecting( T_type );
-
-    if( !sawUri )
-        in->Expecting( T_uri );
 }
 
 
@@ -203,7 +112,8 @@ bool LIB_TABLE_ROW::operator==( const LIB_TABLE_ROW& r ) const
     return nickName == r.nickName
         && uri_user == r.uri_user
         && options == r.options
-        && description == r.description;
+        && description == r.description
+        && enabled == r.enabled;
 }
 
 
@@ -251,6 +161,33 @@ const wxString LIB_TABLE::GetDescription( const wxString& aNickname )
 }
 
 
+bool LIB_TABLE::HasLibrary( const wxString& aNickname, bool aCheckEnabled ) const
+{
+    const LIB_TABLE_ROW* row = findRow( aNickname );
+
+    if( row == nullptr )
+        return false;
+
+    if( aCheckEnabled && !row->GetIsEnabled() )
+        return false;
+
+    return true;
+}
+
+
+wxString LIB_TABLE::GetFullURI( const wxString& aNickname, bool aExpandEnvVars ) const
+{
+    const LIB_TABLE_ROW* row = findRow( aNickname );
+
+    wxString retv;
+
+    if( row )
+        retv = row->GetFullURI( aExpandEnvVars );
+
+    return retv;
+}
+
+
 LIB_TABLE_ROW* LIB_TABLE::findRow( const wxString& aNickName ) const
 {
     LIB_TABLE* cur = (LIB_TABLE*) this;
@@ -269,7 +206,29 @@ LIB_TABLE_ROW* LIB_TABLE::findRow( const wxString& aNickName ) const
         // not found, search fall back table(s), if any
     } while( ( cur = cur->fallBack ) != 0 );
 
-    return NULL;   // not found
+    return nullptr; // not found
+}
+
+
+LIB_TABLE_ROW* LIB_TABLE::findRow( const wxString& aNickName )
+{
+    LIB_TABLE* cur = (LIB_TABLE*) this;
+
+    do
+    {
+        cur->ensureIndex();
+
+        INDEX_ITER it = cur->nickIndex.find( aNickName );
+
+        if( it != cur->nickIndex.end() )
+        {
+            return &cur->rows[it->second];  // found
+        }
+
+        // not found, search fall back table(s), if any
+    } while( ( cur = cur->fallBack ) != 0 );
+
+    return nullptr; // not found
 }
 
 
@@ -283,22 +242,29 @@ const LIB_TABLE_ROW* LIB_TABLE::FindRowByURI( const wxString& aURI )
 
         for( unsigned i = 0;  i < cur->rows.size();  i++ )
         {
-            wxString uri = cur->rows[i].GetFullURI( true );
+            wxString tmp = cur->rows[i].GetFullURI( true );
 
-            if( wxFileName::GetPathSeparator() == wxChar( '\\' ) && uri.Find( wxChar( '/' ) ) >= 0 )
-                uri.Replace( "/", "\\" );
-
-            if( (wxFileName::IsCaseSensitive() && uri == aURI)
-              || (!wxFileName::IsCaseSensitive() && uri.Upper() == aURI.Upper() ) )
+            if( tmp.Find( "://" ) != wxNOT_FOUND )
             {
-                return &cur->rows[i];  // found
+                if( tmp == aURI )
+                    return &cur->rows[i];  // found as URI
+            }
+            else
+            {
+                wxFileName fn = aURI;
+
+                // This will also test if the file is a symlink so if we are comparing
+                // a symlink to the same real file, the comparison will be true.  See
+                // wxFileName::SameAs() in the wxWidgets source.
+                if( fn == wxFileName( tmp ) )
+                    return &cur->rows[i];  // found as full path and file name
             }
         }
 
         // not found, search fall back table(s), if any
     } while( ( cur = cur->fallBack ) != 0 );
 
-    return NULL;   // not found
+    return nullptr; // not found
 }
 
 
@@ -316,7 +282,10 @@ std::vector<wxString> LIB_TABLE::GetLogicalLibs()
     {
         for( LIB_TABLE_ROWS_CITER it = cur->rows.begin();  it!=cur->rows.end();  ++it )
         {
-            unique.insert( it->GetNickName() );
+            if( it->GetIsEnabled() )
+            {
+                unique.insert( it->GetNickName() );
+            }
         }
 
     } while( ( cur = cur->fallBack ) != 0 );
@@ -328,6 +297,12 @@ std::vector<wxString> LIB_TABLE::GetLogicalLibs()
     {
         ret.push_back( *it );
     }
+
+    // We want to allow case-sensitive duplicates but sort by case-insensitive ordering
+    std::sort( ret.begin(), ret.end(), []( const wxString& lhs, const wxString& rhs )
+    {
+        return lhs.CmpNoCase( rhs ) < 0;
+    } );
 
     return ret;
 }
@@ -374,39 +349,6 @@ void LIB_TABLE::Save( const wxString& aFileName ) const
 {
     FILE_OUTPUTFORMATTER sf( aFileName );
     Format( &sf, 0 );
-}
-
-
-size_t LIB_TABLE::GetEnvVars( wxArrayString& aEnvVars ) const
-{
-    const LIB_TABLE* cur = this;
-
-    do
-    {
-        for( unsigned i = 0;  i < cur->rows.size();  i++ )
-        {
-            wxString uri = cur->rows[i].GetFullURI( false );
-
-            int start = uri.Find( "${" );
-
-            if( start == wxNOT_FOUND )
-                continue;
-
-            int end = uri.Find( '}' );
-
-            if( end == wxNOT_FOUND || end < start+2 )
-                continue;
-
-            wxString envVar = uri.Mid( start+2, end - (start+2) );
-
-            if( aEnvVars.Index( envVar, false ) == wxNOT_FOUND )
-                aEnvVars.Add( envVar );
-        }
-
-        // not found, search fall back table(s), if any
-    } while( ( cur = cur->fallBack ) != 0 );
-
-    return aEnvVars.GetCount();
 }
 
 
@@ -467,7 +409,7 @@ PROPERTIES* LIB_TABLE::ParseOptions( const std::string& aOptionsList )
             return new PROPERTIES( props );
     }
 
-    return NULL;
+    return nullptr;
 }
 
 

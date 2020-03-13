@@ -30,10 +30,10 @@
 #include <vector>
 #include <memory>
 
-class CONTEXT_MENU;
+class ACTION_MENU;
 
 /**
- * Class TOOL_MENU
+ * TOOL_MENU
  *
  * Manages a CONDITIONAL_MENU and some number of
  * CONTEXT_MENUs as sub-menus
@@ -87,14 +87,13 @@ public:
      *
      * @param aSubMenu: a sub menu to add
      */
-    void AddSubMenu( std::shared_ptr<CONTEXT_MENU> aSubMenu );
+    void AddSubMenu( std::shared_ptr<ACTION_MENU> aSubMenu );
 
     /**
      * Function ShowContextMenu
      *
-     * Helper function to set and immediately show a CONTEXT_MENU
-     * based on the internal CONDITIONAL_MENU in concert with
-     * the given SELECTION
+     * Helper function to set and immediately show a CONDITIONAL_MENU
+     * in concert with the given SELECTION
      *
      * You don't have to use this function, if the caller has a
      * different way to show the menu, it can create one from
@@ -111,53 +110,11 @@ public:
      */
     void ShowContextMenu();
 
-    /**
-     * Function CloseContextMenu
-     *
-     * Helper function to close a menu previously opened with
-     * ShowContextMenu(), if a suitable event is received
-     */
-    void CloseContextMenu( OPT_TOOL_EVENT& evt );
-
-    /**
-     * Function CreateBasicMenu
-     *
-     * Construct a "basic" menu for a tool, containing only items
-     * that apply to all tools (e.g. zoom and grid)
-     */
-    void AddStandardSubMenus( EDA_DRAW_FRAME& aFrame );
-
 private:
-
-    /*!
-     * Helper function for factories to abe able to easily add
-     * their own new sub menus. This sets the tool to the TOOL_MENUs
-     * owner and adds to the store.
-     *
-     * Note, this won't share the menu between multiple invocations
-     * of the factory. But if different top-level tools are using the
-     * same factory, which one would be used for SetTool()?
-     */
-    template <typename T, typename ... Args>
-    std::shared_ptr<T> createOwnSubMenu( Args&& ... args )
-    {
-        auto subMenuPtr = std::make_shared<T>( args ... );
-
-        subMenuPtr->SetTool( &m_tool );
-        AddSubMenu( subMenuPtr );
-
-        return subMenuPtr;
-    }
-
     /**
-     * The conditional model of the menu displayed by the tool
+     * The conditional menu displayed by the tool
      */
     CONDITIONAL_MENU m_menu;
-
-    /**
-     * The actual menu displayed by the tool
-     */
-    std::unique_ptr<CONTEXT_MENU> m_contextMenu;
 
     /**
      * The tool that owns this menu
@@ -167,7 +124,7 @@ private:
     /**
      * Lifetime-managing container of submenus
      */
-    std::vector<std::shared_ptr<CONTEXT_MENU> > m_subMenus;
+    std::vector<std::shared_ptr<ACTION_MENU> > m_subMenus;
 };
 
 #endif    // TOOLS_TOOL_MENU__H_

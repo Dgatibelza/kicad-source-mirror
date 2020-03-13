@@ -40,6 +40,7 @@
  */
 
 #include "PerlinNoise.h"
+#include <cmath>
 #include <iostream>
 #include <cmath>
 #include <random>
@@ -73,7 +74,9 @@ PerlinNoise::PerlinNoise()
         138,236,205,93,222,114,67,29,24,72,243,141,128,195,78,66,215,61,156,180 };
 
     // Duplicate the permutation vector
-    p.insert(p.end(), p.begin(), p.end());
+    auto oldsize = p.size();
+    p.resize( 2 * p.size() );
+    std::copy_n( p.begin(), oldsize, p.begin() + oldsize );
 }
 
 // Generate a new permutation vector based on the value of seed
@@ -91,20 +94,22 @@ PerlinNoise::PerlinNoise( unsigned int seed )
     std::shuffle( p.begin(), p.end(), engine );
 
     // Duplicate the permutation vector
-    p.insert( p.end(), p.begin(), p.end() );
+    auto oldsize = p.size();
+    p.resize( 2 * p.size() );
+    std::copy_n( p.begin(), oldsize, p.begin() + oldsize );
 }
 
 float PerlinNoise::noise( float x, float y, float z ) const
 {
     // Find the unit cube that contains the point
-    int X = (int) ((float)floor( x )) & 255;
-    int Y = (int) ((float)floor( y )) & 255;
-    int Z = (int) ((float)floor( z )) & 255;
+    int X = static_cast<int>( std::floor( x ) ) & 255;
+    int Y = static_cast<int>( std::floor( y ) ) & 255;
+    int Z = static_cast<int>( std::floor( z ) ) & 255;
 
     // Find relative x, y,z of point in cube
-    x -= (float)floor( x );
-    y -= (float)floor( y );
-    z -= (float)floor( z );
+    x -= std::floor( x );
+    y -= std::floor( y );
+    z -= std::floor( z );
 
     // Compute fade curves for each of x, y, z
     const float u = fade( x );
@@ -143,12 +148,12 @@ float PerlinNoise::noise( float x, float y, float z ) const
 float PerlinNoise::noise( float x, float y ) const
 {
     // Find the unit cube that contains the point
-    int X = (int) ((float)floor( x )) & 255;
-    int Y = (int) ((float)floor( y )) & 255;
+    int X = static_cast<int>( std::floor( x ) ) & 255;
+    int Y = static_cast<int>( std::floor( y ) ) & 255;
 
     // Find relative x, y,z of point in cube
-    x -= (float)floor( x );
-    y -= (float)floor( y );
+    x -= std::floor( x );
+    y -= std::floor( y );
 
     // Compute fade curves for each of x, y
     const float u = fade( x );

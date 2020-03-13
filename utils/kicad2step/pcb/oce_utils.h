@@ -49,7 +49,8 @@ class KICADPAD;
 class OUTLINE
 {
 private:
-    bool                    m_closed;   // set true if the loop is closed
+    bool   m_closed;        // set true if the loop is closed
+    double m_minDistance2;  // min squared distance to treat points as separate entities (mm)
 
     bool addEdge( BRepBuilderAPI_MakeWire* aWire, KICADCURVE& aCurve, DOUBLET& aLastPoint );
     bool testClosed( KICADCURVE& aFrontCurve, KICADCURVE& aBackCurve );
@@ -67,6 +68,11 @@ public:
     bool IsClosed()
     {
         return m_closed;
+    }
+
+    void SetMinSqDistance( double aDistance )
+    {
+        m_minDistance2 = aDistance;
     }
 
     bool MakeShape( TopoDS_Shape& aShape, double aThickness );
@@ -87,12 +93,13 @@ class PCBMODEL
     double                          m_angleprec;    // angle numeric precision
     double                          m_thickness;    // PCB thickness, mm
     double                          m_minx;         // minimum X value in curves (leftmost curve feature)
+    double                          m_minDistance2; // minimum squared distance between items (mm)
     std::list< KICADCURVE >::iterator m_mincurve;   // iterator to the leftmost curve
 
     std::list< KICADCURVE >     m_curves;
     std::vector< TopoDS_Shape > m_cutouts;
 
-    bool getModelLabel( const std::string aFileName, TDF_Label& aLabel );
+    bool getModelLabel( const std::string aFileName, TRIPLET aScale, TDF_Label& aLabel );
 
     bool getModelLocation( bool aBottom, DOUBLET aPosition, double aRotation,
         TRIPLET aOffset, TRIPLET aOrientation, TopLoc_Location& aLocation );
@@ -101,7 +108,7 @@ class PCBMODEL
     bool readSTEP( Handle( TDocStd_Document )& m_doc, const char* fname );
 
     TDF_Label transferModel( Handle( TDocStd_Document )& source,
-        Handle( TDocStd_Document )& dest );
+        Handle( TDocStd_Document )& dest, TRIPLET aScale );
 
 public:
     PCBMODEL();
@@ -114,9 +121,9 @@ public:
     bool AddPadHole( KICADPAD* aPad );
 
     // add a component at the given position and orientation
-    bool AddComponent( const std::string& aFileName, const std::string aRefDes,
+    bool AddComponent( const std::string& aFileName, const std::string& aRefDes,
         bool aBottom, DOUBLET aPosition, double aRotation,
-        TRIPLET aOffset, TRIPLET aOrientation );
+        TRIPLET aOffset, TRIPLET aOrientation, TRIPLET aScale );
 
     // set the thickness of the PCB (mm); the top of the PCB shall be at Z = aThickness
     // aThickness < 0.0 == use default thickness
@@ -124,16 +131,22 @@ public:
     // aThickness > THICKNESS_MIN == use aThickness
     void SetPCBThickness( double aThickness );
 
+    void SetMinDistance( double aDistance )
+    {
+        // m_minDistance2 keeps a squared distance value
+        m_minDistance2 = aDistance * aDistance;
+    }
+
     // create the PCB model using the current outlines and drill holes
     bool CreatePCB();
 
 #ifdef SUPPORTS_IGES
     // write the assembly model in IGES format
-    bool WriteIGES( const std::string& aFileName, bool aOverwrite );
+    bool WriteIGES( const std::string& aFileName );
 #endif
 
     // write the assembly model in STEP format
-    bool WriteSTEP( const std::string& aFileName, bool aOverwrite );
+    bool WriteSTEP( const std::string& aFileName );
 };
 
 #endif //OCE_VIS_OCE_UTILS_H

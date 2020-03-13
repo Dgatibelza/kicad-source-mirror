@@ -27,28 +27,16 @@
  * @file cvpcb.cpp
  */
 
-#include <fctsys.h>
-#include <macros.h>
+#include <confirm.h>
 #include <fp_lib_table.h>
 #include <kiface_i.h>
 #include <pgm_base.h>
-#include <wxstruct.h>
-#include <confirm.h>
+#include <settings/settings_manager.h>
 
-#include <cvpcb.h>
-#include <zones.h>
 #include <cvpcb_mainframe.h>
-#include <cvpcb_id.h>
+#include <cvpcb_settings.h>
+#include <display_footprints_frame.h>
 
-#include <build_version.h>
-
-#include <wx/snglinst.h>
-
-// Constant string definitions for CvPcb
-const wxString EquFileExtension( wxT( "equ" ) );
-
-// Wildcard for schematic retroannotation (import footprint names in schematic):
-const wxString EquFilesWildcard( _( "Component/footprint equ files (*.equ)|*.equ" ) );
 
 namespace CV {
 
@@ -68,18 +56,10 @@ static struct IFACE : public KIFACE_I
     {
         switch( aClassId )
         {
-        case FRAME_CVPCB:
-            {
-                CVPCB_MAINFRAME* frame = new CVPCB_MAINFRAME( aKiway, aParent );
-                return frame;
-            }
-            break;
-
-        default:
-            ;
+        case FRAME_CVPCB:         return new CVPCB_MAINFRAME( aKiway, aParent );
+        case FRAME_CVPCB_DISPLAY: return new DISPLAY_FOOTPRINTS_FRAME( aKiway, aParent );
+        default:                  return NULL;
         }
-
-        return NULL;
     }
 
     /**
@@ -127,6 +107,14 @@ PGM_BASE& Pgm()
 }
 
 
+// Similar to PGM_BASE& Pgm(), but return nullptr when a *.ki_face
+// is run from a python script, mot from a Kicad application
+PGM_BASE* PgmOrNull()
+{
+    return process;
+}
+
+
 //!!!!!!!!!!!!!!! This code is obsolete because of the merge into pcbnew, don't bother with it.
 
 FP_LIB_TABLE GFootprintTable;
@@ -141,6 +129,9 @@ bool IFACE::OnKifaceStart( PGM_BASE* aProgram, int aCtlBits )
     // This is process level, not project level, initialization of the DSO.
 
     // Do nothing in here pertinent to a project!
+
+    InitSettings( new CVPCB_SETTINGS );
+    aProgram->GetSettingsManager().RegisterSettings( KifaceSettings() );
 
     start_common( aCtlBits );
 
@@ -162,11 +153,11 @@ bool IFACE::OnKifaceStart( PGM_BASE* aProgram, int aCtlBits )
             DisplayInfoMessage( NULL, _(
                 "You have run CvPcb for the first time using the "
                 "new footprint library table method for finding "
-                "footprints.  CvPcb has either copied the default "
+                "footprints.\nCvPcb has either copied the default "
                 "table or created an empty table in your home "
-                "folder.  You must first configure the library "
+                "folder.\nYou must first configure the library "
                 "table to include all footprint libraries not "
-                "included with KiCad.  See the \"Footprint Library "
+                "included with KiCad.\nSee the \"Footprint Library "
                 "Table\" section of the CvPcb documentation for "
                 "more information." ) );
         }

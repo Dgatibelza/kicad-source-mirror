@@ -27,13 +27,14 @@
 
 #include <class_draw_panel_gal.h>
 #include <layers_id_colors_and_visibility.h>
+#include <pcb_view.h>
+#include <common.h>
 
 namespace KIGFX
 {
-    class WORKSHEET_VIEWITEM;
+    class WS_PROXY_VIEW_ITEM;
     class RATSNEST_VIEWITEM;
 }
-class COLORS_DESIGN_SETTINGS;
 
 class PCB_DRAW_PANEL_GAL : public EDA_DRAW_PANEL_GAL
 {
@@ -49,7 +50,7 @@ public:
      * adds all items from the current board to the VIEW, so they can be displayed by GAL.
      * @param aBoard is the PCB to be loaded.
      */
-    void DisplayBoard( const BOARD* aBoard );
+    void DisplayBoard( BOARD* aBoard );
 
     /**
      * Function SetWorksheet
@@ -57,14 +58,13 @@ public:
      * @param aWorksheet is the worksheet to be used.
      *        The object is then owned by PCB_DRAW_PANEL_GAL.
      */
-    void SetWorksheet( KIGFX::WORKSHEET_VIEWITEM* aWorksheet );
+    void SetWorksheet( KIGFX::WS_PROXY_VIEW_ITEM* aWorksheet );
 
+    // TODO(JE) Look at optimizing this out
     /**
-     * Function UseColorScheme
-     * Applies layer color settings.
-     * @param aSettings are the new settings.
+     * Updates the color settings in the painter and GAL
      */
-    void UseColorScheme( const COLORS_DESIGN_SETTINGS* aSettings );
+    void UpdateColors();
 
     ///> @copydoc EDA_DRAW_PANEL_GAL::SetHighContrastLayer()
     virtual void SetHighContrastLayer( int aLayer ) override
@@ -92,7 +92,7 @@ public:
     void SyncLayersVisibility( const BOARD* aBoard );
 
     ///> @copydoc EDA_DRAW_PANEL_GAL::GetMsgPanelInfo()
-    void GetMsgPanelInfo( std::vector<MSG_PANEL_ITEM>& aList ) override;
+    void GetMsgPanelInfo( EDA_UNITS aUnits, std::vector<MSG_PANEL_ITEM>& aList ) override;
 
     ///> @copydoc EDA_DRAW_PANEL_GAL::OnShow()
     void OnShow() override;
@@ -102,7 +102,13 @@ public:
     ///> Forces refresh of the ratsnest visual representation
     void RedrawRatsnest();
 
+    ///> @copydoc EDA_DRAW_PANEL_GAL::GetDefaultViewBBox()
+    BOX2I GetDefaultViewBBox() const override;
+
+    virtual KIGFX::PCB_VIEW* GetView() const override;
+
 protected:
+
     ///> Reassigns layer order to the initial settings.
     void setDefaultLayerOrder();
 
@@ -110,7 +116,7 @@ protected:
     void setDefaultLayerDeps();
 
     ///> Currently used worksheet
-    std::unique_ptr<KIGFX::WORKSHEET_VIEWITEM> m_worksheet;
+    std::unique_ptr<KIGFX::WS_PROXY_VIEW_ITEM> m_worksheet;
 
     ///> Ratsnest view item
     std::unique_ptr<KIGFX::RATSNEST_VIEWITEM> m_ratsnest;

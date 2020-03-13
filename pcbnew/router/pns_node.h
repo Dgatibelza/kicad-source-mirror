@@ -24,10 +24,10 @@
 
 #include <vector>
 #include <list>
+#include <unordered_set>
+#include <unordered_map>
 
-#include <boost/unordered_set.hpp>
-#include <boost/unordered_map.hpp>
-#include <boost/optional.hpp>
+#include <core/optional.h>
 
 #include <geometry/shape.h>
 #include <geometry/shape_line_chain.h>
@@ -39,6 +39,7 @@
 
 namespace PNS {
 
+class ARC;
 class SEGMENT;
 class LINE;
 class SOLID;
@@ -48,7 +49,7 @@ class ROUTER;
 class NODE;
 
 /**
- * Class RULE_RESOLVER
+ * RULE_RESOLVER
  *
  * An abstract function object, returning a design rule (clearance, diff pair gap, etc) required between two items.
  **/
@@ -58,13 +59,16 @@ class RULE_RESOLVER
 public:
     virtual ~RULE_RESOLVER() {}
 
+    virtual bool CollideHoles( const ITEM* aA, const ITEM* aB,
+                               bool aNeedMTV, VECTOR2I* aMTV ) const = 0;
+
     virtual int Clearance( const ITEM* aA, const ITEM* aB ) const = 0;
     virtual int Clearance( int aNetCode ) const = 0;
-    virtual void OverrideClearance( bool aEnable, int aNetA = 0, int aNetB = 0, int aClearance = 0 ) = 0;
-    virtual void UseDpGap( bool aUseDpGap ) = 0;
     virtual int DpCoupledNet( int aNet ) = 0;
     virtual int DpNetPolarity( int aNet ) = 0;
     virtual bool DpNetPair( ITEM* aItem, int& aNetP, int& aNetN ) = 0;
+
+    virtual wxString NetName( int aNet ) = 0;
 };
 
 /**
@@ -101,6 +105,10 @@ public:
 
     OBSTACLE_VISITOR( const ITEM* aItem );
 
+    virtual ~OBSTACLE_VISITOR()
+    {
+    }
+
     void SetWorld( const NODE* aNode, const NODE* aOverride = NULL );
 
     virtual bool operator()( ITEM* aCandidate ) = 0;
@@ -123,7 +131,7 @@ protected:
 };
 
 /**
- * Class NODE
+ * NODE
  *
  * Keeps the router "world" - i.e. all the tracks, vias, solids in a
  * hierarchical and indexed way.
@@ -137,7 +145,7 @@ protected:
 class NODE
 {
 public:
-    typedef boost::optional<OBSTACLE>   OPT_OBSTACLE;
+    typedef OPT<OBSTACLE>   OPT_OBSTACLE;
     typedef std::vector<ITEM*>          ITEM_VECTOR;
     typedef std::vector<OBSTACLE>       OBSTACLES;
 
@@ -165,7 +173,7 @@ public:
         m_ruleResolver = aFunc;
     }
 
-    RULE_RESOLVER* GetRuleResolver()
+    RULE_RESOLVER* GetRuleResolver() const
     {
         return m_ruleResolver;
     }
@@ -198,6 +206,8 @@ public:
                         int          aLimitCount = -1,
                         bool         aDifferentNetsOnly = true,
                         int          aForceClearance = -1 );
+
+    int QueryJoints( const BOX2I& aBox, std::vector<JOINT*> & aJoints, int aLayerMask = -1, int aKindMask = ITEM::ANY_T);
 
     int QueryColliding( const ITEM* aItem,
                          OBSTACLE_VISITOR& aVisitor
@@ -272,11 +282,13 @@ public:
      * Adds an item to the current node.
      * @param aSegment item to add
      * @param aAllowRedundant if true, duplicate items are allowed (e.g. a segment or via
+     * @return true if added
      * at the same coordinates as an existing one)
      */
-    void Add( std::unique_ptr< SEGMENT > aSegment, bool aAllowRedundant = false );
+    bool Add( std::unique_ptr< SEGMENT > aSegment, bool aAllowRedundant = false );
     void Add( std::unique_ptr< SOLID >   aSolid );
     void Add( std::unique_ptr< VIA >     aVia );
+    void Add( std::unique_ptr< ARC >     aArc );
 
     void Add( LINE& aLine, bool aAllowRedundant = false );
 
@@ -289,6 +301,7 @@ public:
      *
      * Just as the name says, removes an item from this branch.
      */
+    void Remove( ARC* aArc );
     void Remove( SOLID* aSolid );
     void Remove( VIA* aVia );
     void Remove( SEGMENT* aSegment );
@@ -332,7 +345,7 @@ public:
      * @param aOriginSegmentIndex index of aSeg in the resulting line
      * @return the line
      */
-    const LINE AssembleLine( SEGMENT* aSeg, int* aOriginSegmentIndex = NULL,
+    const LINE AssembleLine( LINKED_ITEM* aSeg, int* aOriginSegmentIndex = NULL,
                                  bool aStopAtLockedJoints = false );
 
     ///> Prints the contents and joints structure
@@ -401,14 +414,19 @@ public:
 
     void ClearRanks( int aMarkerMask = MK_HEAD | MK_VIOLATION );
 
-    int FindByMarker( int aMarker, ITEM_SET& aItems );
-    int RemoveByMarker( int aMarker );
+    void RemoveByMarker( int aMarker );
 
+    const ITEM_SET FindItemsByParent( const BOARD_CONNECTED_ITEM* aParent );
     ITEM* FindItemByParent( const BOARD_CONNECTED_ITEM* aParent );
 
     bool HasChildren() const
     {
         return !m_children.empty();
+    }
+
+    NODE* GetParent() const
+    {
+        return m_parent;
     }
 
     ///> checks if this branch contains an updated version of the m_item
@@ -420,7 +438,7 @@ public:
 
 private:
     struct DEFAULT_OBSTACLE_VISITOR;
-    typedef boost::unordered_multimap<JOINT::HASH_TAG, JOINT> JOINT_MAP;
+    typedef std::unordered_multimap<JOINT::HASH_TAG, JOINT, JOINT::JOINT_TAG_HASH> JOINT_MAP;
     typedef JOINT_MAP::value_type TagJointPair;
 
     /// nodes are not copyable
@@ -442,16 +460,19 @@ private:
     void addSolid( SOLID* aSeg );
     void addSegment( SEGMENT* aSeg );
     void addVia( VIA* aVia );
+    void addArc( ARC* aVia );
 
     void removeLine( LINE& aLine );
     void removeSolidIndex( SOLID* aSeg );
     void removeSegmentIndex( SEGMENT* aSeg );
     void removeViaIndex( VIA* aVia );
+    void removeArcIndex( ARC* aVia );
 
     void doRemove( ITEM* aItem );
     void unlinkParent();
     void releaseChildren();
     void releaseGarbage();
+    void rebuildJoint( JOINT* aJoint, ITEM* aItem );
 
     bool isRoot() const
     {
@@ -462,15 +483,13 @@ private:
                                    const LAYER_RANGE & lr, int aNet );
     SEGMENT* findRedundantSegment( SEGMENT* aSeg );
 
+    ARC* findRedundantArc( const VECTOR2I& A, const VECTOR2I& B,
+                                   const LAYER_RANGE & lr, int aNet );
+    ARC* findRedundantArc( ARC* aSeg );
+
     ///> scans the joint map, forming a line starting from segment (current).
-    void followLine( SEGMENT*    aCurrent,
-                     bool        aScanDirection,
-                     int&        aPos,
-                     int         aLimit,
-                     VECTOR2I*   aCorners,
-                     SEGMENT**   aSegments,
-                     bool&       aGuardHit,
-                     bool        aStopAtLockedJoints );
+    void followLine( LINKED_ITEM* aCurrent, int aScanDirection, int& aPos, int aLimit, VECTOR2I* aCorners,
+            LINKED_ITEM** aSegments, bool& aGuardHit, bool aStopAtLockedJoints );
 
     ///> hash table with the joints, linking the items. Joints are hashed by
     ///> their position, layer set and net.
@@ -486,7 +505,7 @@ private:
     std::set<NODE*> m_children;
 
     ///> hash of root's items that have been changed in this node
-    boost::unordered_set<ITEM*> m_override;
+    std::unordered_set<ITEM*> m_override;
 
     ///> worst case item-item clearance
     int m_maxClearance;
@@ -500,7 +519,7 @@ private:
     ///> depth of the node (number of parent nodes in the inheritance chain)
     int m_depth;
 
-    boost::unordered_set<ITEM*> m_garbageItems;
+    std::unordered_set<ITEM*> m_garbageItems;
 };
 
 }

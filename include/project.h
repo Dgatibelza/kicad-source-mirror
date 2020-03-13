@@ -30,6 +30,8 @@
 #include <vector>
 #include <wx/string.h>
 #include <wx/filename.h>
+#include <core/typeinfo.h>
+#include <common.h>
 
 /// A variable name whose value holds the current project directory.
 /// Currently an environment variable, eventually a project variable.
@@ -37,18 +39,19 @@
 
 
 class wxConfigBase;
-class PARAM_CFG_ARRAY;
+class PARAM_CFG;
 class FP_LIB_TABLE;
 class PART_LIBS;
 class SEARCH_STACK;
 class S3D_CACHE;
 class KIWAY;
 class SYMBOL_LIB_TABLE;
+class FILENAME_RESOLVER;
 
 #define VTBL_ENTRY      virtual
 
 /**
- * Class PROJECT
+ * PROJECT
  * holds project specific data.  Because it is in the neutral program top, which
  * is not linked to by subsidiarly DSOs, any functions in this interface must
  * be VTBL_ENTRYs.
@@ -67,10 +70,12 @@ public:
     {
     public:
         virtual ~_ELEM() {}
+
+        virtual KICAD_T Type() = 0;     // Sanity-checking for returned values.
     };
 
     PROJECT();
-    ~PROJECT();
+    VTBL_ENTRY ~PROJECT();
 
     //-----<Cross Module API>----------------------------------------------------
 
@@ -108,11 +113,21 @@ public:
     VTBL_ENTRY const wxString GetProjectName() const;
 
     /**
+     * Return the name of the sheet identified by the given UUID.
+     */
+    VTBL_ENTRY const wxString GetSheetName( const KIID& aSheetID );
+
+    /**
      * Function FootprintLibTblName
      * returns the path and filename of this project's fp-lib-table,
      * i.e. the project specific one, not the global one.
      */
     VTBL_ENTRY const wxString FootprintLibTblName() const;
+
+    /**
+     * Return the path and file name of this projects symbol library table.
+     */
+    VTBL_ENTRY const wxString SymbolLibTableName() const;
 
     /**
      * Function ConfigSave
@@ -121,14 +136,15 @@ public:
      *
      * @param aSList a SEARCH_STACK
      * @param aGroupName is the name of the group inside the config which contains parameters
-     * @param aParams is a ptr vector of PARAM_CFG_BASE derivatives.
+     * @param aParams is a ptr vector of PARAM_CFG derivatives.
      *  Saved parameters are the subset in this array having the .m_Setup member
      *  set to false.
      * @param aFileName is where to save the *.pro file and if NULL means use this PROJECT's
      *   @a m_project_name.
      */
     VTBL_ENTRY void ConfigSave( const SEARCH_STACK& aSList, const wxString& aGroupName,
-        const PARAM_CFG_ARRAY& aParams, const wxString& aFileName = wxEmptyString );
+                                const std::vector<PARAM_CFG*>& aParams,
+                                const wxString& aFileName = wxEmptyString );
 
     /**
      * Function ConfigLoad
@@ -142,14 +158,15 @@ public:
      *
      * @param aSearchS a SEARCH_STACK where a kicad.pro template file may be found.
      * @param aGroupName
-     * @param aParams is ptr vector of PARAM_CFG_BASE derivatives.
+     * @param aParams is ptr vector of PARAM_CFG derivatives.
      * @param aForeignConfigFileName when NULL means load the *.pro filename given
      *  in this PROJECT's @a m_project_name field, otherwise load the provided filename.
      *
      * @return bool - true if loaded OK.
      */
     VTBL_ENTRY bool ConfigLoad( const SEARCH_STACK& aSearchS, const wxString& aGroupName,
-            const PARAM_CFG_ARRAY& aParams, const wxString& aForeignConfigFileName = wxEmptyString );
+                                const std::vector<PARAM_CFG*>& aParams,
+                                const wxString& aForeignConfigFileName = wxEmptyString );
 
     /// Retain a number of project specific wxStrings, enumerated here:
     enum RSTRING_T
@@ -165,6 +182,8 @@ public:
 
         PCB_LIB_NICKNAME,
         PCB_FOOTPRINT,
+        PCB_FOOTPRINT_EDITOR_FPNAME,
+        PCB_FOOTPRINT_EDITOR_NICKNAME,
         PCB_FOOTPRINT_VIEWER_FPNAME,
         PCB_FOOTPRINT_VIEWER_NICKNAME,
 
@@ -275,6 +294,9 @@ public:
      * @return a pointer to an instance of the 3D cache manager or NULL on failure
      */
     S3D_CACHE* Get3DCacheManager( bool updateProjDir = false );
+
+    /// Accessor for 3D path resolver
+    FILENAME_RESOLVER* Get3DFilenameResolver();
 #endif
 
 
@@ -287,6 +309,9 @@ public:
 
     /// Accessor for project symbol library table.
     SYMBOL_LIB_TABLE* SchSymbolLibTable();
+
+    /// Accessor for 3D path resolver
+    FILENAME_RESOLVER* Get3DFilenameResolver() { return nullptr; }
 #endif
 
     //-----</KIFACE Specific APIs>-----------------------------------------------
@@ -304,8 +329,15 @@ private:
     wxConfigBase* configCreate( const SEARCH_STACK& aSList,
             const wxString& aGroupName, const wxString& aProjectFileName = wxEmptyString );
 
+    /**
+     * Return the full path and file name of the project specific library table \a aLibTableName..
+     */
+    const wxString libTableName( const wxString& aLibTableName ) const;
+
     wxFileName      m_project_name;         ///< \<fullpath\>/\<basename\>.pro
     wxString        m_pro_date_and_time;
+
+    std::map<KIID, wxString> m_sheetNames;
 
     /// @see this::SetRString(), GetRString(), and enum RSTRING_T.
     wxString        m_rstrings[RSTRING_COUNT];

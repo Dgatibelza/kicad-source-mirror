@@ -26,13 +26,12 @@
 #define _DIALOG_FOOTPRINT_WIZARD_LIST_H_
 
 #include <dialog_footprint_wizard_list_base.h>
-#include <class_footprint_wizard.h>
+#include <footprint_wizard.h>
 
 class DIALOG_FOOTPRINT_WIZARD_LIST: public DIALOG_FOOTPRINT_WIZARD_LIST_BASE
 {
 private:
     FOOTPRINT_WIZARD* m_footprintWizard;    ///< The selected python script wizard
-    wxConfigBase*     m_config;
 
 public:
     DIALOG_FOOTPRINT_WIZARD_LIST( wxWindow * aParent );

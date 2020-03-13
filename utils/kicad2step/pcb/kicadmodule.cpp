@@ -2,6 +2,7 @@
  * This program source code file is part of KiCad, a free EDA CAD application.
  *
  * Copyright (C) 2016 Cirilo Bernardo <cirilo.bernardo@gmail.com>
+ * Copyright  2018 KiCad Developers, see AUTHORS.txt for contributors.
  *
  * This program is free software; you can redistribute it and/or
  * modify it under the terms of the GNU General Public License
@@ -21,18 +22,21 @@
  * 51 Franklin Street, Fifth Floor, Boston, MA  02110-1301, USA
  */
 
+#include "kicadmodule.h"
+
+#include "3d_resolver.h"
+#include "kicadcurve.h"
+#include "kicadmodel.h"
+#include "kicadpad.h"
+#include "oce_utils.h"
+
+#include <sexpr/sexpr.h>
+
 #include <wx/log.h>
+
 #include <iostream>
 #include <limits>
 #include <sstream>
-
-#include "3d_resolver.h"
-#include "sexpr/sexpr.h"
-#include "kicadmodel.h"
-#include "kicadmodule.h"
-#include "kicadpad.h"
-#include "kicadcurve.h"
-#include "oce_utils.h"
 
 
 KICADMODULE::KICADMODULE( KICADPCB* aParent )
@@ -85,22 +89,33 @@ bool KICADMODULE::Read( SEXPR::SEXPR* aEntry )
         for( size_t i = 2; i < nc && result; ++i )
         {
             child = aEntry->GetChild( i );
+            std::string symname;
 
-            // skip the optional 'locked' attribute; due to the vagaries of the
+            // skip the optional locked and/or placed attributes; due to the vagaries of the
             // kicad version of sexpr, the attribute may be a Symbol or a String
-            if( i <= 2 && ( child->IsSymbol() || child->IsString() ) )
-                continue;
-
-            if( !child->IsList() )
+            if( child->IsSymbol() || child->IsString() )
             {
-                std::ostringstream ostr;
-                ostr << "* corrupt module in PCB file at line ";
-                ostr << child->GetLineNumber() << "\n";
-                wxLogMessage( "%s\n", ostr.str().c_str() );
+                if( child->IsSymbol() )
+                    symname = child->GetSymbol();
+                else if( child->IsString() )
+                    symname = child->GetString();
+
+                if( symname == "locked" || symname == "placed" )
+                    continue;
+
+                wxLogMessage( "* module descr in PCB file at line %d: unexpected keyword '%s'\n",
+                             child->GetLineNumber(), symname.c_str() );
                 return false;
             }
 
-            std::string symname( child->GetChild( 0 )->GetSymbol() );
+            if( !child->IsList() )
+            {
+                wxLogMessage( "* corrupt module in PCB file at line %d\n",
+                              child->GetLineNumber() );
+                return false;
+            }
+
+            symname = child->GetChild( 0 )->GetSymbol();
 
             if( symname == "layer" )
                 result = result && parseLayer( child );
@@ -303,12 +318,9 @@ bool KICADMODULE::ComposePCB( class PCBMODEL* aPCB, S3D_RESOLVER* resolver,
 
         KICADCURVE lcurve = *i;
 
-        if( LAYER_TOP == m_side )
-        {
-            lcurve.m_start.y = -lcurve.m_start.y;
-            lcurve.m_end.y = -lcurve.m_end.y;
-            lcurve.m_angle = -lcurve.m_angle;
-        }
+        lcurve.m_start.y = -lcurve.m_start.y;
+        lcurve.m_end.y   = -lcurve.m_end.y;
+        lcurve.m_angle   = -lcurve.m_angle;
 
         if( m_rotation < -dlim || m_rotation > dlim )
         {
@@ -367,7 +379,7 @@ bool KICADMODULE::ComposePCB( class PCBMODEL* aPCB, S3D_RESOLVER* resolver,
             wxString::FromUTF8Unchecked( i->m_modelname.c_str() ) ).ToUTF8() );
 
         if( aPCB->AddComponent( fname, m_refdes, LAYER_BOTTOM == m_side ? true : false,
-            newpos, m_rotation, i->m_offset, i->m_rotation ) )
+            newpos, m_rotation, i->m_offset, i->m_rotation, i->m_scale ) )
             hasdata = true;
 
     }

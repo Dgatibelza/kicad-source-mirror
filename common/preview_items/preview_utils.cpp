@@ -1,30 +1,26 @@
 /*
  * This program source code file is part of KICAD, a free EDA CAD application.
  *
- * Copyright (C) 2017 Kicad Developers, see change_log.txt for contributors.
+ * Copyright (C) 2019 Kicad Developers, see AUTHORS.txt for contributors.
  *
- * This program is free software; you can redistribute it and/or
- * modify it under the terms of the GNU General Public License
- * as published by the Free Software Foundation; either version 2
- * of the License, or (at your option) any later version.
+ * This program is free software: you can redistribute it and/or modify it
+ * under the terms of the GNU General Public License as published by the
+ * Free Software Foundation, either version 3 of the License, or (at your
+ * option) any later version.
  *
- * This program is distributed in the hope that it will be useful,
- * but WITHOUT ANY WARRANTY; without even the implied warranty of
- * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
- * GNU General Public License for more details.
+ * This program is distributed in the hope that it will be useful, but
+ * WITHOUT ANY WARRANTY; without even the implied warranty of
+ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the GNU
+ * General Public License for more details.
  *
- * You should have received a copy of the GNU General Public License
- * along with this program; if not, you may find one here:
- * http://www.gnu.org/licenses/old-licenses/gpl-2.0.html
- * or you may search the http://www.gnu.org website for the version 2 license,
- * or you may write to the Free Software Foundation, Inc.,
- * 51 Franklin Street, Fifth Floor, Boston, MA  02110-1301, USA
+ * You should have received a copy of the GNU General Public License along
+ * with this program.  If not, see <http://www.gnu.org/licenses/>.
  */
 
 #include <preview_items/preview_utils.h>
 #include <gal/graphics_abstraction_layer.h>
 #include <base_units.h>
-#include <pcb_painter.h>
+#include <painter.h>
 #include <view/view.h>
 
 double KIGFX::PREVIEW::PreviewOverlayDeemphAlpha( bool aDeemph )
@@ -33,29 +29,7 @@ double KIGFX::PREVIEW::PreviewOverlayDeemphAlpha( bool aDeemph )
 }
 
 
-static wxString getDimensionUnit( EDA_UNITS_T aUnits )
-{
-    switch( aUnits )
-    {
-    case INCHES:
-        return _( "\"" );
-
-    case MILLIMETRES:
-        return _( "mm" );
-
-    case DEGREES:
-        return _( "deg" );
-
-    case UNSCALED_UNITS:
-        break;
-    // no default: handle all cases
-    }
-
-    return wxEmptyString;
-}
-
-
-static wxString formatPreviewDimension( double aVal, EDA_UNITS_T aUnits )
+static wxString formatPreviewDimension( double aVal, EDA_UNITS aUnits )
 {
     int precision = 4;
 
@@ -63,16 +37,23 @@ static wxString formatPreviewDimension( double aVal, EDA_UNITS_T aUnits )
     // be accurate down to the nanometre
     switch( aUnits )
     {
-    case MILLIMETRES:
-        precision = 2;  // 10um
+    case EDA_UNITS::MILLIMETRES:
+        precision = 3;  // 1um
         break;
-    case INCHES:
-        precision = 4;  // 1mil
+
+    case EDA_UNITS::INCHES:
+        precision = 4;  // 0.1mil
         break;
-    case DEGREES:
-        precision = 1;  // 0.1deg (limit of formats anyway)
+
+    case EDA_UNITS::DEGREES:
+        precision = 1;  // 0.1deg
         break;
-    case UNSCALED_UNITS:
+
+    case EDA_UNITS::PERCENT:
+        precision = 1;  // 0.1%
+        break;
+
+    case EDA_UNITS::UNSCALED:
         break;
     }
 
@@ -80,7 +61,7 @@ static wxString formatPreviewDimension( double aVal, EDA_UNITS_T aUnits )
 
     wxString str = wxString::Format( fmtStr, To_User_Unit( aUnits, aVal ) );
 
-    const wxString symbol = getDimensionUnit( aUnits );
+    const wxString symbol = GetAbbreviatedUnitsLabel( aUnits, false );
 
     if( symbol.size() )
         str << " " << symbol;
@@ -89,8 +70,7 @@ static wxString formatPreviewDimension( double aVal, EDA_UNITS_T aUnits )
 }
 
 
-wxString KIGFX::PREVIEW::DimensionLabel( const wxString& prefix,
-            double aVal, EDA_UNITS_T aUnits )
+wxString KIGFX::PREVIEW::DimensionLabel( const wxString& prefix, double aVal, EDA_UNITS aUnits )
 {
     wxString str;
 
@@ -118,7 +98,7 @@ void KIGFX::PREVIEW::DrawTextNextToCursor( KIGFX::VIEW* aView,
 {
     auto gal = aView->GetGAL();
     auto glyphSize = gal->GetGlyphSize();
-    auto rs = static_cast<KIGFX::PCB_RENDER_SETTINGS*>( aView->GetPainter()->GetSettings() );
+    auto rs = aView->GetPainter()->GetSettings();
 
     const auto lineSpace = glyphSize.y * 0.2;
     auto linePitch = glyphSize.y + lineSpace;

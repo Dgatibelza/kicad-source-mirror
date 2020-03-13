@@ -25,7 +25,7 @@
 #ifndef BASIC_GAL_H
 #define BASIC_GAL_H
 
-#include <class_eda_rect.h>
+#include <eda_rect.h>
 
 #include <gal/stroke_font.h>
 #include <gal/graphics_abstraction_layer.h>
@@ -35,15 +35,15 @@ class PLOTTER;
 
 
 /*
- * class BASIC_GAL is a minimal GAL implementation to draw, plot and convert
+ * BASIC_GAL is a minimal GAL implementation to draw, plot and convert
  * stroke texts to a set of segments for DRC tests, and to calculate text sizes.
  *
- * Currently it allows to use GAL and STROKE_FONT methods in legacy draw mode
+ * Currently it allows one to use GAL and STROKE_FONT methods in legacy draw mode
  * (using wxDC functions) in plot functions only for texts.
  * It is used also to calculate the text bounding boxes
  *
- * The main purpose is to avoid duplicate code to do the same thing in GAL canvas
- * legacy canvas, plotter canvas and DRC.
+ * The main purpose is to avoid duplicate code to do the same thing in GAL canvas,
+ * print & plotter canvasses and DRC.
  *
  * It will be certainly removed when a full GAL canvas using wxDC is implemented
  * (or at least restricted to plotter and DRC "canvas")
@@ -74,6 +74,7 @@ public:
         m_Color = RED;
         m_plotter = NULL;
         m_callback = NULL;
+        m_callbackData = nullptr;
         m_isClipped = false;
     }
 
@@ -82,9 +83,10 @@ public:
         m_plotter = aPlotter;
     }
 
-    void SetCallback( void (* aCallback)( int x0, int y0, int xf, int yf ) )
+    void SetCallback( void (* aCallback)( int x0, int y0, int xf, int yf, void* aData ), void* aData  )
     {
         m_callback = aCallback;
+        m_callbackData = aData;
     }
 
     /// Set a clip box for drawings
@@ -154,7 +156,8 @@ private:
     // When calling the draw functions outside a wxDC, to get the basic drawings
     // lines / polylines ..., a callback function (used in DRC) to store
     // coordinates of each segment:
-    void (* m_callback)( int x0, int y0, int xf, int yf );
+    void (* m_callback)( int x0, int y0, int xf, int yf, void* aData );
+    void* m_callbackData;       // a optional parameter for m_callback
 
     // When calling the draw functions for plot, the plotter acts as a wxDC
     // to plot basic items

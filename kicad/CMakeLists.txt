@@ -7,27 +7,27 @@ add_definitions( -DKICAD )
 
 include_directories( BEFORE ${INC_BEFORE} )
 include_directories(
-    ../pcbnew
-    ../eeschema
+    ${CMAKE_SOURCE_DIR}/pcbnew
+    ${CMAKE_SOURCE_DIR}/eeschema
     ${INC_AFTER}
     )
 
 
 set( KICAD_SRCS
-    class_treeprojectfiles.cpp
-    class_treeproject_item.cpp
-    commandframe.cpp
     dialogs/dialog_template_selector_base.cpp
     dialogs/dialog_template_selector.cpp
     files-io.cpp
+    import_project.cpp
     kicad.cpp
-    mainframe.cpp
+    kicad_manager_frame.cpp
+    kicad_settings.cpp
     menubar.cpp
-    preferences.cpp
-    prjconfig.cpp
     project_template.cpp
     tree_project_frame.cpp
-    import_project.cpp
+    treeprojectfiles.cpp
+    treeproject_item.cpp
+    tools/kicad_manager_actions.cpp
+    tools/kicad_manager_control.cpp
     )
 
 if( MINGW )
@@ -56,6 +56,10 @@ add_executable( kicad WIN32 MACOSX_BUNDLE
     ${KICAD_RESOURCES}
     )
 
+target_include_directories( kicad PRIVATE
+        $<TARGET_PROPERTY:nlohmann_json,INTERFACE_INCLUDE_DIRECTORIES>
+        )
+
 if( UNIX )
     # for build directory: create kiface symlinks so kicad (exe) can be run in-situ
     add_custom_target( kiface_sym_links
@@ -68,20 +72,17 @@ endif()
 
 if( APPLE )
     set_target_properties( kicad PROPERTIES
-        MACOSX_BUNDLE_INFO_PLIST ${CMAKE_CURRENT_SOURCE_DIR}/Info.plist
+        MACOSX_BUNDLE_INFO_PLIST ${PROJECT_BINARY_DIR}/kicad/Info.plist
         )
     target_link_libraries( kicad
         common
-        bitmaps
-        polygon
         ${wxWidgets_LIBRARIES}
         )
 else()
     target_link_libraries( kicad
         common
-        bitmaps
-        polygon
         gal
+        common      #repeated due to a circular dependancy bewteen gal and common
         ${wxWidgets_LIBRARIES}
         ${GDI_PLUS_LIBRARIES}
         )
@@ -100,12 +101,17 @@ if( APPLE )
         set( SCRIPTING_HELPER "0" )
     endif()
 
+    if( KICAD_USE_OCC )
+        set( KICAD_BUNDLE_LIBS ${OCC_LIBRARY_DIR} )
+    endif()
+
     # make main bundle relocatable
     install( CODE "
         # find all libs and modules
         file( GLOB PLUGINS_KIFACE ${OSX_BUNDLE_INSTALL_KIFACE_DIR}/*.kiface )
         file( GLOB_RECURSE PLUGINS_SO ${OSX_BUNDLE_INSTALL_PLUGIN_DIR}/*.so )
-        set( BUNDLE_FIX_LIBS \${PLUGINS_KIFACE} \${PLUGINS_SO} )
+        file( GLOB_RECURSE PLUGINS_3D ${OSX_BUNDLE_INSTALL_PLUGIN_DIR}/3d/*.dylib )
+        set( BUNDLE_FIX_LIBS \${PLUGINS_KIFACE} \${PLUGINS_SO} \${PLUGINS_3D} )
         if( ${SCRIPTING_HELPER} )
             file( GLOB WXPYTHON_DIR RELATIVE ${OSX_BUNDLE_INSTALL_LIB_DIR}/${PYTHON_LIB_DIR} ${OSX_BUNDLE_INSTALL_LIB_DIR}/${PYTHON_LIB_DIR}/wx-?.?-osx_cocoa )
             file( GLOB PYTHON_SCRIPTING_SO ${OSX_BUNDLE_INSTALL_LIB_DIR}/${PYTHON_LIB_DIR}/*.so )
@@ -122,7 +128,7 @@ if( APPLE )
 
         fixup_bundle( ${OSX_BUNDLE_INSTALL_BIN_DIR}/kicad
             \"\${BUNDLE_FIX_LIBS}\"
-            \"\"
+            \" ${KICAD_BUNDLE_LIBS}\"
             )
         " COMPONENT Runtime
         )

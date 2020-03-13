@@ -29,9 +29,6 @@
 DIALOG_PNS_SETTINGS::DIALOG_PNS_SETTINGS( wxWindow* aParent, PNS::ROUTING_SETTINGS& aSettings ) :
     DIALOG_PNS_SETTINGS_BASE( aParent ), m_settings( aSettings )
 {
-    // "Figure out what's best" is not available yet
-    m_mode->Enable( PNS::RM_Smart, false );
-
     // Add tool tip to the mode radio box, one by option
     // (cannot be made with wxFormBuilder for each item )
     m_mode->SetItemToolTip( 0, _( "DRC violation: highlight obstacles" ) );
@@ -44,12 +41,20 @@ DIALOG_PNS_SETTINGS::DIALOG_PNS_SETTINGS( wxWindow* aParent, PNS::ROUTING_SETTIN
     m_backPressure->SetValue( m_settings.JumpOverObstacles() );
     m_removeLoops->SetValue( m_settings.RemoveLoops() );
     m_suggestEnding->SetValue( m_settings.SuggestFinish() );
-    m_autoNeckdown->SetValue( m_settings.SmartPads() );
+    m_smartPads->SetValue( m_settings.SmartPads() );
     m_effort->SetValue( m_settings.OptimizerEffort() );
     m_smoothDragged->SetValue( m_settings.SmoothDraggedSegments() );
     m_violateDrc->SetValue( m_settings.CanViolateDRC() );
     m_freeAngleMode->SetValue( m_settings.GetFreeAngleMode() );
     m_dragToolMode->SetSelection ( m_settings.InlineDragEnabled() ? 1 : 0 );
+    m_optimizeDraggedTrack->SetValue( m_settings.GetOptimizeDraggedTrack() );
+    // Enable/disable some options
+    wxCommandEvent event;
+    onModeChange( event );
+
+    // Don't show options that are not implemented
+    m_suggestEnding->Hide();
+    m_shoveVias->Hide();
 
     SetDefaultItem( m_stdButtonsOK );
     GetSizer()->Fit( this );
@@ -65,12 +70,28 @@ void DIALOG_PNS_SETTINGS::OnOkClick( wxCommandEvent& aEvent )
     m_settings.SetJumpOverObstacles( m_backPressure->GetValue() );
     m_settings.SetRemoveLoops( m_removeLoops->GetValue() );
     m_settings.SetSuggestFinish ( m_suggestEnding->GetValue() );
-    m_settings.SetSmartPads( m_autoNeckdown->GetValue() );
+    m_settings.SetSmartPads( m_smartPads->GetValue() );
     m_settings.SetOptimizerEffort( (PNS::PNS_OPTIMIZATION_EFFORT) m_effort->GetValue() );
     m_settings.SetSmoothDraggedSegments( m_smoothDragged->GetValue() );
     m_settings.SetCanViolateDRC( m_violateDrc->GetValue() );
     m_settings.SetFreeAngleMode( m_freeAngleMode->GetValue() );
     m_settings.SetInlineDragEnabled( m_dragToolMode->GetSelection () ? true : false );
+    m_settings.SetOptimizeDraggedTrack( m_optimizeDraggedTrack->GetValue() );
 
     aEvent.Skip();      // ends returning wxID_OK (default behavior)
+}
+
+
+void DIALOG_PNS_SETTINGS::onModeChange( wxCommandEvent& aEvent )
+{
+    if( m_mode->GetSelection() == PNS::RM_MarkObstacles )
+    {
+        m_freeAngleMode->Enable();
+        m_violateDrc->Enable();
+    }
+    else
+    {
+        m_freeAngleMode->Enable( false );
+        m_violateDrc->Enable( false );
+    }
 }

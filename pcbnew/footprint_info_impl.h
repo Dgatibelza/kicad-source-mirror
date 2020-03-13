@@ -1,8 +1,7 @@
 /*
  * This program source code file is part of KiCad, a free EDA CAD application.
  *
- * Copyright (C) 2011 Jean-Pierre Charras, <jp.charras@wanadoo.fr>
- * Copyright (C) 1992-2017 KiCad Developers, see AUTHORS.txt for contributors.
+ * Copyright (C) 1992-2018 KiCad Developers, see AUTHORS.txt for contributors.
  *
  * This program is free software: you can redistribute it and/or modify it
  * under the terms of the GNU General Public License as published by the
@@ -35,19 +34,46 @@ class LOCALE_IO;
 class FOOTPRINT_INFO_IMPL : public FOOTPRINT_INFO
 {
 public:
-    FOOTPRINT_INFO_IMPL(
-            FOOTPRINT_LIST* aOwner, const wxString& aNickname, const wxString& aFootprintName )
+    FOOTPRINT_INFO_IMPL( FOOTPRINT_LIST* aOwner, const wxString& aNickname,
+                         const wxString& aFootprintName )
     {
-        m_owner = aOwner;
-        m_loaded = false;
         m_nickname = aNickname;
         m_fpname = aFootprintName;
         m_num = 0;
         m_pad_count = 0;
         m_unique_pad_count = 0;
-#if !USE_FPI_LAZY
+
+        m_owner = aOwner;
+        m_loaded = false;
         load();
-#endif
+    }
+
+    // A constructor for cached items
+    FOOTPRINT_INFO_IMPL( const wxString& aNickname, const wxString& aFootprintName,
+                         const wxString& aDescription, const wxString& aKeywords,
+                         int aOrderNum, unsigned int aPadCount, unsigned int aUniquePadCount )
+    {
+        m_nickname = aNickname;
+        m_fpname = aFootprintName;
+        m_num = aOrderNum;
+        m_pad_count = aPadCount;
+        m_unique_pad_count = aUniquePadCount;
+        m_doc = aDescription;
+        m_keywords = aKeywords;
+
+        m_owner = nullptr;
+        m_loaded = true;
+    }
+
+
+    // A dummy constructor for use as a target in a binary search
+    FOOTPRINT_INFO_IMPL( const wxString& aNickname, const wxString& aFootprintName )
+    {
+        m_nickname = aNickname;
+        m_fpname = aFootprintName;
+
+        m_owner = nullptr;
+        m_loaded = true;
     }
 
 protected:
@@ -62,20 +88,24 @@ class FOOTPRINT_LIST_IMPL : public FOOTPRINT_LIST
     SYNC_QUEUE<wxString>     m_queue_in;
     SYNC_QUEUE<wxString>     m_queue_out;
     std::atomic_size_t       m_count_finished;
-    std::atomic_bool         m_first_to_finish;
+    long long                m_list_timestamp;
+    PROGRESS_REPORTER*       m_progress_reporter;
+    std::atomic_bool         m_cancelled;
+    std::mutex               m_join;
 
     /**
      * Call aFunc, pushing any IO_ERRORs and std::exceptions it throws onto m_errors.
      *
      * @return true if no error occurred.
      */
-    bool CatchErrors( std::function<void()> aFunc );
+    bool CatchErrors( const std::function<void()>& aFunc );
 
 protected:
-    virtual void StartWorkers( FP_LIB_TABLE* aTable, wxString const* aNickname,
-            FOOTPRINT_ASYNC_LOADER* aLoader, unsigned aNThreads ) override;
-    virtual bool   JoinWorkers() override;
-    virtual size_t CountFinished() override;
+    void StartWorkers( FP_LIB_TABLE* aTable, wxString const* aNickname,
+                       FOOTPRINT_ASYNC_LOADER* aLoader, unsigned aNThreads ) override;
+    bool JoinWorkers() override;
+
+    void StopWorkers() override;
 
     /**
      * Function loader_job
@@ -87,8 +117,14 @@ public:
     FOOTPRINT_LIST_IMPL();
     virtual ~FOOTPRINT_LIST_IMPL();
 
-    virtual bool ReadFootprintFiles(
-            FP_LIB_TABLE* aTable, const wxString* aNickname = NULL ) override;
+    void WriteCacheToFile( wxTextFile* aFile ) override;
+    void ReadCacheFromFile( wxTextFile* aFile ) override;
+
+    bool ReadFootprintFiles( FP_LIB_TABLE* aTable, const wxString* aNickname = nullptr,
+                             PROGRESS_REPORTER* aProgressReporter = nullptr ) override;
 };
+
+extern FOOTPRINT_LIST_IMPL GFootprintList;        // KIFACE scope.
+
 
 #endif // FOOTPRINT_INFO_IMPL_H

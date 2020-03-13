@@ -30,11 +30,9 @@
 
 #include <fctsys.h>
 #include <common.h>
-#include <class_drawpanel.h>
 #include <trigo.h>
-
 #include <gerbview_frame.h>
-#include <class_gerber_file_image.h>
+#include <gerber_file_image.h>
 #include <convert_to_biu.h>
 #include <convert_basic_shapes_to_polygon.h>
 
@@ -281,7 +279,7 @@ void D_CODE::DrawFlashedPolygon( GERBER_DRAW_ITEM* aParent,
 
     for( int ii = 0; ii < pointCount; ii++ )
     {
-        wxPoint p( m_Polygon.Vertex( ii ).x, m_Polygon.Vertex( ii ).y );
+        wxPoint p( m_Polygon.CVertex( ii ).x, m_Polygon.CVertex( ii ).y );
         points[ii] = p + aPosition;
         points[ii] = aParent->GetABPosition( points[ii] );
     }
@@ -289,7 +287,7 @@ void D_CODE::DrawFlashedPolygon( GERBER_DRAW_ITEM* aParent,
     GRClosedPoly( aClipBox, aDC, pointCount, &points[0], aFilled, aColor, aColor );
 }
 
-
+// TODO(snh): Remove the hard-coded count
 #define SEGS_CNT 64     // number of segments to approximate a circle
 
 
@@ -310,7 +308,7 @@ void D_CODE::ConvertShapeToPolygon()
     switch( m_Shape )
     {
     case APT_CIRCLE:        // creates only a circle with rectangular hole
-        TransformCircleToPolygon( m_Polygon, initialpos, m_Size.x >> 1, SEGS_CNT );
+        TransformCircleToPolygon( m_Polygon, initialpos, m_Size.x >> 1, ARC_HIGH_DEF );
         addHoleToPolygon( &m_Polygon, m_DrillShape, m_Drill, initialpos );
         break;
 
@@ -407,12 +405,10 @@ void D_CODE::ConvertShapeToPolygon()
 
         addHoleToPolygon( &m_Polygon, m_DrillShape, m_Drill, initialpos );
 
-        if( m_Rotation )                   // vertical oval, rotate polygon.
+        if( m_Rotation )    // rotate polygonal shape:
         {
-            int angle = KiROUND( m_Rotation * 10 );
-
-            for( auto it = m_Polygon.Iterate( 0 ); it; ++it )
-                it->Rotate( -angle );
+            double angle = m_Rotation * M_PI / 180;
+            m_Polygon.Rotate( angle, VECTOR2I( 0, 0 ) );
         }
 
         break;
@@ -437,7 +433,7 @@ static void addHoleToPolygon( SHAPE_POLY_SET*       aPolygon,
 
     if( aHoleShape == APT_DEF_ROUND_HOLE )
     {
-        TransformCircleToPolygon( holeBuffer, wxPoint( 0, 0 ), aSize.x / 2, SEGS_CNT );
+        TransformCircleToPolygon( holeBuffer, wxPoint( 0, 0 ), aSize.x / 2, ARC_HIGH_DEF );
     }
     else if( aHoleShape == APT_DEF_RECT_HOLE )
     {
@@ -456,7 +452,5 @@ static void addHoleToPolygon( SHAPE_POLY_SET*       aPolygon,
     }
 
     aPolygon->BooleanSubtract( holeBuffer, SHAPE_POLY_SET::PM_FAST );
-
-    // Needed for legacy canvas only
     aPolygon->Fracture( SHAPE_POLY_SET::PM_FAST );
 }

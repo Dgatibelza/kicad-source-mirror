@@ -33,8 +33,10 @@
 #include <wx/string.h>
 
 #include <search_stack.h>
+#include <memory>
 
-class wxConfigBase;
+class APP_SETTINGS_BASE;
+class FILE_HISTORY;
 
 /**
  * Struct BIN_MOD
@@ -52,10 +54,16 @@ struct BIN_MOD
     void Init();
     void End();
 
+    /**
+     * Takes ownership of a new application settings object
+     * @param aPtr is the settings object for this module
+     */
+    void InitSettings( APP_SETTINGS_BASE* aPtr ) { m_config = aPtr; }
+
     const char*         m_name;             ///< name of this binary module, static C string.
 
-    wxConfigBase*       m_config;           ///< maybe from $HOME/.${m_name}
-    wxFileHistory       m_history;
+    APP_SETTINGS_BASE*  m_config; ///< maybe from $HOME/.${m_name}
+    FILE_HISTORY*       m_history;
     wxString            m_help_file;
 
     SEARCH_STACK        m_search;

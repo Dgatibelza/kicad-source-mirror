@@ -31,7 +31,7 @@ class LOGGER;
 class DEBUG_DECORATOR;
 
 /**
- * Class ALGO_BASE
+ * ALGO_BASE
  *
  * Base class for all P&S algorithms (shoving, walkaround, line placement, dragging, etc.)
  * Holds a bunch of objects commonly used by all algorithms (P&S settings, parent router instance, logging)
@@ -40,7 +40,9 @@ class ALGO_BASE
 {
 public:
     ALGO_BASE( ROUTER* aRouter ) :
-        m_debugDecorator( nullptr ), m_router( aRouter )
+        m_debugDecorator( nullptr ), 
+        m_router( aRouter ),
+        m_logger( nullptr )
     {}
 
     virtual ~ALGO_BASE() {}
@@ -57,6 +59,11 @@ public:
     ///> Returns the logger object, allowing to dump geometry to a file.
     virtual LOGGER* Logger();
 
+    void SetLogger( LOGGER* aLogger )
+    {
+        m_logger = aLogger;
+    }
+
     /**
     * Function SetDebugDecorator
     *
@@ -72,9 +79,10 @@ public:
         return m_debugDecorator;
     }
 
-private:
+protected:
     DEBUG_DECORATOR *m_debugDecorator;
     ROUTER* m_router;
+    LOGGER* m_logger;
 };
 
 }

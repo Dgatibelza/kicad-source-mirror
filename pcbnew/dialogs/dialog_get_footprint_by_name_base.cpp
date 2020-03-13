@@ -1,8 +1,8 @@
 ///////////////////////////////////////////////////////////////////////////
-// C++ code generated with wxFormBuilder (version Jun 17 2015)
+// C++ code generated with wxFormBuilder (version Jun 27 2018)
 // http://www.wxformbuilder.org/
 //
-// PLEASE DO "NOT" EDIT THIS FILE!
+// PLEASE DO *NOT* EDIT THIS FILE!
 ///////////////////////////////////////////////////////////////////////////
 
 #include "dialog_get_footprint_by_name_base.h"
@@ -26,10 +26,9 @@ DIALOG_GET_FOOTPRINT_BY_NAME_BASE::DIALOG_GET_FOOTPRINT_BY_NAME_BASE( wxWindow* 
 	
 	m_staticTextRef = new wxStaticText( this, wxID_ANY, _("Reference:"), wxDefaultPosition, wxDefaultSize, 0 );
 	m_staticTextRef->Wrap( -1 );
-	fgSizer1->Add( m_staticTextRef, 0, wxTOP|wxRIGHT|wxLEFT|wxALIGN_CENTER_VERTICAL, 5 );
+	fgSizer1->Add( m_staticTextRef, 0, wxALIGN_CENTER_VERTICAL|wxALL, 5 );
 	
 	m_SearchTextCtrl = new wxTextCtrl( this, wxID_ANY, wxEmptyString, wxDefaultPosition, wxSize( 200,-1 ), 0 );
-	m_SearchTextCtrl->SetMaxLength( 0 ); 
 	fgSizer1->Add( m_SearchTextCtrl, 0, wxEXPAND|wxALL|wxALIGN_CENTER_VERTICAL, 5 );
 	
 	m_staticTextRef1 = new wxStaticText( this, wxID_ANY, _("Available:"), wxDefaultPosition, wxDefaultSize, 0 );
@@ -48,7 +47,7 @@ DIALOG_GET_FOOTPRINT_BY_NAME_BASE::DIALOG_GET_FOOTPRINT_BY_NAME_BASE( wxWindow* 
 	bSizerMain->Add( bSizerUpper, 1, wxEXPAND, 5 );
 	
 	m_staticline1 = new wxStaticLine( this, wxID_ANY, wxDefaultPosition, wxDefaultSize, wxLI_HORIZONTAL );
-	bSizerMain->Add( m_staticline1, 0, wxEXPAND|wxTOP|wxBOTTOM, 5 );
+	bSizerMain->Add( m_staticline1, 0, wxALL|wxEXPAND, 5 );
 	
 	m_sdbSizer = new wxStdDialogButtonSizer();
 	m_sdbSizerOK = new wxButton( this, wxID_OK );
@@ -57,11 +56,12 @@ DIALOG_GET_FOOTPRINT_BY_NAME_BASE::DIALOG_GET_FOOTPRINT_BY_NAME_BASE( wxWindow* 
 	m_sdbSizer->AddButton( m_sdbSizerCancel );
 	m_sdbSizer->Realize();
 	
-	bSizerMain->Add( m_sdbSizer, 0, wxEXPAND|wxBOTTOM|wxRIGHT|wxLEFT, 5 );
+	bSizerMain->Add( m_sdbSizer, 0, wxBOTTOM|wxEXPAND|wxLEFT|wxRIGHT, 5 );
 	
 	
 	this->SetSizer( bSizerMain );
 	this->Layout();
+	bSizerMain->Fit( this );
 	
 	this->Centre( wxBOTH );
 	

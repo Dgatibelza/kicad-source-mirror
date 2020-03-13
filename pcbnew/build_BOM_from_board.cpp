@@ -2,7 +2,7 @@
  * This program source code file is part of KiCad, a free EDA CAD application.
  *
  * Copyright (C) 2009-2014 Jean-Pierre Charras, jean-pierre.charras@ujf-grenoble.fr
- * Copyright (C) 1992-2016 KiCad Developers, see AUTHORS.txt for contributors.
+ * Copyright (C) 1992-2017 KiCad Developers, see AUTHORS.txt for contributors.
  *
  * This program is free software; you can redistribute it and/or
  * modify it under the terms of the GNU General Public License
@@ -30,9 +30,10 @@
 #include <kicad_string.h>
 #include <gestfich.h>
 #include <pcbnew.h>
-#include <wxPcbStruct.h>
+#include <pcb_edit_frame.h>
 #include <macros.h>
 #include <project.h>
+#include <wildcards_and_files_ext.h>
 
 #include <class_board.h>
 #include <class_module.h>
@@ -58,8 +59,6 @@
 
 const wxString CsvFileExtension( wxT( "csv" ) );    // BOM file extension
 
-const wxString CsvFileWildcard( _( "Comma separated value files (*.csv)|*.csv" ) );
-
 
 class cmp
 {
@@ -78,10 +77,9 @@ void PCB_EDIT_FRAME::RecreateBOMFileFromBoard( wxCommandEvent& aEvent )
 {
     wxFileName fn;
     FILE*      fp_bom;
-    MODULE*    module = GetBoard()->m_Modules;
     wxString   msg;
 
-    if( module == NULL )
+    if( GetBoard()->Modules().empty() )
     {
         DisplayError( this, _( "Cannot export BOM: there are no footprints in the PCB" ) );
         return;
@@ -94,7 +92,7 @@ void PCB_EDIT_FRAME::RecreateBOMFileFromBoard( wxCommandEvent& aEvent )
     wxString pro_dir = wxPathOnly( Prj().GetProjectFullName() );
 
     wxFileDialog dlg( this, _( "Save Bill of Materials" ), pro_dir,
-                      fn.GetFullName(), CsvFileWildcard,
+                      fn.GetFullName(), CsvFileWildcard(),
                       wxFD_SAVE | wxFD_OVERWRITE_PROMPT );
 
     if( dlg.ShowModal() == wxID_CANCEL )
@@ -106,7 +104,7 @@ void PCB_EDIT_FRAME::RecreateBOMFileFromBoard( wxCommandEvent& aEvent )
 
     if( fp_bom == NULL )
     {
-        msg.Printf( _( "Unable to create file <%s>" ), GetChars( fn.GetFullPath() ) );
+        msg.Printf( _( "Unable to create file \"%s\"" ), GetChars( fn.GetFullPath() ) );
         DisplayError( this, msg );
         return;
     }
@@ -127,7 +125,7 @@ void PCB_EDIT_FRAME::RecreateBOMFileFromBoard( wxCommandEvent& aEvent )
     CmpList::iterator iter;
     int               i = 1;
 
-    while( module != NULL )
+    for( auto module : GetBoard()->Modules() )
     {
         bool valExist = false;
 
@@ -158,9 +156,6 @@ void PCB_EDIT_FRAME::RecreateBOMFileFromBoard( wxCommandEvent& aEvent )
             comp->m_CmpCount = 1;
             list.Append( comp );
         }
-
-        // increment module
-        module = module->Next();
     }
 
     // Print list. Also delete temporary created objects.

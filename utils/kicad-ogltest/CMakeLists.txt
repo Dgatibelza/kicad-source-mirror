@@ -8,8 +8,8 @@ include_directories( BEFORE
 )
 
 include_directories(
-    ../../include
-    ../../common
+    ${CMAKE_SOURCE_DIR}/include
+    ${CMAKE_SOURCE_DIR}/common
     ${INC_AFTER}
 )
 
@@ -21,13 +21,16 @@ add_executable( kicad-ogltest WIN32
     ${OGLTEST_FILES} )
 
 target_link_libraries( kicad-ogltest
+    kimath
     gal
     common
-    bitmaps
-    polygon
+    ${OPENGL_LIBRARIES}
     ${wxWidgets_LIBRARIES} )
 
 if( APPLE )
+    if( KICAD_USE_OCC )
+        set( KICAD_BUNDLE_LIBS ${OCC_LIBRARIES} )
+    endif()
     # puts binary into the main kicad.app bundle while linking
     set_target_properties( kicad-ogltest PROPERTIES
             RUNTIME_OUTPUT_DIRECTORY ${OSX_BUNDLE_BUILD_BIN_DIR}
@@ -41,7 +44,7 @@ if( APPLE )
         include( BundleUtilities )
         fixup_bundle( ${OSX_BUNDLE_BUILD_BIN_DIR}/kicad-ogltest
             \"\"
-            \"\"
+            \" ${KICAD_BUNDLE_LIBS}\"
             )
         " COMPONENT Runtime
         )

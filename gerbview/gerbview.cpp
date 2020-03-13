@@ -27,17 +27,21 @@
  */
 
 #include <fctsys.h>
-#include <kiface_i.h>
-#include <pgm_base.h>
-#include <class_drawpanel.h>
-
 #include <gerbview.h>
-#include <hotkeys.h>
 #include <gerbview_frame.h>
+#include <gerbview_settings.h>
+#include <gestfich.h>
+#include <kiface_i.h>
+#include <nlohmann/json.hpp>
+#include <pgm_base.h>
+#include <settings/settings_manager.h>
+#include <wildcards_and_files_ext.h>
 
-const wxChar* g_GerberPageSizeList[] = {
-    wxT( "GERBER" ),    // index 0: full size page selection, and do not show page limits
-    wxT( "GERBER" ),    // index 1: full size page selection, and show page limits
+using json = nlohmann::json;
+
+const wxChar* g_GerberPageSizeList[] =
+{
+    wxT( "GERBER" ),    // index 0: full size page selection
     wxT( "A4" ),
     wxT( "A3" ),
     wxT( "A2" ),
@@ -81,19 +85,26 @@ static struct IFACE : public KIFACE_I
 
     /**
      * Function IfaceOrAddress
-     * return a pointer to the requested object.  The safest way to use this
-     * is to retrieve a pointer to a static instance of an interface, similar to
-     * how the KIFACE interface is exported.  But if you know what you are doing
-     * use it to retrieve anything you want.
-     *
+     * return a pointer to the requested object.  The safest way to use this is to retrieve
+     * a pointer to a static instance of an interface, similar to how the KIFACE interface
+     * is exported.  But if you know what you are doing use it to retrieve anything you want.
      * @param aDataId identifies which object you want the address of.
-     *
      * @return void* - and must be cast into the know type.
      */
     void* IfaceOrAddress( int aDataId ) override
     {
         return NULL;
     }
+
+    /**
+     * Function SaveFileAs
+     * Saving a file under a different name is delegated to the various KIFACEs because
+     * the project doesn't know the internal format of the various files (which may have
+     * paths in them that need updating).
+     */
+    void SaveFileAs( const wxString& aProjectBasePath, const wxString& aProjectName,
+                     const wxString& aNewProjectBasePath, const wxString& aNewProjectName,
+                     const wxString& aSrcFilePath, wxString& aErrors ) override;
 
 } kiface( "gerbview", KIWAY::FACE_GERBVIEW );
 
@@ -124,12 +135,9 @@ PGM_BASE& Pgm()
 
 bool IFACE::OnKifaceStart( PGM_BASE* aProgram, int aCtlBits )
 {
+    InitSettings( new GERBVIEW_SETTINGS );
+    aProgram->GetSettingsManager().RegisterSettings( KifaceSettings() );
     start_common( aCtlBits );
-
-    // Must be called before creating the main frame in order to
-    // display the real hotkeys in menus or tool tips
-    ReadHotkeyConfig( GERBVIEW_FRAME_NAME, GerbviewHokeysDescr );
-
     return true;
 }
 
@@ -138,3 +146,112 @@ void IFACE::OnKifaceEnd()
 {
     end_common();
 }
+
+
+void IFACE::SaveFileAs( const wxString& aProjectBasePath, const wxString& aProjectName,
+                        const wxString& aNewProjectBasePath, const wxString& aNewProjectName,
+                        const wxString& aSrcFilePath, wxString& aErrors )
+{
+    wxFileName destFile( aSrcFilePath );
+    wxString   destPath = destFile.GetPathWithSep();
+    wxUniChar  pathSep = wxFileName::GetPathSeparator();
+    wxString   ext = destFile.GetExt();
+
+    if( destPath.StartsWith( aProjectBasePath + pathSep ) )
+    {
+        destPath.Replace( aProjectBasePath, aNewProjectBasePath, false );
+        destFile.SetPath( destPath );
+    }
+
+    if( ext == "gbr" || IsProtelExtension( ext ) )
+    {
+        wxString destFileName = destFile.GetName();
+
+        if( destFileName.StartsWith( aProjectName + "-" ) )
+        {
+            destFileName.Replace( aProjectName, aNewProjectName, false );
+            destFile.SetName( destFileName );
+        }
+
+        CopyFile( aSrcFilePath, destFile.GetFullPath(), aErrors );
+    }
+    else if( ext == "gbrjob" )
+    {
+        if( destFile.GetName() == aProjectName + "-job" )
+            destFile.SetName( aNewProjectName + "-job"  );
+
+         FILE_LINE_READER jobfileReader( aSrcFilePath );
+
+         char*    line;
+         wxString data;
+
+         while( ( line = jobfileReader.ReadLine() ) )
+            data << line << '\n';
+
+        // detect the file format: old (deprecated) gerber format or official JSON format
+        if( !data.Contains( "{" ) )
+        {
+            CopyFile( aSrcFilePath, destFile.GetFullPath(), aErrors );
+            return;
+        }
+
+        bool success = false;
+
+        try
+        {
+            // Will throw on parse error
+            json js = json::parse( TO_UTF8( data ) );
+
+            for( auto& entry : js["FilesAttributes"] )
+            {
+                wxString path = wxString( entry["Path"].get<std::string>() );
+
+                if( path.StartsWith( aProjectName + "-" ) )
+                {
+                    path.Replace( aProjectName, aNewProjectName, false );
+                    entry["Path"] = path.ToStdString();
+                }
+            }
+
+            wxFile destJobFile( destFile.GetFullPath(), wxFile::write );
+
+            if( destJobFile.IsOpened() )
+                success = destJobFile.Write( js.dump( 0 ) );
+
+            // wxFile dtor will close the file
+        }
+        catch( ... )
+        {
+            success = false;
+        }
+
+        if( !success )
+        {
+            wxString msg;
+
+            if( !aErrors.empty() )
+                aErrors += "\n";
+
+            msg.Printf( _( "Cannot copy file \"%s\"." ), destFile.GetFullPath() );
+            aErrors += msg;
+        }
+    }
+    else if( ext == "drl" )
+    {
+        wxString destFileName = destFile.GetName();
+
+        if( destFileName == aProjectName )
+            destFileName = aNewProjectName;
+        else if( destFileName.StartsWith( aProjectName + "-" ) )
+            destFileName.Replace( aProjectName, aNewProjectName, false );
+
+        destFile.SetName( destFileName );
+
+        CopyFile( aSrcFilePath, destFile.GetFullPath(), aErrors );
+    }
+    else
+    {
+        wxFAIL_MSG( "Unexpected filetype for GerbView::SaveFileAs()" );
+    }
+}
+

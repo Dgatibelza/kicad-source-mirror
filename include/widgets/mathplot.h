@@ -525,7 +525,7 @@ public:
     /** @param name  Label
      *  @param flags Label alignment, pass one of #mpALIGN_RIGHT, #mpALIGN_CENTER, #mpALIGN_LEFT.
      */
-    mpFX( wxString name = wxEmptyString, int flags = mpALIGN_RIGHT );
+    mpFX( const wxString& name = wxEmptyString, int flags = mpALIGN_RIGHT );
 
     /** Get function value for argument.
      *  Override this function in your implementation.
@@ -536,7 +536,7 @@ public:
 
     /** Layer plot handler.
      *  This implementation will plot the function in the visible area and
-     *  put a label according to the aligment specified.
+     *  put a label according to the alignment specified.
      */
     virtual void Plot( wxDC& dc, mpWindow& w ) override;
 
@@ -557,7 +557,7 @@ public:
     /** @param name  Label
      *  @param flags Label alignment, pass one of #mpALIGN_BOTTOM, #mpALIGN_CENTER, #mpALIGN_TOP.
      */
-    mpFY( wxString name = wxEmptyString, int flags = mpALIGN_TOP );
+    mpFY( const wxString& name = wxEmptyString, int flags = mpALIGN_TOP );
 
     /** Get function value for argument.
      *  Override this function in your implementation.
@@ -568,7 +568,7 @@ public:
 
     /** Layer plot handler.
      *  This implementation will plot the function in the visible area and
-     *  put a label according to the aligment specified.
+     *  put a label according to the alignment specified.
      */
     virtual void Plot( wxDC& dc, mpWindow& w ) override;
 
@@ -591,7 +591,7 @@ public:
     /** @param name  Label
      *  @param flags Label alignment, pass one of #mpALIGN_NE, #mpALIGN_NW, #mpALIGN_SW, #mpALIGN_SE.
      */
-    mpFXY( wxString name = wxEmptyString, int flags = mpALIGN_NE );
+    mpFXY( const wxString& name = wxEmptyString, int flags = mpALIGN_NE );
 
     /** Rewind value enumeration with mpFXY::GetNextXY.
      *  Override this function in your implementation.
@@ -604,6 +604,8 @@ public:
      *  @param y Returns Y value
      */
     virtual bool GetNextXY( double& x, double& y ) = 0;
+
+    virtual size_t GetCount() = 0;
 
     /** Layer plot handler.
      *  This implementation will plot the locus in the visible area and
@@ -650,7 +652,7 @@ public:
     /** @param name  Label
      *  @param flags Label alignment, pass one of #mpALIGN_BOTTOM, #mpALIGN_CENTER, #mpALIGN_TOP.
      */
-    mpProfile( wxString name = wxEmptyString, int flags = mpALIGN_TOP );
+    mpProfile( const wxString& name = wxEmptyString, int flags = mpALIGN_TOP );
 
     /** Get function value for argument.
      *  Override this function in your implementation.
@@ -661,7 +663,7 @@ public:
 
     /** Layer plot handler.
      *  This implementation will plot the function in the visible area and
-     *  put a label according to the aligment specified.
+     *  put a label according to the alignment specified.
      */
     virtual void Plot( wxDC& dc, mpWindow& w ) override;
 
@@ -748,8 +750,8 @@ public:
 
         if( m_minV == m_maxV )
         {
-            m_minV  = -1.0;
-            m_maxV  = 1.0;
+            m_minV = m_minV - 1.0;
+            m_maxV = m_maxV + 1.0;
         }
     }
 
@@ -845,7 +847,7 @@ public:
      *  @param ticks Select ticks or grid. Give TRUE (default) for drawing axis ticks, FALSE for drawing the grid.
      *  @param type mpX_NORMAL for normal labels, mpX_TIME for time axis in hours, minutes, seconds.
      */
-    mpScaleXBase( wxString name = wxT("X"), int flags = mpALIGN_CENTER,
+    mpScaleXBase( const wxString& name = wxT("X"), int flags = mpALIGN_CENTER,
                   bool ticks = true, unsigned int type = mpX_NORMAL );
     virtual ~mpScaleXBase() {};
 
@@ -871,7 +873,7 @@ public:
      *  @param flags Set the position of the scale with respect to the window.
      *  @param ticks Select ticks or grid. Give TRUE (default) for drawing axis ticks, FALSE for drawing the grid.
      *  @param type mpX_NORMAL for normal labels, mpX_TIME for time axis in hours, minutes, seconds. */
-    mpScaleX( wxString name = wxT("X"), int flags = mpALIGN_CENTER,
+    mpScaleX( const wxString& name = wxT("X"), int flags = mpALIGN_CENTER,
               bool ticks = true, unsigned int type = mpX_NORMAL );
 
     /** Layer plot handler.
@@ -900,7 +902,7 @@ public:
      *  @param ticks Select ticks or grid. Give TRUE (default) for drawing axis ticks, FALSE for drawing the grid.
      *  @param type mpX_NORMAL for normal labels, mpX_TIME for time axis in hours, minutes, seconds.
      */
-    mpScaleXLog( wxString name = wxT("log(X)"), int flags = mpALIGN_CENTER,
+    mpScaleXLog( const wxString& name = wxT("log(X)"), int flags = mpALIGN_CENTER,
                  bool ticks = true, unsigned int type = mpX_NORMAL );
 
     virtual double  TransformToPlot( double x ) override;
@@ -942,7 +944,7 @@ public:
      *  @param flags Set position of the scale respect to the window.
      *  @param ticks Select ticks or grid. Give TRUE (default) for drawing axis ticks, FALSE for drawing the grid
      */
-    mpScaleY( wxString name = wxT("Y"), int flags = mpALIGN_CENTER, bool ticks = true );
+    mpScaleY( const wxString& name = wxT("Y"), int flags = mpALIGN_CENTER, bool ticks = true );
 
     virtual bool IsHorizontal() override { return false; }
 
@@ -1208,6 +1210,10 @@ public:
      */
     void EnableMousePanZoom( bool enabled ) { m_enableMouseNavigation = enabled; }
 
+    /** Enable/disable trackpad friendly panning (2-axis scroll wheel)
+     */
+    void EnableMouseWheelPan( bool enabled ) { m_enableMouseWheelPan = enabled; }
+
     /** Enable or disable X/Y scale aspect locking for the view.
      *  @note Explicit calls to mpWindow::SetScaleX and mpWindow::SetScaleY will set
      *  an unlocked aspect, but any other action changing the view scale will
@@ -1237,14 +1243,18 @@ public:
               wxCoord* printSizeX = NULL, wxCoord* printSizeY = NULL );
 
     /** Zoom into current view and refresh display
-     * @param centerPoint The point (pixel coordinates) that will stay in the same position on the screen after the zoom (by default, the center of the mpWindow).
+     * @param centerPoint The point (pixel coordinates) that will stay in the same
+     * position on the screen after the zoom (by default, the center of the mpWindow).
      */
     void ZoomIn( const wxPoint& centerPoint = wxDefaultPosition );
+    void ZoomIn( const wxPoint& centerPoint, double zoomFactor );
 
     /** Zoom out current view and refresh display
-     * @param centerPoint The point (pixel coordinates) that will stay in the same position on the screen after the zoom (by default, the center of the mpWindow).
+     * @param centerPoint The point (pixel coordinates) that will stay in the same
+     * position on the screen after the zoom (by default, the center of the mpWindow).
      */
     void ZoomOut( const wxPoint& centerPoint = wxDefaultPosition );
+    void ZoomOut( const wxPoint& centerPoint, double zoomFactor );
 
     /** Zoom in current view along X and refresh display */
     void ZoomInX();
@@ -1258,7 +1268,8 @@ public:
     /** Zoom out current view along Y and refresh display */
     void ZoomOutY();
 
-    /** Zoom view fitting given coordinates to the window (p0 and p1 do not need to be in any specific order) */
+    /** Zoom view fitting given coordinates to the window (p0 and p1 do not need to be in any specific order)
+     */
     void ZoomRect( wxPoint p0, wxPoint p1 );
 
     /** Refresh display */
@@ -1266,7 +1277,8 @@ public:
 
     // Added methods by Davide Rondini
 
-    /** Counts the number of plot layers, excluding axes or text: this is to count only the layers which have a bounding box.
+    /** Counts the number of plot layers, excluding axes or text: this is to count only the layers
+     * which have a bounding box.
      *  \return The number of profiles plotted.
      */
     unsigned int CountLayers();
@@ -1282,28 +1294,33 @@ public:
     void PrintGraph(mpPrintout *print);
 #endif
 
-    /** Returns the left-border layer coordinate that the user wants the mpWindow to show (it may be not exactly the actual shown coordinate in the case of locked aspect ratio).
+    /** Returns the left-border layer coordinate that the user wants the mpWindow to show
+     * (it may be not exactly the actual shown coordinate in the case of locked aspect ratio).
      * @sa Fit
      */
     double GetDesiredXmin() { return m_desiredXmin; }
 
-    /** Returns the right-border layer coordinate that the user wants the mpWindow to show (it may be not exactly the actual shown coordinate in the case of locked aspect ratio).
+    /** Returns the right-border layer coordinate that the user wants the mpWindow to show
+     * (it may be not exactly the actual shown coordinate in the case of locked aspect ratio).
      * @sa Fit
      */
     double GetDesiredXmax() { return m_desiredXmax; }
 
-    /** Returns the bottom-border layer coordinate that the user wants the mpWindow to show (it may be not exactly the actual shown coordinate in the case of locked aspect ratio).
+    /** Returns the bottom-border layer coordinate that the user wants the mpWindow to show
+     * (it may be not exactly the actual shown coordinate in the case of locked aspect ratio).
      * @sa Fit
      */
     double GetDesiredYmin() { return m_desiredYmin; }
 
-    /** Returns the top layer-border coordinate that the user wants the mpWindow to show (it may be not exactly the actual shown coordinate in the case of locked aspect ratio).
+    /** Returns the top layer-border coordinate that the user wants the mpWindow to show
+     * (it may be not exactly the actual shown coordinate in the case of locked aspect ratio).
      * @sa Fit
      */
     double GetDesiredYmax() { return m_desiredYmax; }
 
     /** Returns the bounding box coordinates
-     *  @param bbox Pointer to a 6-element double array where to store bounding box coordinates. */
+     *  @param bbox Pointer to a 6-element double array where to store bounding box coordinates.
+     */
     void GetBoundingBox( double* bbox );
 
     /** Enable/disable scrollbars
@@ -1323,10 +1340,13 @@ public:
                          wxSize imageSize = wxDefaultSize, bool fit = false );
 
     /** This value sets the zoom steps whenever the user clicks "Zoom in/out" or performs zoom with the mouse wheel.
-     *  It must be a number above unity. This number is used for zoom in, and its inverse for zoom out. Set to 1.5 by default. */
+     *  It must be a number above unity. This number is used for zoom in, and its inverse for zoom out.
+     * Set to 1.5 by default.
+     */
     static double zoomIncrementalFactor;
 
-    /** Set window margins, creating a blank area where some kinds of layers cannot draw. This is useful for example to draw axes outside the area where the plots are drawn.
+    /** Set window margins, creating a blank area where some kinds of layers cannot draw.
+     * This is useful for example to draw axes outside the area where the plots are drawn.
      *  @param top Top border
      *  @param right Right border
      *  @param bottom Bottom border
@@ -1421,6 +1441,7 @@ protected:
     void    OnZoomOut( wxCommandEvent& event );             // !< Context menu handler
     void    OnLockAspect( wxCommandEvent& event );          // !< Context menu handler
     void    OnMouseWheel( wxMouseEvent& event );            // !< Mouse handler for the wheel
+    void    OnMagnify( wxMouseEvent& event );               // !< Pinch zoom handler
     void    OnMouseMove( wxMouseEvent& event );             // !< Mouse handler for mouse motion (for pan)
     void    OnMouseLeftDown( wxMouseEvent& event );         // !< Mouse left click (for rect zoom)
     void    OnMouseLeftRelease( wxMouseEvent& event );      // !< Mouse left click (for rect zoom)
@@ -1492,7 +1513,8 @@ protected:
     int m_clickedX;         // !< Last mouse click X position, for centering and zooming the view
     int m_clickedY;         // !< Last mouse click Y position, for centering and zooming the view
 
-    /** These are updated in Fit() only, and may be different from the real borders (layer coordinates) only if lock aspect ratio is true.
+    /** These are updated in Fit() only, and may be different from the real borders
+     * (layer coordinates) only if lock aspect ratio is true.
      */
     double m_desiredXmin, m_desiredXmax, m_desiredYmin, m_desiredYmax;
 
@@ -1503,6 +1525,7 @@ protected:
     wxBitmap*   m_buff_bmp;                 // !< For double buffering
     bool    m_enableDoubleBuffer;           // !< For double buffering
     bool    m_enableMouseNavigation;        // !< For pan/zoom with the mouse.
+    bool    m_enableMouseWheelPan;          // !< Trackpad pan/zoom
     bool    m_enableLimitedView;
     wxPoint m_mouseMClick;                  // !< For the middle button "drag" feature
     wxPoint m_mouseLClick;                  // !< Starting coords for rectangular zoom selection
@@ -1544,7 +1567,7 @@ public:
     /** @param name  Label
      *  @param flags Label alignment, pass one of #mpALIGN_NE, #mpALIGN_NW, #mpALIGN_SW, #mpALIGN_SE.
      */
-    mpFXYVector( wxString name = wxEmptyString, int flags = mpALIGN_NE );
+    mpFXYVector( const wxString& name = wxEmptyString, int flags = mpALIGN_NE );
 
     virtual ~mpFXYVector() {}
 
@@ -1583,6 +1606,8 @@ protected:
      *  @param y Returns Y value
      */
     bool GetNextXY( double& x, double& y ) override;
+
+    size_t GetCount() override;
 
 public:
     /** Returns the actual minimum X data (loaded in SetData).
@@ -1644,7 +1669,7 @@ public:
     /** @param name text to be drawn in the plot
      *  @param offsetx holds offset for the X location in percentage (0-100)
      *  @param offsety holds offset for the Y location in percentage (0-100) */
-    mpText( wxString name = wxT("Title"), int offsetx = 5, int offsety = 50 );
+    mpText( const wxString& name = wxT("Title"), int offsetx = 5, int offsety = 50 );
 
     /** Text Layer plot handler.
      *  This implementation will plot text adjusted to the visible area. */
@@ -1808,7 +1833,8 @@ class WXDLLIMPEXP_MATHPLOT mpCovarianceEllipse : public mpMovableObject
 {
 public:
     /** Default constructor.
-     * Initializes to a unity diagonal covariance matrix, a 95% confidence interval (2 sigmas), 32 segments, and a continuous plot (m_continuous=true).
+     * Initializes to a unity diagonal covariance matrix, a 95% confidence interval (2 sigmas),
+     * 32 segments, and a continuous plot (m_continuous=true).
      */
     mpCovarianceEllipse( double cov_00 = 1,
             double cov_11 = 1,

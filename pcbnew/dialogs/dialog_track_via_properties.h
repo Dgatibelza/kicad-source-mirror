@@ -23,70 +23,44 @@
  */
 
 #include <dialogs/dialog_track_via_properties_base.h>
-#include <wx_unit_binder.h>
-#include <boost/optional.hpp>
+#include <widgets/unit_binder.h>
+#include <core/optional.h>
 #include <layers_id_colors_and_visibility.h>
 
-class SELECTION;
+class PCBNEW_SELECTION;
 class COMMIT;
-
 class PCB_BASE_FRAME;
+class D_PAD;
 
 class DIALOG_TRACK_VIA_PROPERTIES : public DIALOG_TRACK_VIA_PROPERTIES_BASE
 {
 public:
-    DIALOG_TRACK_VIA_PROPERTIES( PCB_BASE_FRAME* aParent, const SELECTION& aItems );
+    DIALOG_TRACK_VIA_PROPERTIES( PCB_BASE_FRAME* aParent, const PCBNEW_SELECTION& aItems,
+                                 COMMIT& aCommit );
 
-    ///> Applies values from the dialog to the selected items.
-    bool Apply( COMMIT& aCommit );
+    bool TransferDataFromWindow() override;
 
 private:
-    void onClose( wxCloseEvent& aEvent ) override;
     void onTrackNetclassCheck( wxCommandEvent& aEvent ) override;
+    void onWidthSelect( wxCommandEvent& aEvent ) override;
+    void onWidthEdit( wxCommandEvent& aEvent ) override;
     void onViaNetclassCheck( wxCommandEvent& aEvent ) override;
-    void onCancelClick( wxCommandEvent& aEvent ) override;
-    void onOkClick( wxCommandEvent& aEvent ) override;
-    void onViaSelect( wxCommandEvent& aEvent );
-    void onViaEdit( wxCommandEvent& aEvent );
+    void onViaSelect( wxCommandEvent& aEvent ) override;
+    void onViaEdit( wxCommandEvent& aEvent ) override;
 
-    void OnInitDlg( wxInitDialogEvent& event ) override
-    {
-        // Call the default wxDialog handler of a wxInitDialogEvent
-        TransferDataToWindow();
+    bool confirmPadChange( const std::vector<D_PAD*>& connectedPads );
 
-        // Now all widgets have the size fixed, call FinishDialogSettings
-        FinishDialogSettings();
-    }
+    PCB_BASE_FRAME*         m_frame;
+    const PCBNEW_SELECTION& m_items;   // List of items to be modified.
+    COMMIT&                 m_commit;  // An undo record to add any changes to.
 
-    ///> Checks if the dialog values are correct.
-    bool check() const;
+    UNIT_BINDER             m_trackStartX, m_trackStartY;
+    UNIT_BINDER             m_trackEndX, m_trackEndY;
+    UNIT_BINDER             m_trackWidth;
 
-    ///> Sets wxTextEntry to the value stored in boost::optional<T> or "<...>" if it is not available.
-    template<typename T>
-        void setCommonVal( const boost::optional<T>& aVal, wxTextEntry* aTxtEntry, WX_UNIT_BINDER& aBinder )
-    {
-        if( aVal )
-            aBinder.SetValue( *aVal );
-        else
-            aTxtEntry->SetValue( "<...>" );
-    }
+    UNIT_BINDER             m_viaX, m_viaY;
+    UNIT_BINDER             m_viaDiameter, m_viaDrill;
 
-    ///> Selected items to be modified.
-    const SELECTION& m_items;
-
-    WX_UNIT_BINDER m_trackStartX, m_trackStartY;
-    WX_UNIT_BINDER m_trackEndX, m_trackEndY;
-    WX_UNIT_BINDER m_trackWidth;
-
-    WX_UNIT_BINDER m_viaX, m_viaY;
-    WX_UNIT_BINDER m_viaDiameter, m_viaDrill;
-
-    ///> Flag that determines if the dialog displays track properties.
-    bool m_tracks;
-
-    ///> Flag that determines if the dialog displays via properties.
-    bool m_vias;
-
-    ///> Fixme
-    bool m_haveUniqueNet;
+    bool                    m_tracks;  // True if dialog displays any track properties.
+    bool                    m_vias;    // True if dialog displays any via properties.
 };

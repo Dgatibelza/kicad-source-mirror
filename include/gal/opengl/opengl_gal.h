@@ -38,8 +38,7 @@
 #include <gal/opengl/cached_container.h>
 #include <gal/opengl/noncached_container.h>
 #include <gal/opengl/opengl_compositor.h>
-
-#include <wx/glcanvas.h>
+#include <gal/hidpi_gl_canvas.h>
 
 #include <unordered_map>
 #include <boost/smart_ptr/shared_array.hpp>
@@ -54,6 +53,7 @@ struct bitmap_glyph;
 namespace KIGFX
 {
 class SHADER;
+class GL_BITMAP_CACHE;
 
 /**
  * @brief Class OpenGL_GAL is the OpenGL implementation of the Graphics Abstraction Layer.
@@ -62,7 +62,7 @@ class SHADER;
  * and quads. The purpose is to provide a fast graphics interface, that takes advantage of modern
  * graphics card GPUs. All methods here benefit thus from the hardware acceleration.
  */
-class OPENGL_GAL : public GAL, public wxGLCanvas
+class OPENGL_GAL : public GAL, public HIDPI_GL_CANVAS
 {
 public:
     /**
@@ -86,34 +86,24 @@ public:
 
     virtual ~OPENGL_GAL();
 
+    virtual bool IsOpenGlEngine() override { return true; }
+
     /// @copydoc GAL::IsInitialized()
     virtual bool IsInitialized() const override
     {
         // is*Initialized flags, but it is enough for OpenGL to show up
-        return IsShownOnScreen();
+        return IsShownOnScreen() && !GetClientRect().IsEmpty();
     }
 
     ///> @copydoc GAL::IsVisible()
     bool IsVisible() const override
     {
-        return IsShownOnScreen();
+        return IsShownOnScreen() && !GetClientRect().IsEmpty();
     }
 
     // ---------------
     // Drawing methods
     // ---------------
-
-    /// @copydoc GAL::BeginDrawing()
-    virtual void BeginDrawing() override;
-
-    /// @copydoc GAL::EndDrawing()
-    virtual void EndDrawing() override;
-
-    /// @copydoc GAL::BeginUpdate()
-    virtual void BeginUpdate() override;
-
-    /// @copydoc GAL::EndUpdate()
-    virtual void EndUpdate() override;
 
     /// @copydoc GAL::DrawLine()
     virtual void DrawLine( const VECTOR2D& aStartPoint, const VECTOR2D& aEndPoint ) override;
@@ -145,10 +135,15 @@ public:
     virtual void DrawPolygon( const std::deque<VECTOR2D>& aPointList ) override;
     virtual void DrawPolygon( const VECTOR2D aPointList[], int aListSize ) override;
     virtual void DrawPolygon( const SHAPE_POLY_SET& aPolySet ) override;
+    virtual void DrawPolygon( const SHAPE_LINE_CHAIN& aPolySet ) override;
 
     /// @copydoc GAL::DrawCurve()
     virtual void DrawCurve( const VECTOR2D& startPoint, const VECTOR2D& controlPointA,
-                            const VECTOR2D& controlPointB, const VECTOR2D& endPoint ) override;
+                            const VECTOR2D& controlPointB, const VECTOR2D& endPoint,
+                            double aFilterValue = 0.0 ) override;
+
+    /// @copydoc GAL::DrawBitmap()
+    virtual void DrawBitmap( const BITMAP_BASE& aBitmap ) override;
 
     /// @copydoc GAL::BitmapText()
     virtual void BitmapText( const wxString& aText, const VECTOR2D& aPosition,
@@ -224,12 +219,6 @@ public:
     // Handling the world <-> screen transformation
     // --------------------------------------------------------
 
-    /// @copydoc GAL::SaveScreen()
-    virtual void SaveScreen() override;
-
-    /// @copydoc GAL::RestoreScreen()
-    virtual void RestoreScreen() override;
-
     /// @copydoc GAL::SetTarget()
     virtual void SetTarget( RENDER_TARGET aTarget ) override;
 
@@ -241,6 +230,8 @@ public:
 
     /// @copydoc GAL::SetNegativeDrawMode()
     virtual void SetNegativeDrawMode( bool aSetting ) override {}
+
+    virtual void ComputeWorldScreenMatrix() override;
 
     // -------
     // Cursor
@@ -272,6 +263,8 @@ public:
     {
         paintListener = aPaintListener;
     }
+
+    virtual void EnableDepthTest( bool aEnabled = false ) override;
 
     ///< Parameters passed to the GLU tesselator
     typedef struct
@@ -314,7 +307,7 @@ private:
     RENDER_TARGET           currentTarget;          ///< Current rendering target
 
     // Shader
-    static SHADER*          shader;                 ///< There is only one shader used for different objects
+    SHADER*                 shader;                 ///< There is only one shader used for different objects
 
     // Internal flags
     bool                    isFramebufferInitialized;   ///< Are the framebuffers initialized?
@@ -323,6 +316,29 @@ private:
     bool                    isInitialized;              ///< Basic initialization flag, has to be done
                                                         ///< when the window is visible
     bool                    isGrouping;                 ///< Was a group started?
+    bool                    isContextLocked;            ///< Used for assertion checking
+    int                     lockClientCookie;
+    GLint                   ufm_worldPixelSize;
+    GLint                   ufm_screenPixelSize;
+    GLint                   ufm_pixelSizeMultiplier;
+
+    std::unique_ptr<GL_BITMAP_CACHE>         bitmapCache;
+
+    void lockContext( int aClientCookie ) override;
+
+    void unlockContext( int aClientCookie ) override;
+
+    /// @copydoc GAL::BeginUpdate()
+    virtual void beginUpdate() override;
+
+    /// @copydoc GAL::EndUpdate()
+    virtual void endUpdate() override;
+
+    /// @copydoc GAL::BeginDrawing()
+    virtual void beginDrawing() override;
+
+    /// @copydoc GAL::EndDrawing()
+    virtual void endDrawing() override;
 
     ///< Update handler for OpenGL settings
     bool updatedGalDisplayOptions( const GAL_DISPLAY_OPTIONS& aOptions ) override;
@@ -377,7 +393,7 @@ private:
      * @param aPointGetter is a function to obtain coordinates of n-th vertex.
      * @param aPointCount is the number of points to be drawn.
      */
-    void drawPolyline( std::function<VECTOR2D (int)> aPointGetter, int aPointCount );
+    void drawPolyline( const std::function<VECTOR2D (int)>& aPointGetter, int aPointCount );
 
     /**
      * @brief Draws a filled polygon. It does not need the last point to have the same coordinates
@@ -386,6 +402,12 @@ private:
      * @param aPointCount is the number of points.
      */
     void drawPolygon( GLdouble* aPoints, int aPointCount );
+
+    /**
+     * @brief Draws a set of polygons with a cached triangulation. Way faster than drawPolygon.
+     */
+    void drawTriangulatedPolyset( const SHAPE_POLY_SET& aPoly );
+
 
     /**
      * @brief Draws a single character using bitmap font.
@@ -414,7 +436,7 @@ private:
      * @return Pair containing text bounding box and common Y axis offset. The values are expressed
      * as a number of pixels on the bitmap font texture and need to be scaled before drawing.
      */
-    std::pair<VECTOR2D, float> computeBitmapTextSize( const wxString& aText ) const;
+    std::pair<VECTOR2D, float> computeBitmapTextSize( const UTF8& aText ) const;
 
     // Event handling
     /**
@@ -451,6 +473,11 @@ private:
         // Bigger arcs need smaller alpha increment to make them look smooth
         return std::min( 1e6 / aRadius, 2.0 * M_PI / CIRCLE_POINTS );
     }
+
+    double getWorldPixelSize() const;
+
+    VECTOR2D getScreenPixelSize() const;
+
 
     /**
      * @brief Basic OpenGL initialization.

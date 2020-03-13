@@ -28,7 +28,7 @@
 #include <tool/tool_event.h>
 #include <tool/tool_action.h>
 #include <tool/tool_manager.h>
-
+#include <tool/actions.h>
 
 struct FlagString
 {
@@ -48,6 +48,19 @@ static const std::string flag2string( int aFlag, const FlagString* aExps )
     }
 
     return rv;
+}
+
+
+void TOOL_EVENT::init()
+{
+    // By default only MESSAGEs and Cancels are passed to multiple recipients
+    m_passEvent = m_category == TC_MESSAGE || IsCancelInteractive() || IsActivate();
+
+    m_hasPosition = ( m_category == TC_MOUSE || m_category == TC_COMMAND );
+
+    // Cancel tool doesn't contain a position
+    if( IsCancel() )
+        m_hasPosition = false;
 }
 
 
@@ -73,27 +86,27 @@ const std::string TOOL_EVENT::Format() const
 
     const FlagString actions[] =
     {
-        { TA_MOUSE_CLICK,           "click"               },
-        { TA_MOUSE_DBLCLICK,        "double click"        },
-        { TA_MOUSE_UP,              "button-up"           },
-        { TA_MOUSE_DOWN,            "button-down"         },
-        { TA_MOUSE_DRAG,            "drag"                },
-        { TA_MOUSE_MOTION,          "motion"              },
-        { TA_MOUSE_WHEEL,           "wheel"               },
-        { TA_KEY_PRESSED,           "key-pressed"         },
-        { TA_VIEW_REFRESH,          "view-refresh"        },
-        { TA_VIEW_ZOOM,             "view-zoom"           },
-        { TA_VIEW_PAN,              "view-pan"            },
-        { TA_VIEW_DIRTY,            "view-dirty"          },
-        { TA_CHANGE_LAYER,          "change-layer"        },
-        { TA_CANCEL_TOOL,           "cancel-tool"         },
-        { TA_CONTEXT_MENU_UPDATE,   "context-menu-update" },
-        { TA_CONTEXT_MENU_CHOICE,   "context-menu-choice" },
-        { TA_UNDO_REDO_PRE,         "undo-redo-pre"       },
-        { TA_UNDO_REDO_POST,        "undo-redo-post"      },
-        { TA_ACTION,                "action"              },
-        { TA_ACTIVATE,              "activate"            },
-        { 0,                        ""                    }
+        { TA_MOUSE_CLICK,        "click"               },
+        { TA_MOUSE_DBLCLICK,     "double click"        },
+        { TA_MOUSE_UP,           "button-up"           },
+        { TA_MOUSE_DOWN,         "button-down"         },
+        { TA_MOUSE_DRAG,         "drag"                },
+        { TA_MOUSE_MOTION,       "motion"              },
+        { TA_MOUSE_WHEEL,        "wheel"               },
+        { TA_KEY_PRESSED,        "key-pressed"         },
+        { TA_VIEW_REFRESH,       "view-refresh"        },
+        { TA_VIEW_ZOOM,          "view-zoom"           },
+        { TA_VIEW_PAN,           "view-pan"            },
+        { TA_VIEW_DIRTY,         "view-dirty"          },
+        { TA_CHANGE_LAYER,       "change-layer"        },
+        { TA_CANCEL_TOOL,        "cancel-tool"         },
+        { TA_CHOICE_MENU_UPDATE, "choice-menu-update"  },
+        { TA_CHOICE_MENU_CHOICE, "choice-menu-choice"  },
+        { TA_UNDO_REDO_PRE,      "undo-redo-pre"       },
+        { TA_UNDO_REDO_POST,     "undo-redo-post"      },
+        { TA_ACTION,             "action"              },
+        { TA_ACTIVATE,           "activate"            },
+        { 0,                     ""                    }
     };
 
     const FlagString buttons[] =
@@ -155,8 +168,54 @@ const std::string TOOL_EVENT_LIST::Format() const
 {
     std::string s;
 
-    for( TOOL_EVENT e : m_events )
+    for( const TOOL_EVENT& e : m_events )
         s += e.Format() + " ";
 
     return s;
+}
+
+
+bool TOOL_EVENT::IsClick( int aButtonMask ) const
+{
+    return ( m_actions & TA_MOUSE_CLICK ) && ( m_mouseButtons & aButtonMask ) == m_mouseButtons;
+}
+
+
+bool TOOL_EVENT::IsDblClick( int aButtonMask ) const
+{
+    return m_actions == TA_MOUSE_DBLCLICK && ( m_mouseButtons & aButtonMask ) == m_mouseButtons;
+}
+
+
+bool TOOL_EVENT::IsCancelInteractive()
+{
+    return( ( m_commandStr.is_initialized()
+                && m_commandStr.get() == ACTIONS::cancelInteractive.GetName() )
+         || ( m_commandId.is_initialized()
+                && m_commandId.get() == ACTIONS::cancelInteractive.GetId() )
+         || ( m_actions == TA_CANCEL_TOOL ) );
+}
+
+
+bool TOOL_EVENT::IsSelectionEvent()
+{
+    return Matches( EVENTS::ClearedEvent )
+        || Matches( EVENTS::UnselectedEvent )
+        || Matches( EVENTS::SelectedEvent );
+}
+
+
+bool TOOL_EVENT::IsPointEditor()
+{
+    return( ( m_commandStr.is_initialized()
+                    && m_commandStr.get().find( "PointEditor" ) != GetCommandStr()->npos )
+         || ( m_commandId.is_initialized()
+                    && m_commandId.get() == ACTIONS::activatePointEditor.GetId() ) );
+}
+
+
+bool TOOL_EVENT::IsMoveTool()
+{
+    return( m_commandStr.is_initialized()
+                && m_commandStr.get().find( "InteractiveMove" ) != GetCommandStr()->npos );
 }

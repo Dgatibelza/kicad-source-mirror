@@ -1,8 +1,8 @@
 /*
  * This program source code file is part of KiCad, a free EDA CAD application.
  *
- * Copyright (C) 2017 Jean_Pierre Charras <jp.charras at wanadoo.fr>
- * Copyright (C) 1992-2017 KiCad Developers, see change_log.txt for contributors.
+ * Copyright (C) 2018 Jean_Pierre Charras <jp.charras at wanadoo.fr>
+ * Copyright (C) 1992-2020 KiCad Developers, see AUTHORS.txt for contributors.
  *
  * This program is free software; you can redistribute it and/or
  * modify it under the terms of the GNU General Public License
@@ -24,35 +24,57 @@
 
 /**
  * @file gendrill_gerber_writer.cpp
- * @brief Functions to create drill files in gerber X2 format.
+ * @brief Functions to create the Gerber job file in JSON format.
  */
 
 #include <fctsys.h>
 
+#include <fstream>
+#include <iomanip>
 #include <vector>
 
-#include <plot_common.h>
-#include <wxPcbStruct.h>
 #include <build_version.h>
+#include <pcb_edit_frame.h>
+#include <plotter.h>
 
 #include <class_board.h>
-#include <class_zone.h>
 #include <class_module.h>
+#include <class_track.h>
+#include <class_zone.h>
 
-#include <pcbplot.h>
-#include <pcbnew.h>
+#include <board_stackup_manager/stackup_predefined_prms.h>
+#include <gbr_metadata.h>
 #include <gerber_jobfile_writer.h>
-#include <wildcards_and_files_ext.h>
+#include <pcbnew.h>
+#include <pcbplot.h>
 #include <reporter.h>
-#include <plot_auxiliary_data.h>
-
+#include <wildcards_and_files_ext.h>
 
 GERBER_JOBFILE_WRITER::GERBER_JOBFILE_WRITER( BOARD* aPcb, REPORTER* aReporter )
 {
     m_pcb = aPcb;
     m_reporter = aReporter;
-    m_conversionUnits = 1.0 / IU_PER_MM;    // Gerber units = mm
+    m_conversionUnits = 1.0 / IU_PER_MM; // Gerber units = mm
 }
+
+std::string GERBER_JOBFILE_WRITER::formatStringFromUTF32( const wxString& aText )
+{
+    std::string fmt_text; // the text after UTF32 to UTF8 conversion
+
+    for( unsigned long letter : aText )
+    {
+        if( letter >= ' ' && letter <= 0x7F )
+            fmt_text += char( letter );
+        else
+        {
+            char buff[16];
+            sprintf( buff, "\\u%4.4lX", letter );
+            fmt_text += buff;
+        }
+    }
+    return fmt_text;
+}
+
 
 enum ONSIDE GERBER_JOBFILE_WRITER::hasSilkLayers()
 {
@@ -67,7 +89,7 @@ enum ONSIDE GERBER_JOBFILE_WRITER::hasSilkLayers()
             flag |= SIDE_TOP;
     }
 
-    return (enum ONSIDE)flag;
+    return (enum ONSIDE) flag;
 }
 
 
@@ -84,7 +106,7 @@ enum ONSIDE GERBER_JOBFILE_WRITER::hasSolderMasks()
             flag |= SIDE_TOP;
     }
 
-    return (enum ONSIDE)flag;
+    return (enum ONSIDE) flag;
 }
 
 const char* GERBER_JOBFILE_WRITER::sideKeyValue( enum ONSIDE aValue )
@@ -95,96 +117,326 @@ const char* GERBER_JOBFILE_WRITER::sideKeyValue( enum ONSIDE aValue )
 
     switch( aValue )
     {
-        case SIDE_NONE:
-            value = "No"; break;
+    case SIDE_NONE:
+        value = "No";
+        break;
 
-        case SIDE_TOP:
-            value = "TopOnly"; break;
+    case SIDE_TOP:
+        value = "TopOnly";
+        break;
 
-        case SIDE_BOTTOM:
-            value = "BotOnly"; break;
+    case SIDE_BOTTOM:
+        value = "BotOnly";
+        break;
 
-        case SIDE_BOTH:
-            value = "Both"; break;
-
+    case SIDE_BOTH:
+        value = "Both";
+        break;
     }
 
     return value;
 }
 
 
-extern void BuildGerberX2Header( const BOARD *aBoard, wxArrayString& aHeader );
-
-
 bool GERBER_JOBFILE_WRITER::CreateJobFile( const wxString& aFullFilename )
 {
-    // Note: in Gerber job file, dimensions are in mm, and are floating numbers
-    FILE* jobFile = wxFopen( aFullFilename, "wt" );
-
+    bool     success;
     wxString msg;
 
-    if( jobFile == nullptr )
+    success = WriteJSONJobFile( aFullFilename );
+
+    if( !success )
     {
         if( m_reporter )
         {
-            msg.Printf( _( "Unable to create job file '%s'" ), aFullFilename );
-            m_reporter->Report( msg, REPORTER::RPT_ERROR );
+            msg.Printf( _( "Unable to create job file \"%s\"" ), aFullFilename );
+            m_reporter->Report( msg, RPT_SEVERITY_ERROR );
         }
-        return false;
     }
+    else if( m_reporter )
+    {
+        msg.Printf( _( "Create Gerber job file \"%s\"" ), aFullFilename );
+        m_reporter->Report( msg, RPT_SEVERITY_ACTION );
+    }
+
+    return success;
+}
+
+
+void GERBER_JOBFILE_WRITER::addJSONHeader()
+{
+    wxString text;
+
+    m_json["Header"] = {
+        {
+            "GenerationSoftware",
+            {
+                { "Vendor", "KiCad" },
+                { "Application", "Pcbnew" },
+                { "Version", GetBuildVersion() }
+            }
+        },
+        {
+            // The attribute value must conform to the full version of the ISO 8601
+            // date and time format, including time and time zone.
+            "CreationDate", GbrMakeCreationDateAttributeString( GBR_NC_STRING_FORMAT_GBRJOB )
+        }
+    };
+}
+
+
+bool GERBER_JOBFILE_WRITER::WriteJSONJobFile( const wxString& aFullFilename )
+{
+    // Note: in Gerber job file, dimensions are in mm, and are floating numbers
+    std::ofstream file( aFullFilename.ToUTF8() );
 
     LOCALE_IO dummy;
 
+    m_json = json( {} );
+
     // output the job file header
-    bool hasInnerLayers = m_pcb->GetCopperLayerCount() > 2;
-    wxArrayString header;
+    addJSONHeader();
 
-    fputs( "G04 Gerber job file with board parameters*\n"
-           "%TF.FileFunction,JobInfo*%\n"
-           "%TF.Part,SinglePCB*%\n", jobFile );
-    fputs( "G04 Single PCB fabrication instructions*\n", jobFile );
-
-    BuildGerberX2Header( m_pcb, header );
-
-    for( unsigned ii = 0; ii < header.GetCount(); ii++ )
-    {
-        if( header[ii].Contains( "TF.SameCoordinates" ) )
-            continue;   // This attribute is not useful in job file, skip it
-
-        fputs( TO_UTF8( header[ii] ), jobFile );
-        fputs( "\n", jobFile );
-    }
-
-
-    fputs( "%MOMM*%\n", jobFile );
-
-    fputs( "G04 Overall board parameters*\n", jobFile );
-    // output the bord size in mm:
-    EDA_RECT brect = m_pcb->GetBoardEdgesBoundingBox();
-    fprintf( jobFile, "%%TJ.B_Size_X,%.3f*%%\n", brect.GetWidth()*m_conversionUnits );
-    fprintf( jobFile, "%%TJ.B_Size_Y,%.3f*%%\n", brect.GetHeight()*m_conversionUnits );
-
-    // number of copper layers
-    fprintf( jobFile, "%%TJ.B_LayerNum,%d*%%\n", m_pcb->GetCopperLayerCount() );
-
-    // Board thickness
-    fprintf( jobFile, "%%TJ.B_Overall_Thickness,%.3f*%%\n",
-             m_pcb->GetDesignSettings().GetBoardThickness()*m_conversionUnits );
-
-    fprintf( jobFile, "%%TJ.B_Legend_Present,%s*%%\n", sideKeyValue( hasSilkLayers() ) );
-
-    fprintf( jobFile, "%%TJ.B_SolderMask_Present,%s*%%\n", sideKeyValue( hasSolderMasks() ) );
+    // Add the General Specs
+    addJSONGeneralSpecs();
 
     // Job file support a few design rules:
-    fputs( "G04 board design rules*\n", jobFile );
+    addJSONDesignRules();
+
+    // output the gerber file list:
+    addJSONFilesAttributes();
+
+    // output the board stackup:
+    addJSONMaterialStackup();
+
+    file << std::setw( 2 ) << m_json << std::endl;
+
+    return true;
+}
+
+
+void GERBER_JOBFILE_WRITER::addJSONGeneralSpecs()
+{
+    m_json["GeneralSpecs"] = json( {} );
+    m_json["GeneralSpecs"]["ProjectId"] = json( {} );
+
+    // Creates the ProjectId. Format is (from Gerber file format doc):
+    // ProjectId,<project id>,<project GUID>,<revision id>*%
+    // <project id> is the name of the project, restricted to basic ASCII symbols only,
+    // and comma not accepted
+    // All illegal chars will be replaced by underscore
+    // Rem: <project id> accepts only ASCII 7 code (only basic ASCII codes are allowed in gerber files).
+    //
+    // <project GUID> is a string which is an unique id of a project.
+    // However Kicad does not handle such a project GUID, so it is built from the board name
+    wxFileName fn = m_pcb->GetFileName();
+    wxString   msg = fn.GetFullName();
+
+    // Build a <project GUID>, from the board name
+    wxString guid = GbrMakeProjectGUIDfromString( msg );
+
+    // build the <project id> string: this is the board short filename (without ext)
+    // and all non ASCII chars are replaced by '_', to be compatible with .gbr files.
+    msg = fn.GetName();
+
+    // build the <rec> string. All non ASCII chars and comma are replaced by '_'
+    wxString rev = m_pcb->GetTitleBlock().GetRevision();
+
+    if( rev.IsEmpty() )
+        rev = wxT( "rev?" );
+
+    m_json["GeneralSpecs"]["ProjectId"]["Name"] = msg.ToAscii();
+    m_json["GeneralSpecs"]["ProjectId"]["GUID"] = guid;
+    m_json["GeneralSpecs"]["ProjectId"]["Revision"] = rev.ToAscii();
+
+    // output the bord size in mm:
+    EDA_RECT brect = m_pcb->GetBoardEdgesBoundingBox();
+
+    m_json["GeneralSpecs"]["Size"]["X"] = brect.GetWidth() * m_conversionUnits;
+    m_json["GeneralSpecs"]["Size"]["Y"] = brect.GetHeight() * m_conversionUnits;
+
+
+    // Add some data to the JSON header, GeneralSpecs:
+    // number of copper layers
+    m_json["GeneralSpecs"]["LayerNumber"] = m_pcb->GetCopperLayerCount();
+
+    // Board thickness
+    m_json["GeneralSpecs"]["BoardThickness"] =
+            m_pcb->GetDesignSettings().GetBoardThickness() * m_conversionUnits;
+
+    // Copper finish
+    BOARD_STACKUP brd_stackup = m_pcb->GetDesignSettings().GetStackupDescriptor();
+
+    if( !brd_stackup.m_FinishType.IsEmpty() )
+        m_json["GeneralSpecs"]["Finish"] = brd_stackup.m_FinishType;
+
+    if( brd_stackup.m_CastellatedPads )
+        m_json["GeneralSpecs"]["Castellated"] = true;
+
+    if( brd_stackup.m_EdgePlating )
+        m_json["GeneralSpecs"]["EdgePlating"] = true;
+
+    if( brd_stackup.m_EdgeConnectorConstraints )
+    {
+        m_json["GeneralSpecs"]["EdgeConnector"] = true;
+
+        m_json["GeneralSpecs"]["EdgeConnectorBevelled"] =
+                ( brd_stackup.m_EdgeConnectorConstraints == BS_EDGE_CONNECTOR_BEVELLED );
+    }
+
+#if 0 // Not yet in use
+    /* The board type according to IPC-2221. There are six primary board types:
+    - Type 1 - Single-sided
+    - Type 2 - Double-sided
+    - Type 3 - Multilayer, TH components only
+    - Type 4 - Multilayer, with TH, blind and/or buried vias.
+    - Type 5 - Multilayer metal-core board, TH components only
+    - Type 6 - Multilayer metal-core
+    */
+    m_json["GeneralSpecs"]["IPC-2221-Type"] = 4;
+
+    /* Via protection: key words:
+    Ia Tented - Single-sided
+    Ib Tented - Double-sided
+    IIa Tented and Covered - Single-sided
+    IIb Tented and Covered - Double-sided
+    IIIa Plugged - Single-sided
+    IIIb Plugged - Double-sided
+    IVa Plugged and Covered - Single-sided
+    IVb Plugged and Covered - Double-sided
+    V Filled (fully plugged)
+    VI Filled and Covered
+    VIII Filled and Capped
+    None...No protection
+    */
+    m_json["GeneralSpecs"]["ViaProtection"] = "Ib";
+#endif
+}
+
+
+void GERBER_JOBFILE_WRITER::addJSONFilesAttributes()
+{
+    // Add the Files Attributes section in JSON format to m_JSONbuffer
+    m_json["FilesAttributes"] = json::array();
+
+    for( unsigned ii = 0; ii < m_params.m_GerberFileList.GetCount(); ii++ )
+    {
+        wxString&    name = m_params.m_GerberFileList[ii];
+        PCB_LAYER_ID layer = m_params.m_LayerId[ii];
+        wxString     gbr_layer_id;
+        bool         skip_file = false; // true to skip files which should not be in job file
+        const char*  polarity = "Positive";
+        json         file_json;
+
+        if( layer <= B_Cu )
+        {
+            gbr_layer_id = "Copper,L";
+
+            if( layer == B_Cu )
+                gbr_layer_id << m_pcb->GetCopperLayerCount();
+            else
+                gbr_layer_id << layer + 1;
+
+            gbr_layer_id << ",";
+
+            if( layer == B_Cu )
+                gbr_layer_id << "Bot";
+            else if( layer == F_Cu )
+                gbr_layer_id << "Top";
+            else
+                gbr_layer_id << "Inr";
+        }
+
+        else
+        {
+            switch( layer )
+            {
+            case B_Adhes:
+                gbr_layer_id = "Glue,Bot";
+                break;
+            case F_Adhes:
+                gbr_layer_id = "Glue,Top";
+                break;
+
+            case B_Paste:
+                gbr_layer_id = "SolderPaste,Bot";
+                break;
+            case F_Paste:
+                gbr_layer_id = "SolderPaste,Top";
+                break;
+
+            case B_SilkS:
+                gbr_layer_id = "Legend,Bot";
+                break;
+            case F_SilkS:
+                gbr_layer_id = "Legend,Top";
+                break;
+
+            case B_Mask:
+                gbr_layer_id = "SolderMask,Bot";
+                polarity = "Negative";
+                break;
+            case F_Mask:
+                gbr_layer_id = "SolderMask,Top";
+                polarity = "Negative";
+                break;
+
+            case Edge_Cuts:
+                gbr_layer_id = "Profile";
+                break;
+
+            case B_Fab:
+                gbr_layer_id = "AssemblyDrawing,Bot";
+                break;
+            case F_Fab:
+                gbr_layer_id = "AssemblyDrawing,Top";
+                break;
+
+            case Dwgs_User:
+            case Cmts_User:
+            case Eco1_User:
+            case Eco2_User:
+            case Margin:
+            case B_CrtYd:
+            case F_CrtYd:
+                skip_file = true;
+                break;
+
+            default:
+                skip_file = true;
+                m_reporter->Report( "Unexpected layer id in job file", RPT_SEVERITY_ERROR );
+                break;
+            }
+        }
+
+        if( !skip_file )
+        {
+            // name can contain non ASCII7 chars.
+            // Ensure the name is JSON compatible.
+            std::string strname = formatStringFromUTF32( name );
+
+            file_json["Path"] = strname.c_str();
+            file_json["FileFunction"] = gbr_layer_id;
+            file_json["FilePolarity"] = polarity;
+
+            m_json["FilesAttributes"] += file_json;
+        }
+    }
+}
+
+
+void GERBER_JOBFILE_WRITER::addJSONDesignRules()
+{
+    // Add the Design Rules section in JSON format to m_JSONbuffer
+    // Job file support a few design rules:
     const BOARD_DESIGN_SETTINGS& dsnSettings = m_pcb->GetDesignSettings();
-    NETCLASS defaultNC = *dsnSettings.GetDefault();
-    int minclearanceOuter = defaultNC.GetClearance();
+    NETCLASS                     defaultNC = *dsnSettings.GetDefault();
+    int                          minclearanceOuter = defaultNC.GetClearance();
+    bool                         hasInnerLayers = m_pcb->GetCopperLayerCount() > 2;
 
     // Search a smaller clearance in other net classes, if any.
     for( NETCLASSES::const_iterator it = dsnSettings.m_NetClasses.begin();
-         it != dsnSettings.m_NetClasses.end();
-         ++it )
+            it != dsnSettings.m_NetClasses.end(); ++it )
     {
         NETCLASS netclass = *it->second;
         minclearanceOuter = std::min( minclearanceOuter, netclass.GetClearance() );
@@ -192,6 +444,8 @@ bool GERBER_JOBFILE_WRITER::CreateJobFile( const wxString& aFullFilename )
 
     // job file knows different clearance types.
     // Kicad knows only one clearance for pads and tracks
+    int minclearance_track2track = minclearanceOuter;
+
     // However, pads can have a specific clearance defined for a pad or a footprint,
     // and min clearance can be dependent on layers.
     // Search for a minimal pad clearance:
@@ -203,31 +457,22 @@ bool GERBER_JOBFILE_WRITER::CreateJobFile( const wxString& aFullFilename )
         for( auto& pad : module->Pads() )
         {
             if( ( pad->GetLayerSet() & LSET::InternalCuMask() ).any() )
-               minPadClearanceInner = std::min( minPadClearanceInner, pad->GetClearance() );
+                minPadClearanceInner = std::min( minPadClearanceInner, pad->GetClearance() );
 
             if( ( pad->GetLayerSet() & LSET::ExternalCuMask() ).any() )
-               minPadClearanceOuter = std::min( minPadClearanceOuter, pad->GetClearance() );
+                minPadClearanceOuter = std::min( minPadClearanceOuter, pad->GetClearance() );
         }
     }
 
-
-    fprintf( jobFile, "%%TJ.D_PadToPad_Out,%.3f*%%\n", minPadClearanceOuter*m_conversionUnits );
-
-    if( hasInnerLayers )
-        fprintf( jobFile, "%%TJ.D_PadToPad_Inr,%.3f*%%\n", minPadClearanceInner*m_conversionUnits );
-
-    fprintf( jobFile, "%%TJ.D_PadToTrack_Out,%.3f*%%\n", minPadClearanceOuter*m_conversionUnits );
-
-    if( hasInnerLayers )
-        fprintf( jobFile, "%%TJ.D_PadToTrack_Inr,%.3f*%%\n", minPadClearanceInner*m_conversionUnits );
+    m_json["DesignRules"] = { {
+        { "Layers", "Outer" },
+        { "PadToPad", minPadClearanceOuter * m_conversionUnits },
+        { "PadToTrack", minPadClearanceOuter * m_conversionUnits },
+        { "TrackToTrack", minclearance_track2track * m_conversionUnits }
+    } };
 
     // Until this is changed in Kicad, use the same value for internal tracks
     int minclearanceInner = minclearanceOuter;
-
-    fprintf( jobFile, "%%TJ.D_TrackToTrack_Out,%.3f*%%\n", minclearanceOuter*m_conversionUnits );
-
-    if( hasInnerLayers )
-        fprintf( jobFile, "%%TJ.D_TrackToTrack_Inr,%.3f*%%\n", minclearanceInner*m_conversionUnits );
 
     // Output the minimal track width
     int mintrackWidthOuter = INT_MAX;
@@ -245,10 +490,7 @@ bool GERBER_JOBFILE_WRITER::CreateJobFile( const wxString& aFullFilename )
     }
 
     if( mintrackWidthOuter != INT_MAX )
-        fprintf( jobFile, "%%TJ.D_MinLineWidth_Out,%.3f*%%\n", mintrackWidthOuter*m_conversionUnits );
-
-    if( mintrackWidthInner != INT_MAX )
-        fprintf( jobFile, "%%TJ.D_MinLineWidth_Inr,%.3f*%%\n", mintrackWidthInner*m_conversionUnits );
+        m_json["DesignRules"][0]["MinLineWidth"] = mintrackWidthOuter * m_conversionUnits;
 
     // Output the minimal zone to xx clearance
     // Note: zones can have a zone clearance set to 0
@@ -272,117 +514,215 @@ bool GERBER_JOBFILE_WRITER::CreateJobFile( const wxString& aFullFilename )
     }
 
     if( minclearanceOuter != INT_MAX )
-        fprintf( jobFile, "%%TJ.D_TrackToRegion_Out,%.3f*%%\n", minclearanceOuter*m_conversionUnits );
-
-    if( hasInnerLayers && minclearanceInner != INT_MAX )
-        fprintf( jobFile, "%%TJ.D_TrackToRegion_Inr,%.3f*%%\n", minclearanceInner*m_conversionUnits );
+        m_json["DesignRules"][0]["TrackToRegion"] = minclearanceOuter * m_conversionUnits;
 
     if( minclearanceOuter != INT_MAX )
-        fprintf( jobFile, "%%TJ.D_RegionToRegion_Out,%.3f*%%\n", minclearanceOuter*m_conversionUnits );
+        m_json["DesignRules"][0]["RegionToRegion"] = minclearanceOuter * m_conversionUnits;
 
-    if( hasInnerLayers && minclearanceInner != INT_MAX )
-        fprintf( jobFile, "%%TJ.D_RegionToRegion_Inr,%.3f*%%\n", minclearanceInner*m_conversionUnits );
-
-    // output the gerber file list:
-    fputs( "G04 Layer Structure*\n", jobFile );
-
-    for( unsigned ii = 0; ii < m_params.m_GerberFileList.GetCount(); ii ++ )
+    if( hasInnerLayers )
     {
-        wxString& name = m_params.m_GerberFileList[ii];
-        PCB_LAYER_ID layer = m_params.m_LayerId[ii];
-        wxString gbr_layer_id;
-        bool skip_file = false;     // true to skip files which should not be in job file
-        const char* polarity = "Positive";
+        m_json["DesignRules"] += json( {
+            { "Layers", "Inner" },
+            { "PadToPad", minPadClearanceInner * m_conversionUnits },
+            { "PadToTrack", minPadClearanceInner * m_conversionUnits },
+            { "TrackToTrack", minclearance_track2track * m_conversionUnits }
+        } );
 
-        if( layer <= B_Cu )
+        if( mintrackWidthInner != INT_MAX )
+            m_json["DesignRules"][1]["MinLineWidth"] = mintrackWidthInner * m_conversionUnits;
+
+        if( minclearanceInner != INT_MAX )
+            m_json["DesignRules"][1]["TrackToRegion"] = minclearanceInner * m_conversionUnits;
+
+        if( minclearanceInner != INT_MAX )
+            m_json["DesignRules"][1]["RegionToRegion"] = minclearanceInner * m_conversionUnits;
+    }
+}
+
+
+void GERBER_JOBFILE_WRITER::addJSONMaterialStackup()
+{
+    // Add the Material Stackup section in JSON format to m_JSONbuffer
+    m_json["MaterialStackup"] = json::array();
+
+    // Build the candidates list:
+    LSET          maskLayer;
+    BOARD_STACKUP brd_stackup = m_pcb->GetDesignSettings().GetStackupDescriptor();
+
+    // Ensure brd_stackup is up to date (i.e. no change made by SynchronizeWithBoard() )
+    bool uptodate = not brd_stackup.SynchronizeWithBoard( &m_pcb->GetDesignSettings() );
+
+    if( !uptodate && m_pcb->GetDesignSettings().m_HasStackup )
+        m_reporter->Report( _( "Board stackup settings not up to date\n"
+                               "Please fix the stackup" ),
+                            RPT_SEVERITY_ERROR );
+
+    PCB_LAYER_ID last_copper_layer = F_Cu;
+
+    // Generate the list (top to bottom):
+    for( int ii = 0; ii < brd_stackup.GetCount(); ++ii )
+    {
+        BOARD_STACKUP_ITEM* item = brd_stackup.GetStackupLayer( ii );
+
+        int sub_layer_count =
+                item->GetType() == BS_ITEM_TYPE_DIELECTRIC ? item->GetSublayersCount() : 1;
+
+        for( int sub_idx = 0; sub_idx < sub_layer_count; sub_idx++ )
         {
-            gbr_layer_id = "Copper,L";
+            // layer thickness is always in mm
+            double      thickness = item->GetThickness( sub_idx ) * m_conversionUnits;
+            wxString    layer_type;
+            std::string layer_name; // for comment
+            json        layer_json;
 
-            if( layer == B_Cu )
-                gbr_layer_id << m_pcb->GetCopperLayerCount();
-            else
-                gbr_layer_id << layer+1;
-
-            gbr_layer_id << ",";
-
-            if( layer == B_Cu )
-                gbr_layer_id << "Bot";
-            else if( layer == F_Cu )
-                gbr_layer_id << "Top";
-            else
-                gbr_layer_id << "Inr";
-        }
-
-        else
-        {
-            switch( layer )
+            switch( item->GetType() )
             {
-                case B_Adhes:
-                    gbr_layer_id = "Glue,Bot"; break;
-                case F_Adhes:
-                    gbr_layer_id = "Glue,Top"; break;
+            case BS_ITEM_TYPE_COPPER:
+                layer_type = "Copper";
+                layer_name = formatStringFromUTF32( m_pcb->GetLayerName( item->GetBrdLayerId() ) );
+                last_copper_layer = item->GetBrdLayerId();
+                break;
 
-                case B_Paste:
-                    gbr_layer_id = "SolderPaste,Bot"; break;
-                case F_Paste:
-                    gbr_layer_id = "SolderPaste,Top"; break;
+            case BS_ITEM_TYPE_SILKSCREEN:
+                layer_type = "Legend";
+                layer_name = formatStringFromUTF32( item->GetTypeName() );
+                break;
 
-                case B_SilkS:
-                    gbr_layer_id = "Legend,Bot"; break;
-                case F_SilkS:
-                    gbr_layer_id = "Legend,Top"; break;
+            case BS_ITEM_TYPE_SOLDERMASK:
+                layer_type = "SolderMask";
+                layer_name = formatStringFromUTF32( item->GetTypeName() );
+                break;
 
-                case B_Mask:
-                    gbr_layer_id = "SolderMask,Bot"; polarity = "Negative"; break;
-                case F_Mask:
-                    gbr_layer_id = "SolderMask,Top"; polarity = "Negative"; break;
+            case BS_ITEM_TYPE_SOLDERPASTE:
+                layer_type = "SolderPaste";
+                layer_name = formatStringFromUTF32( item->GetTypeName() );
+                break;
 
-                case Edge_Cuts:
-                    gbr_layer_id = "Profile"; break;
+            case BS_ITEM_TYPE_DIELECTRIC:
+                layer_type = "Dielectric";
+                // The option core or prepreg is not added here, as it creates constraints
+                // in build process, not necessary wanted.
+                if( sub_layer_count > 1 )
+                {
+                    layer_name =
+                            formatStringFromUTF32( wxString::Format( "dielectric layer %d - %d/%d",
+                                    item->GetDielectricLayerId(), sub_idx + 1, sub_layer_count ) );
+                }
+                else
+                    layer_name = formatStringFromUTF32( wxString::Format(
+                            "dielectric layer %d", item->GetDielectricLayerId() ) );
+                break;
 
-                case B_Fab:
-                    gbr_layer_id = "AssemblyDrawing,Bot"; break;
-                case F_Fab:
-                    gbr_layer_id = "AssemblyDrawing,Top"; break;
-
-                case Dwgs_User:
-                case Cmts_User:
-                case Eco1_User:
-                case Eco2_User:
-                case Margin:
-                case B_CrtYd:
-                case F_CrtYd:
-                   skip_file = true; break;
-
-                default:
-                    skip_file = true;
-                    m_reporter->Report( "Unexpected layer id in job file",
-                                        REPORTER::RPT_ERROR );
-                    break;
+            default:
+                break;
             }
-        }
 
-        if( !skip_file )
-        {
-            // name can contain non ASCII7 chars.
-            // Only ASCII7 chars are accepted in gerber files. others must be converted to
-            // a gerber hexa sequence.
-            std::string strname = formatStringToGerber( name );
-            fprintf( jobFile, "%%TJ.L_\"%s\",%s,%s*%%\n", TO_UTF8( gbr_layer_id ),
-                     polarity, strname.c_str() );
+            layer_json["Type"] = layer_type;
+
+            if( item->IsColorEditable() && uptodate )
+            {
+                if( IsPrmSpecified( item->GetColor() ) )
+                {
+                    wxString colorName = item->GetColor();
+
+                    if( colorName.StartsWith( "#" ) ) // This is a user defined color.
+                    {
+                        // In job file a color can be given by its RGB values (0...255)
+                        wxColor color( colorName );
+                        colorName.Printf( "R%dG%dB%d", color.Red(), color.Green(), color.Blue() );
+                    }
+
+                    layer_json["Color"] = colorName;
+                }
+            }
+
+            if( item->IsThicknessEditable() && uptodate )
+                layer_json["Thickness"] = thickness;
+
+            if( item->GetType() == BS_ITEM_TYPE_DIELECTRIC )
+            {
+                if( item->HasMaterialValue() )
+                {
+                    layer_json["Material"] = item->GetMaterial( sub_idx );
+
+                    // These constrains are only written if the board has impedance controlled tracks.
+                    // If the board is not impedance controlled,  they are useless.
+                    // Do not add constrains that create more expensive boards.
+                    if( brd_stackup.m_HasDielectricConstrains )
+                    {
+                        // Generate Epsilon R if > 1.0 (value <= 1.0 means not specified: it is not
+                        // a possible value
+                        if( item->GetEpsilonR() > 1.0 )
+                            layer_json["DielectricConstant"] = item->FormatEpsilonR( sub_idx );
+
+                        // Generate LossTangent > 0.0 (value <= 0.0 means not specified: it is not
+                        // a possible value
+                        if( item->GetLossTangent() > 0.0 )
+                            layer_json["LossTangent"] = item->FormatLossTangent( sub_idx );
+                    }
+                }
+
+                PCB_LAYER_ID next_copper_layer = ( PCB_LAYER_ID )( last_copper_layer + 1 );
+
+                // If the next_copper_layer is the last copper layer, the next layer id is B_Cu
+                if( next_copper_layer >= m_pcb->GetCopperLayerCount() - 1 )
+                    next_copper_layer = B_Cu;
+
+                wxString subLayerName;
+
+                if( sub_layer_count > 1 )
+                    subLayerName.Printf( " (%d/%d)", sub_idx + 1, sub_layer_count );
+
+                wxString name = wxString::Format( "%s/%s%s",
+                        formatStringFromUTF32( m_pcb->GetLayerName( last_copper_layer ) ),
+                        formatStringFromUTF32( m_pcb->GetLayerName( next_copper_layer ) ),
+                        subLayerName );
+
+                layer_json["Name"] = name;
+
+                // Add a comment ("Notes"):
+                wxString note;
+
+                note << wxString::Format( "Type: %s", layer_name.c_str() );
+
+                note << wxString::Format( " (from %s to %s)",
+                        formatStringFromUTF32( m_pcb->GetLayerName( last_copper_layer ) ),
+                        formatStringFromUTF32( m_pcb->GetLayerName( next_copper_layer ) ) );
+
+                layer_json["Notes"] = note;
+            }
+            else if( item->GetType() == BS_ITEM_TYPE_SOLDERMASK
+                     || item->GetType() == BS_ITEM_TYPE_SILKSCREEN )
+            {
+                if( item->HasMaterialValue() )
+                {
+                    layer_json["Material"] = item->GetMaterial();
+
+                    // These constrains are only written if the board has impedance controlled tracks.
+                    // If the board is not impedance controlled,  they are useless.
+                    // Do not add constrains that create more expensive boards.
+                    if( brd_stackup.m_HasDielectricConstrains )
+                    {
+                        // Generate Epsilon R if > 1.0 (value <= 1.0 means not specified: it is not
+                        // a possible value
+                        if( item->GetEpsilonR() > 1.0 )
+                            layer_json["DielectricConstant"] = item->FormatEpsilonR();
+
+                        // Generate LossTangent > 0.0 (value <= 0.0 means not specified: it is not
+                        // a possible value
+                        if( item->GetLossTangent() > 0.0 )
+                            layer_json["LossTangent"] = item->FormatLossTangent();
+                    }
+                }
+
+                layer_json["Name"] = layer_name.c_str();
+            }
+            else
+            {
+                layer_json["Name"] = layer_name.c_str();
+            }
+
+            m_json["MaterialStackup"].insert( m_json["MaterialStackup"].end(), layer_json );
         }
     }
-
-    // Close job file
-    fputs( "M02*\n", jobFile );
-
-    fclose( jobFile );
-
-    if( m_reporter )
-    {
-        msg.Printf( _( "Create Gerber job file '%s'" ), aFullFilename );
-        m_reporter->Report( msg, REPORTER::RPT_ACTION );
-    }
-
-    return true;
 }

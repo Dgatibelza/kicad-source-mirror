@@ -5,7 +5,7 @@
  * This program source code file is part of KiCad, a free EDA CAD application.
  *
  * Copyright (C) 2016 CERN
- * Copyright (C) 2016-2017 KiCad Developers, see CHANGELOG.TXT for contributors.
+ * Copyright (C) 2016-2020 KiCad Developers, see CHANGELOG.TXT for contributors.
  *
  * @author Wayne Stambaugh <stambaughw@gmail.com>
  *
@@ -34,13 +34,12 @@ class SCH_SCREEN;
 class SCH_PLUGIN;
 class KIWAY;
 class LIB_PART;
-class LIB_ALIAS;
 class PART_LIB;
 class PROPERTIES;
 
 
 /**
- * Class SCH_IO_MGR
+ * SCH_IO_MGR
  * is a factory which returns an instance of a #SCH_PLUGIN.
  */
 class SCH_IO_MGR
@@ -60,7 +59,7 @@ public:
 
         // ALTIUM,
         // etc.
-    } );
+    } )
 
     /**
      * Return a #SCH_PLUGIN which the caller can use to import, export, save, or load
@@ -97,13 +96,22 @@ public:
     static SCH_FILE_T EnumFromStr( const wxString& aFileType );
 
     /**
-     * Return the file extension for \a aFileType.
+     * Return the schematic file extension for \a aFileType.
      *
      * @param aFileType is the #SCH_FILE_T type.
      *
      * @return the file extension for \a aFileType or an empty string if \a aFileType is invalid.
      */
     static const wxString GetFileExtension( SCH_FILE_T aFileType );
+
+    /**
+     * Return the symbol library file extension (if any) for \a aFileType.
+     *
+     * @param aFileType is the #SCH_FILE_T type.
+     *
+     * @return the file extension for \a aFileType or an empty string if \a aFileType is invalid.
+     */
+    static const wxString GetLibraryFileExtension( SCH_FILE_T aFileType );
 
     /**
      * Return a plugin type given a footprint library's libPath.
@@ -202,6 +210,11 @@ public:
     virtual const wxString GetFileExtension() const = 0;
 
     /**
+     * Return the library file extension for the #SCH_PLUGIN object.
+     */
+    virtual const wxString GetLibraryFileExtension() const = 0;
+
+    /**
      * Return the modification hash from the library cache.
      *
      * @note This is temporary until the new s-expr file format is implement.  The new file
@@ -271,14 +284,11 @@ public:
     virtual void Save( const wxString& aFileName, SCH_SCREEN* aSchematic, KIWAY* aKiway,
                        const PROPERTIES* aProperties = NULL );
 
-    virtual size_t GetSymbolLibCount( const wxString&   aLibraryPath,
-                                      const PROPERTIES* aProperties = NULL );
-
     /**
      * Populate a list of #LIB_PART alias names contained within the library \a aLibraryPath.
      *
-     * @param aAliasNameList is an array to populate with the #LIB_ALIAS names associated with
-     *                       the library.
+     * @param aSymbolNameList is an array to populate with the #LIB_PART names associated with
+     *                        the library.
      *
      * @param aLibraryPath is a locator for the "library", usually a directory, file,
      *                     or URL containing one or more #LIB_PART objects.
@@ -290,15 +300,18 @@ public:
      *
      * @throw IO_ERROR if the library cannot be found, the part library cannot be loaded.
      */
-    virtual void EnumerateSymbolLib( wxArrayString&    aAliasNameList,
+    virtual void EnumerateSymbolLib( wxArrayString&    aSymbolNameList,
                                      const wxString&   aLibraryPath,
                                      const PROPERTIES* aProperties = NULL );
 
     /**
      * Populate a list of #LIB_PART aliases contained within the library \a aLibraryPath.
      *
-     * @param aAliasList is an array to populate with the #LIB_ALIAS pointers associated with
-     *                   the library.
+     * @note It is the reponsibility of the caller to delete the returned object from the heap.
+     *       Failure to do this will result in memory leaks.
+     *
+     * @param aSymbolList is an array to populate with the #LIB_PART pointers associated with
+     *                    the library.
      *
      * @param aLibraryPath is a locator for the "library", usually a directory, file,
      *                     or URL containing one or more #LIB_PART objects.
@@ -310,19 +323,18 @@ public:
      *
      * @throw IO_ERROR if the library cannot be found, the part library cannot be loaded.
      */
-    virtual void EnumerateSymbolLib( std::vector<LIB_ALIAS*>& aAliasList,
+    virtual void EnumerateSymbolLib( std::vector<LIB_PART*>& aSymbolList,
                                      const wxString&   aLibraryPath,
                                      const PROPERTIES* aProperties = NULL );
 
     /**
-     * Load a #LIB_ALIAS object having \a aAliasName from the \a aLibraryPath containing
-     * a library format that this #SCH_PLUGIN knows about.  The #LIB_PART should be accessed
-     * indirectly using the #LIB_ALIAS it is associated with.
+     * Load a #LIB_PART object having \a aPartName from the \a aLibraryPath containing
+     * a library format that this #SCH_PLUGIN knows about.
      *
      * @param aLibraryPath is a locator for the "library", usually a directory, file,
      *                     or URL containing several symbols.
      *
-     * @param aAliasName is the alias name of the #LIB_PART to load.
+     * @param aPartName is the name of the #LIB_PART to load.
      *
      * @param aProperties is an associative array that can be used to tell the loader
      *                    implementation to do something special, because it can take
@@ -331,13 +343,13 @@ public:
      *                    (plugin may not delete it), and plugins should expect it to be
      *                    optionally NULL.
      *
-     * @return the alias if found caller shares it or NULL if not found.
+     * @return the part created on the heap if found caller shares it or NULL if not found.
      *
      * @throw IO_ERROR if the library cannot be found or read.  No exception
      *                 is thrown in the case where aAliasName cannot be found.
      */
-    virtual LIB_ALIAS* LoadSymbol( const wxString& aLibraryPath, const wxString& aAliasName,
-                                   const PROPERTIES* aProperties = NULL );
+    virtual LIB_PART* LoadSymbol( const wxString& aLibraryPath, const wxString& aPartName,
+                                  const PROPERTIES* aProperties = NULL );
 
     /**
      * Write \a aSymbol to an existing library located at \a aLibraryPath.  If a #LIB_PART
@@ -364,38 +376,14 @@ public:
                              const PROPERTIES* aProperties = NULL );
 
     /**
-     * Delete \a aAliasName from the library at \a aLibraryPath.
-     *
-     * If \a aAliasName refers the the root #LIB_PART object, the part is renamed to
-     * the next or previous #LIB_ALIAS in the #LIB_PART if one exists.  If the #LIB_ALIAS
-     * is the last alias referring to the root #LIB_PART, the #LIB_PART is also removed
-     * from the library.
-     *
-     * @param aLibraryPath is a locator for the "library", usually a directory, file,
-     *                     or URL containing several symbols.
-     *
-     * @param aAliasName is the name of a #LIB_ALIAS to delete from the specified library.
-     *
-     * @param aProperties is an associative array that can be used to tell the library
-     *                    delete function anything special, because it can take any number
-     *                    of additional named tuning arguments that the plugin is known to
-     *                    support.  The caller continues to own this object (plugin may not
-     *                    delete it), and plugins should expect it to be optionally NULL.
-     *
-     * @throw IO_ERROR if there is a problem finding the alias or the library or deleting it.
-     */
-    virtual void DeleteAlias( const wxString& aLibraryPath, const wxString& aAliasName,
-                              const PROPERTIES* aProperties = NULL );
-
-    /**
      * Delete the entire #LIB_PART associated with \a aAliasName from the library
      * \a aLibraryPath.
      *
      * @param aLibraryPath is a locator for the "library", usually a directory, file,
      *                     or URL containing several symbols.
      *
-     * @param aAliasName is the name of a #LIB_ALIAS associated with it's root #LIB_PART
-     *                   object to delete from the specified library.
+     * @param aSymbolName is the name of a #LIB_PART associated with it's root #LIB_PART
+     *                    object to delete from the specified library.
      *
      * @param aProperties is an associative array that can be used to tell the library
      *                    delete function anything special, because it can take any number
@@ -405,7 +393,7 @@ public:
      *
      * @throw IO_ERROR if there is a problem finding the alias or the library or deleting it.
      */
-    virtual void DeleteSymbol( const wxString& aLibraryPath, const wxString& aAliasName,
+    virtual void DeleteSymbol( const wxString& aLibraryPath, const wxString& aSymbolName,
                                const PROPERTIES* aProperties = NULL );
 
     /**
@@ -486,12 +474,22 @@ public:
     virtual void SymbolLibOptions( PROPERTIES* aListToAppendTo ) const;
 
     /**
-     * Function CheckHeader
-     * returns true if the first line in @a aFileName begins with the expected header
+     * Return true if the first line in @a aFileName begins with the expected header.
+     *
      * @param aFileName is the name of the file to use as input
      *
      */
     virtual bool CheckHeader( const wxString& aFileName );
+
+    /**
+     * Return an error string to the caller.
+     *
+     * This is useful for schematic loaders that can load partial schematics where throwing
+     * an exception would be problematic such as the KiCad legacy plugin.
+     *
+     * @return an unformatted string containing errors if any.
+     */
+    virtual const wxString& GetError() const;
 
     //-----</PUBLIC SCH_PLUGIN API>------------------------------------------------
 

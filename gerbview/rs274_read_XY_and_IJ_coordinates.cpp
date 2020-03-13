@@ -24,8 +24,9 @@
 
 #include <fctsys.h>
 #include <common.h>
+#include <math/util.h>      // for KiROUND
 
-#include <class_gerber_file_image.h>
+#include <gerber_file_image.h>
 #include <base_units.h>
 
 
@@ -69,7 +70,7 @@ int scaletoIU( double aCoord, bool isMetric )
 }
 
 
-wxPoint GERBER_FILE_IMAGE::ReadXYCoord( char*& Text )
+wxPoint GERBER_FILE_IMAGE::ReadXYCoord( char*& Text, bool aExcellonMode )
 {
     wxPoint pos;
     int     type_coord = 0, current_coord, nbdigits;
@@ -89,7 +90,7 @@ wxPoint GERBER_FILE_IMAGE::ReadXYCoord( char*& Text )
     text = line;
     while( *Text )
     {
-        if( (*Text == 'X') || (*Text == 'Y') )
+        if( (*Text == 'X') || (*Text == 'Y') || (*Text == 'A') )
         {
             type_coord = *Text;
             Text++;
@@ -111,7 +112,7 @@ wxPoint GERBER_FILE_IMAGE::ReadXYCoord( char*& Text )
 
             if( is_float )
             {
-                // When X or Y values are float numbers, they are given in mm or inches
+                // When X or Y (or A) values are float numbers, they are given in mm or inches
                 if( m_GerbMetric )  // units are mm
                     current_coord = KiROUND( atof( line ) * IU_PER_MILS / 0.0254 );
                 else    // units are inches
@@ -123,12 +124,25 @@ wxPoint GERBER_FILE_IMAGE::ReadXYCoord( char*& Text )
 
                 if( m_NoTrailingZeros )
                 {
-                    int min_digit =
-                        (type_coord == 'X') ? m_FmtLen.x : m_FmtLen.y;
-                    while( nbdigits < min_digit )
+                    // no trailing zero format, we need to add missing zeros.
+                    int digit_count = (type_coord == 'X') ? m_FmtLen.x : m_FmtLen.y;
+
+                    while( nbdigits < digit_count )
                     {
                         *(text++) = '0';
                         nbdigits++;
+                    }
+
+                    if( aExcellonMode )
+                    {
+                        // Truncate the extra digits if the len is more than expected
+                        // because the conversion to internal units expect exactly
+                        // digit_count digits
+                        while( nbdigits > digit_count )
+                        {
+                            *(text--) = 0;
+                            nbdigits--;
+                        }
                     }
 
                     *text = 0;
@@ -147,6 +161,11 @@ wxPoint GERBER_FILE_IMAGE::ReadXYCoord( char*& Text )
                 pos.x = current_coord;
             else if( type_coord == 'Y' )
                 pos.y = current_coord;
+            else if( type_coord == 'A' )
+            {
+                m_ArcRadius = current_coord;
+                m_LastArcDataType = ARC_INFO_TYPE_RADIUS;
+            }
 
             continue;
         }
@@ -250,6 +269,9 @@ wxPoint GERBER_FILE_IMAGE::ReadIJCoord( char*& Text )
     }
 
     m_IJPos = pos;
+    m_LastArcDataType = ARC_INFO_TYPE_CENTER;
+    m_LastCoordIsIJPos = true;
+
     return pos;
 }
 

@@ -65,7 +65,8 @@ public:
 
     // Imported from C3D_RENDER_BASE
     void SetCurWindowSize( const wxSize &aSize ) override;
-    bool Redraw(bool aIsMoving, REPORTER *aStatusTextReporter ) override;
+    bool Redraw( bool aIsMoving, REPORTER* aStatusTextReporter,
+            REPORTER* aWarningTextReporter ) override;
 
     int GetWaitForEditingTimeOut() override;
 
@@ -74,7 +75,7 @@ private:
     void initializeNewWindowSize();
     void opengl_init_pbo();
     void opengl_delete_pbo();
-    void reload( REPORTER *aStatusTextReporter );
+    void reload( REPORTER* aStatusTextReporter, REPORTER* aWarningTextReporter );
 
     void restart_render_state();
     void rt_render_tracing( GLubyte *ptrPBO , REPORTER *aStatusTextReporter );
@@ -131,7 +132,7 @@ private:
     unsigned long int m_stats_start_rendering_time;
 
     /// Save the number of blocks progress of the render
-    long m_nrBlocksRenderProgress;
+    size_t m_nrBlocksRenderProgress;
 
     CPOSTSHADER_SSAO m_postshader_ssao;
 
@@ -165,7 +166,7 @@ private:
     std::vector< SFVEC2UI > m_blockPositions;
 
     /// this flags if a position was already processed (cleared each new render)
-    std::vector< bool > m_blockPositionsWasProcessed;
+    std::vector< int > m_blockPositionsWasProcessed;
 
     /// this encodes the Morton code positions (on fast preview mode)
     std::vector< SFVEC2UI > m_blockPositionsFast;

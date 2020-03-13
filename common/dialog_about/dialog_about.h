@@ -2,7 +2,7 @@
  * This program source code file is part of KiCad, a free EDA CAD application.
  *
  * Copyright (C) 2010 Rafael Sokolowski <Rafael.Sokolowski@web.de>
- * Copyright (C) 2010-2017 KiCad Developers, see CHANGELOG.TXT for contributors.
+ * Copyright (C) 2010-2019 KiCad Developers, see CHANGELOG.TXT for contributors.
  *
  * This program is free software; you can redistribute it and/or
  * modify it under the terms of the GNU General Public License
@@ -43,14 +43,19 @@ private:
 
     // Icons for the various tabs of wxAuiNotebook
     wxBitmap     m_picInformation;
+    wxBitmap     m_picVersion;
     wxBitmap     m_picDevelopers;
     wxBitmap     m_picDocWriters;
     wxBitmap     m_picArtists;
     wxBitmap     m_picTranslators;
     wxBitmap     m_picPackagers;
     wxBitmap     m_picLicense;
+    wxString     m_titleName;
 
-    ABOUT_APP_INFO m_info;
+    ABOUT_APP_INFO& m_info;
+
+    static wxString m_bugReportUrl;
+    static wxString m_bugReportTemplate;
 
 public:
     DIALOG_ABOUT( EDA_BASE_FRAME* aParent, ABOUT_APP_INFO& aAppInfo );
@@ -64,12 +69,13 @@ private:
      * @param aFormatHtml = true to use a minimal HTML format
      * false to use a plain text
      */
-    void         buildVersionInfoData( wxString& aMsg, bool aFormatHtml );
+    void buildVersionInfoData( wxString& aMsg, bool aFormatHtml );
 
-    void         onHtmlLinkClicked( wxHtmlLinkEvent& event );
+    void onHtmlLinkClicked( wxHtmlLinkEvent& event );
 
-	virtual void onCopyVersionInfo( wxCommandEvent& event ) override;
-	virtual void onShowVersionInfo( wxCommandEvent& event ) override;
+    void onCopyVersionInfo( wxCommandEvent& event ) override;
+
+    void onReportBug( wxCommandEvent& event ) override;
 
     // Notebook pages
     wxFlexGridSizer* createFlexGridSizer();
@@ -85,7 +91,8 @@ private:
     void             createNotebookHtmlPage( wxAuiNotebook*  aParent,
                                              const wxString& aCaption,
                                              const wxBitmap& aIcon,
-                                             const wxString& aHtmlMessage );
+                                             const wxString& aHtmlMessage,
+                                             bool aSelection = false );
 
     wxStaticText* wxStaticTextMail( wxScrolledWindow* aParent, const wxString& email );
     wxStaticBitmap*  createStaticBitmap( wxScrolledWindow* aParent, wxBitmap* icon );

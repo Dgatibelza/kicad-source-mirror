@@ -42,10 +42,8 @@ class PadStaggeredZGridArray(PA.PadArray):
         @param aCentre      Center position
 
         """
-        PA.PadArray.__init__(self)
-        # this pad is more of a "context", we will use it as a source of
-        # pad data, but not actually add it
-        self.pad = aPad
+        super(PadStaggeredZGridArray, self).__init__(aPad)
+
         self.padCount = int(aPadCount)
         self.lineCount = int(aLineCount)
         self.linePitch = aLinePitch
@@ -149,6 +147,8 @@ class MicroMaTchWizard(FPWbase.FootprintWizard):
         # Draw connector outlineChassis
         width = pcbnew.FromMM(1.92) + (numPads * padPitch) / 2
         height = pcbnew.FromMM(5)
+
+        self.draw.SetLineThickness( pcbnew.FromMM( 0.12 ) ) #Default per KLC F5.1 as of 12/2018
 
         # Left part
         #  --

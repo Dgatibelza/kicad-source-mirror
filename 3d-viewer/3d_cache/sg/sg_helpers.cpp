@@ -49,7 +49,7 @@ void S3D::FormatFloat( std::string& result, double value )
 
     result = out.str();
 
-    size_t p = result.find( "." );
+    size_t p = result.find( '.' );
 
     // trim trailing 0 if appropriate
 
@@ -362,7 +362,7 @@ bool S3D::degenerate( glm::dvec3* pts )
         return true;
 
     return false;
-};
+}
 
 
 static void calcTriad( glm::dvec3* pts, glm::dvec3& tri )
@@ -503,7 +503,7 @@ bool S3D::CalcTriangleNormals( std::vector< SGPOINT > coords,
         // assign any skipped coordinates a normal of (0,0,1)
         while( item > idx )
         {
-            norms.push_back( SGVECTOR( 0, 0, 1 ) );
+            norms.emplace_back( 0, 0, 1 );
             ++idx;
         }
 
@@ -517,7 +517,7 @@ bool S3D::CalcTriangleNormals( std::vector< SGPOINT > coords,
             ++sT;
         }
 
-        norms.push_back( SGVECTOR( norm.x, norm.y, norm.z ) );
+        norms.emplace_back( norm.x, norm.y, norm.z );
 
         ++idx;
         ++sM;

@@ -29,6 +29,8 @@
 #include <wx/bitmap.h>
 #include <wx/dynarray.h>
 
+#include "bitmap_types.h"
+
 class CONTRIBUTOR;
 
 WX_DECLARE_OBJARRAY( CONTRIBUTOR, CONTRIBUTORS );
@@ -96,11 +98,21 @@ public:
     void SetBuildVersion( const wxString& version ) { buildVersion = version; }
     wxString& GetBuildVersion() { return buildVersion; }
 
+    void SetBuildDate( const wxString& date ) { buildDate = date; }
+    wxString& GetBuildDate() { return buildDate; }
+
     void SetLibVersion( const wxString& version ) { libVersion = version; }
     wxString& GetLibVersion() { return libVersion; }
 
     void SetAppIcon( const wxIcon& aIcon ) { m_appIcon = aIcon; }
     wxIcon& GetAppIcon() { return m_appIcon; }
+
+    ///> Wrapper to manage memory allocation for bitmaps
+    wxBitmap* CreateKiBitmap( BITMAP_DEF aBitmap )
+    {
+        m_bitmaps.emplace_back( KiBitmapNew( aBitmap ) );
+        return m_bitmaps.back().get();
+    }
 
 private:
     CONTRIBUTORS developers;
@@ -115,9 +127,13 @@ private:
     wxString     copyright;
     wxString     appName;
     wxString     buildVersion;
+    wxString     buildDate;
     wxString     libVersion;
 
     wxIcon       m_appIcon;
+
+    ///> Bitmaps to be freed when the dialog is closed
+    std::vector<std::unique_ptr<wxBitmap>> m_bitmaps;
 };
 
 
@@ -127,9 +143,9 @@ private:
  *
  * A contributor consists of the following mandatory information:
  * - Name
- * - EMail address
  *
  * Each contributor can have optional information assigned like:
+ * - EMail address
  * - A category
  * - A category specific icon
  */
@@ -137,12 +153,14 @@ class CONTRIBUTOR
 {
 public:
     CONTRIBUTOR( const wxString& aName,
-                 const wxString& aEmail,
+                 const wxString& aEmail = wxEmptyString,
+                 const wxString& aUrl = wxEmptyString,
                  const wxString& aCategory = wxEmptyString,
                  wxBitmap*       aIcon = NULL )
     {
         m_checked = false;
         m_name = aName;
+        m_url = aUrl,
         m_email = aEmail;
         m_category = aCategory;
         m_icon = aIcon;
@@ -152,6 +170,7 @@ public:
 
     wxString& GetName()     { return m_name; }
     wxString& GetEMail()    { return m_email; }
+    wxString& GetUrl()      { return m_url; }
     wxString& GetCategory() { return m_category; }
     wxBitmap* GetIcon()     { return m_icon; }
     void SetChecked( bool status ) { m_checked = status; }
@@ -160,6 +179,7 @@ public:
 private:
     wxString  m_name;
     wxString  m_email;
+    wxString  m_url;
     wxString  m_category;
     wxBitmap* m_icon;
     bool      m_checked;

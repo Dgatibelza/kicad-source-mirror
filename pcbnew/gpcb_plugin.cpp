@@ -2,7 +2,7 @@
  * This program source code file is part of KiCad, a free EDA CAD application.
  *
  * Copyright (C) 2012 Wayne Stambaugh <stambaughw@gmail.com>
- * Copyright (C) 1992-2017 KiCad Developers, see AUTHORS.txt for contributors.
+ * Copyright (C) 1992-2020 KiCad Developers, see AUTHORS.txt for contributors.
  *
  * This program is free software; you can redistribute it and/or
  * modify it under the terms of the GNU General Public License
@@ -33,6 +33,8 @@
 #include <trigo.h>
 #include <wildcards_and_files_ext.h>
 #include <filter_reader.h>
+#include <trace_helpers.h>
+#include <math/util.h>      // for KiROUND
 
 #include <class_board.h>
 #include <class_module.h>
@@ -47,29 +49,6 @@
 #include <boost/ptr_container/ptr_map.hpp>
 #include <memory.h>
 
-/**
- * @ingroup trace_env_vars
- *
- * Flag to enable GEDA PCB plugin debug output.
- */
-static const wxString traceFootprintLibrary = wxT( "KICAD_TRACE_GEDA_PLUGIN" );
-
-#ifdef DEBUG
-static void inline traceParams( wxArrayString& aParams )
-{
-    wxString tmp;
-
-    for( unsigned i = 0;  i < aParams.GetCount();  i++ )
-    {
-        if( aParams[i].IsEmpty() )
-            tmp << wxT( "\"\" " );
-        else
-            tmp << aParams[i] << wxT( " " );
-    }
-
-    wxLogTrace( traceFootprintLibrary, tmp );
-}
-#endif
 
 static inline long parseInt( const wxString& aValue, double aScalar )
 {
@@ -119,16 +98,8 @@ static inline long parseInt( const wxString& aValue, double aScalar )
 }
 
 
-// Tracing for token parameter arrays.
-#ifdef DEBUG
-#define TRACE_PARAMS( arr )  traceParams( arr );
-#else
-#define TRACE_PARAMS( arr )                            // Expands to nothing on non-debug builds.
-#endif
-
-
 /**
- * Class GPCB_FPL_CACHE_ITEM
+ * GPCB_FPL_CACHE_ITEM
  * is helper class for creating a footprint library cache.
  *
  * The new footprint library design is a file path of individual module files
@@ -138,41 +109,21 @@ static inline long parseInt( const wxString& aValue, double aScalar )
  */
 class GPCB_FPL_CACHE_ITEM
 {
-    wxFileName         m_file_name; ///< The the full file name and path of the footprint to cache.
-    bool               m_writable;  ///< Writability status of the footprint file.
-    wxDateTime         m_mod_time;  ///< The last file modified time stamp.
+    WX_FILENAME             m_filename; ///< The the full file name and path of the footprint to cache.
     std::unique_ptr<MODULE> m_module;
 
 public:
-    GPCB_FPL_CACHE_ITEM( MODULE* aModule, const wxFileName& aFileName );
+    GPCB_FPL_CACHE_ITEM( MODULE* aModule, const WX_FILENAME& aFileName );
 
-    wxString    GetName() const { return m_file_name.GetDirs().Last(); }
-    wxFileName  GetFileName() const { return m_file_name; }
-    bool        IsModified() const;
-    MODULE*     GetModule() const { return m_module.get(); }
-    void        UpdateModificationTime() { m_mod_time = m_file_name.GetModificationTime(); }
+    WX_FILENAME  GetFileName() const { return m_filename; }
+    MODULE*      GetModule()   const { return m_module.get(); }
 };
 
 
-GPCB_FPL_CACHE_ITEM::GPCB_FPL_CACHE_ITEM( MODULE* aModule, const wxFileName& aFileName ) :
+GPCB_FPL_CACHE_ITEM::GPCB_FPL_CACHE_ITEM( MODULE* aModule, const WX_FILENAME& aFileName ) :
+    m_filename( aFileName ),
     m_module( aModule )
 {
-    m_file_name = aFileName;
-    m_writable = true;          // temporary init
-
-    if( m_file_name.FileExists() )
-        m_mod_time = m_file_name.GetModificationTime();
-    else
-        m_mod_time.Now();
-}
-
-
-bool GPCB_FPL_CACHE_ITEM::IsModified() const
-{
-    if( !m_file_name.FileExists() )
-        return false;
-
-    return m_file_name.GetModificationTime() != m_mod_time;
 }
 
 
@@ -185,8 +136,12 @@ class GPCB_FPL_CACHE
 {
     GPCB_PLUGIN*    m_owner;        /// Plugin object that owns the cache.
     wxFileName      m_lib_path;     /// The path of the library.
-    wxDateTime      m_mod_time;     /// Footprint library path modified time stamp.
     MODULE_MAP      m_modules;      /// Map of footprint file name per MODULE*.
+
+    bool            m_cache_dirty;      // Stored separately because it's expensive to check
+                                        // m_cache_timestamp against all the files.
+    long long       m_cache_timestamp;  // A hash of the timestamps for all the footprint
+                                        // files.
 
     MODULE* parseMODULE( LINE_READER* aLineReader );
 
@@ -224,7 +179,6 @@ public:
     GPCB_FPL_CACHE( GPCB_PLUGIN* aOwner, const wxString& aLibraryPath );
 
     wxString GetPath() const { return m_lib_path.GetPath(); }
-    wxDateTime GetLastModificationTime() const { return m_mod_time; }
     bool IsWritable() const { return m_lib_path.IsOk() && m_lib_path.IsDirWritable(); }
     MODULE_MAP& GetModules() { return m_modules; }
 
@@ -238,35 +192,19 @@ public:
 
     void Remove( const wxString& aFootprintName );
 
-    wxDateTime GetLibModificationTime() const;
+    /**
+     * Function GetTimestamp
+     * Generate a timestamp representing all source files in the cache (including the
+     * parent directory).
+     * Timestamps should not be considered ordered.  They either match or they don't.
+     */
+    static long long GetTimestamp( const wxString& aLibPath );
 
     /**
      * Function IsModified
-     * check if the footprint cache has been modified relative to \a aLibPath
-     * and \a aFootprintName.
-     *
-     * @param aLibPath is a path to test the current cache library path against.
-     * @param aFootprintName is the footprint name in the cache to test.  If the footprint
-     *                       name is empty, the all the footprint files in the library are
-     *                       checked to see if they have been modified.
-     * @return true if the cache has been modified.
+     * Return true if the cache is not up-to-date.
      */
-    bool IsModified( const wxString& aLibPath,
-                     const wxString& aFootprintName = wxEmptyString ) const;
-
-    /**
-     * Function IsPath
-     * checks if \a aPath is the same as the current cache path.
-     *
-     * This tests paths by converting \a aPath using the native separators.  Internally
-     * #FP_CACHE stores the current path using native separators.  This prevents path
-     * miscompares on Windows due to the fact that paths can be stored with / instead of \\
-     * in the footprint library table.
-     *
-     * @param aPath is the library path to test against.
-     * @return true if \a aPath is the same as the cache path.
-     */
-    bool IsPath( const wxString& aPath ) const;
+    bool IsModified();
 };
 
 
@@ -274,20 +212,16 @@ GPCB_FPL_CACHE::GPCB_FPL_CACHE( GPCB_PLUGIN* aOwner, const wxString& aLibraryPat
 {
     m_owner = aOwner;
     m_lib_path.SetPath( aLibraryPath );
-}
-
-
-wxDateTime GPCB_FPL_CACHE::GetLibModificationTime() const
-{
-    if( !m_lib_path.DirExists() )
-        return wxDateTime::Now();
-
-    return m_lib_path.GetModificationTime();
+    m_cache_timestamp = 0;
+    m_cache_dirty = true;
 }
 
 
 void GPCB_FPL_CACHE::Load()
 {
+    m_cache_dirty = false;
+    m_cache_timestamp = 0;
+
     // Note: like our .pretty footprint libraries, the gpcb footprint libraries are folders,
     // and the footprints are the .fp files inside this folder.
 
@@ -295,21 +229,25 @@ void GPCB_FPL_CACHE::Load()
 
     if( !dir.IsOpened() )
     {
-        THROW_IO_ERROR( wxString::Format( _( "footprint library path '%s' does not exist" ),
+        THROW_IO_ERROR( wxString::Format( _( "footprint library path \"%s\" does not exist" ),
                                           m_lib_path.GetPath().GetData() ) );
     }
 
-    wxString fpFileName;
-    wxString wildcard = wxT( "*." ) + GedaPcbFootprintLibFileExtension;
+    wxString fullName;
+    wxString fileSpec = wxT( "*." ) + GedaPcbFootprintLibFileExtension;
 
-    if( !dir.GetFirst( &fpFileName, wildcard, wxDIR_FILES ) )
+    // wxFileName construction is egregiously slow.  Construct it once and just swap out
+    // the filename thereafter.
+    WX_FILENAME fn( m_lib_path.GetPath(), wxT( "dummyName" ) );
+
+    if( !dir.GetFirst( &fullName, fileSpec ) )
         return;
 
     wxString cacheErrorMsg;
 
     do
     {
-        wxFileName fn( m_lib_path.GetPath(), fpFileName );
+        fn.SetFullName( fullName );
 
         // Queue I/O errors so only files that fail to parse don't get loaded.
         try
@@ -321,8 +259,8 @@ void GPCB_FPL_CACHE::Load()
             MODULE*          footprint = parseMODULE( &reader );
 
             // The footprint name is the file name without the extension.
-            footprint->SetFPID( LIB_ID( fn.GetName() ) );
-            m_modules.insert( name, new GPCB_FPL_CACHE_ITEM( footprint, fn.GetName() ) );
+            footprint->SetFPID( LIB_ID( wxEmptyString, fn.GetName() ) );
+            m_modules.insert( name, new GPCB_FPL_CACHE_ITEM( footprint, fn ) );
         }
         catch( const IO_ERROR& ioe )
         {
@@ -331,12 +269,7 @@ void GPCB_FPL_CACHE::Load()
 
             cacheErrorMsg += ioe.What();
         }
-    } while( dir.GetNext( &fpFileName ) );
-
-    // Remember the file modification time of library file when the
-    // cache snapshot was made, so that in a networked environment we will
-    // reload the cache as needed.
-    m_mod_time = GetLibModificationTime();
+    } while( dir.GetNext( &fullName ) );
 
     if( !cacheErrorMsg.IsEmpty() )
         THROW_IO_ERROR( cacheErrorMsg );
@@ -351,7 +284,7 @@ void GPCB_FPL_CACHE::Remove( const wxString& aFootprintName )
 
     if( it == m_modules.end() )
     {
-        THROW_IO_ERROR( wxString::Format( _( "library <%s> has no footprint '%s' to delete" ),
+        THROW_IO_ERROR( wxString::Format( _( "library \"%s\" has no footprint \"%s\" to delete" ),
                                           m_lib_path.GetPath().GetData(),
                                           aFootprintName.GetData() ) );
     }
@@ -363,59 +296,19 @@ void GPCB_FPL_CACHE::Remove( const wxString& aFootprintName )
 }
 
 
-bool GPCB_FPL_CACHE::IsPath( const wxString& aPath ) const
+bool GPCB_FPL_CACHE::IsModified()
 {
-    // Converts path separators to native path separators
-    wxFileName newPath;
-    newPath.AssignDir( aPath );
+    m_cache_dirty = m_cache_dirty || GetTimestamp( m_lib_path.GetFullPath() ) != m_cache_timestamp;
 
-    return m_lib_path == newPath;
+    return m_cache_dirty;
 }
 
 
-bool GPCB_FPL_CACHE::IsModified( const wxString& aLibPath, const wxString& aFootprintName ) const
+long long GPCB_FPL_CACHE::GetTimestamp( const wxString& aLibPath )
 {
-    // The library is modified if the library path got deleted or changed.
-    if( !m_lib_path.DirExists() || !IsPath( aLibPath ) )
-        return true;
+    wxString fileSpec = wxT( "*." ) + GedaPcbFootprintLibFileExtension;
 
-    // If no footprint was specified, check every file modification time against the time
-    // it was loaded.
-    if( aFootprintName.IsEmpty() )
-    {
-        for( MODULE_CITER it = m_modules.begin();  it != m_modules.end();  ++it )
-        {
-            wxFileName fn = m_lib_path;
-
-            fn.SetName( it->second->GetFileName().GetName() );
-            fn.SetExt( GedaPcbFootprintLibFileExtension );
-
-            if( !fn.FileExists() )
-            {
-                wxLogTrace( traceFootprintLibrary,
-                            wxT( "Footprint cache file '%s' does not exist." ),
-                            fn.GetFullPath().GetData() );
-                return true;
-            }
-
-            if( it->second->IsModified() )
-            {
-                wxLogTrace( traceFootprintLibrary,
-                            wxT( "Footprint cache file '%s' has been modified." ),
-                            fn.GetFullPath().GetData() );
-                return true;
-            }
-        }
-    }
-    else
-    {
-        MODULE_CITER it = m_modules.find( TO_UTF8( aFootprintName ) );
-
-        if( it == m_modules.end() || it->second->IsModified() )
-            return true;
-    }
-
-    return false;
+    return TimestampDir( aLibPath, fileSpec );
 }
 
 
@@ -514,7 +407,7 @@ MODULE* GPCB_FPL_CACHE::parseMODULE( LINE_READER* aLineReader )
 
     // gEDA/pcb aligns top/left, not pcbnew's default, center/center.
     // Compensate for this by shifting the insertion point instead of the
-    // aligment, because alignment isn't changeable in the GUI.
+    // alignment, because alignment isn't changeable in the GUI.
     textPos.x = textPos.x + twsize * module->GetReference().Len() / 2;
     textPos.y += thsize / 2;
 
@@ -560,7 +453,7 @@ MODULE* GPCB_FPL_CACHE::parseMODULE( LINE_READER* aLineReader )
                 conv_unit = NEW_GPCB_UNIT_CONV;
         }
 
-        wxLogTrace( traceFootprintLibrary, wxT( "%s parameter count = %d." ),
+        wxLogTrace( traceGedaPcbPlugin, wxT( "%s parameter count = %d." ),
                     GetChars( parameters[0] ), paramCnt );
 
         // Parse a line with format: ElementLine [X1 Y1 X2 Y2 Thickness]
@@ -582,7 +475,7 @@ MODULE* GPCB_FPL_CACHE::parseMODULE( LINE_READER* aLineReader )
                                        parseInt( parameters[5], conv_unit ) ) );
             drawSeg->SetWidth( parseInt( parameters[6], conv_unit ) );
             drawSeg->SetDrawCoord();
-            module->GraphicalItemsList().PushBack( drawSeg );
+            module->Add( drawSeg );
             continue;
         }
 
@@ -600,7 +493,7 @@ MODULE* GPCB_FPL_CACHE::parseMODULE( LINE_READER* aLineReader )
             EDGE_MODULE* drawSeg = new EDGE_MODULE( module.get() );
             drawSeg->SetLayer( F_SilkS );
             drawSeg->SetShape( S_ARC );
-            module->GraphicalItemsList().PushBack( drawSeg );
+            module->Add( drawSeg );
 
             // for and arc: ibuf[3] = ibuf[4]. Pcbnew does not know ellipses
             int     radius = ( parseInt( parameters[4], conv_unit ) +
@@ -704,8 +597,9 @@ MODULE* GPCB_FPL_CACHE::parseMODULE( LINE_READER* aLineReader )
             pad->SetSize( wxSize( KiROUND( EuclideanNorm( delta ) ) + width,
                                   width ) );
 
-            padPos += module->GetPosition();
+            // Set the relative position before adjusting the absolute position
             pad->SetPos0( padPos );
+            padPos += module->GetPosition();
             pad->SetPosition( padPos );
 
             if( !testFlags( parameters[paramCnt-2], 0x0100, wxT( "square" ) ) )
@@ -785,8 +679,10 @@ MODULE* GPCB_FPL_CACHE::parseMODULE( LINE_READER* aLineReader )
             }
 
             pad->SetDrillSize( wxSize( drillSize, drillSize ) );
-            padPos += module->GetPosition();
+
+            // Set the relative position before adjusting the absolute position
             pad->SetPos0( padPos );
+            padPos += module->GetPosition();
             pad->SetPosition( padPos );
 
             if( pad->GetShape() == PAD_SHAPE_CIRCLE  &&  pad->GetSize().x != pad->GetSize().y )
@@ -833,7 +729,7 @@ void GPCB_FPL_CACHE::parseParameters( wxArrayString& aParameterList, LINE_READER
             // of a keyword definition.
             if( aParameterList.GetCount() == 1 )
             {
-                TRACE_PARAMS( aParameterList );
+                wxLogTrace( traceGedaPcbPlugin, dump( aParameterList ) );
                 return;
             }
 
@@ -849,7 +745,7 @@ void GPCB_FPL_CACHE::parseParameters( wxArrayString& aParameterList, LINE_READER
 
             tmp.Append( key );
             aParameterList.Add( tmp );
-            TRACE_PARAMS( aParameterList );
+            wxLogTrace( traceGedaPcbPlugin, dump( aParameterList ) );
             return;
 
         case '\n':
@@ -857,7 +753,7 @@ void GPCB_FPL_CACHE::parseParameters( wxArrayString& aParameterList, LINE_READER
             // Element descriptions can span multiple lines.
             line = aLineReader->ReadLine();
 
-            // Fall through is intentional.
+            // Intentionally fall through
 
         case '\t':
         case ' ':
@@ -960,9 +856,9 @@ void GPCB_PLUGIN::init( const PROPERTIES* aProperties )
 }
 
 
-void GPCB_PLUGIN::cacheLib( const wxString& aLibraryPath, const wxString& aFootprintName )
+void GPCB_PLUGIN::validateCache( const wxString& aLibraryPath, bool checkModified  )
 {
-    if( !m_cache || m_cache->IsModified( aLibraryPath, aFootprintName ) )
+    if( !m_cache || ( checkModified && m_cache->IsModified() ) )
     {
         // a spectacular episode in memory management:
         delete m_cache;
@@ -972,54 +868,56 @@ void GPCB_PLUGIN::cacheLib( const wxString& aLibraryPath, const wxString& aFootp
 }
 
 
-void GPCB_PLUGIN::FootprintEnumerate( wxArrayString&    aFootprintNames,
-                                      const wxString&   aLibraryPath,
-                                      const PROPERTIES* aProperties )
+void GPCB_PLUGIN::FootprintEnumerate( wxArrayString& aFootprintNames, const wxString& aLibraryPath,
+                                      bool aBestEfforts, const PROPERTIES* aProperties )
 {
-    LOCALE_IO     toggle;     // toggles on, then off, the C locale.
-    wxDir         dir( aLibraryPath );
+    LOCALE_IO toggle;     // toggles on, then off, the C locale.
+    wxDir     dir( aLibraryPath );
+    wxString  errorMsg;
 
     if( !dir.IsOpened() )
     {
-        THROW_IO_ERROR( wxString::Format( _( "footprint library path '%s' does not exist" ),
-                                          GetChars( aLibraryPath ) ) );
+        if( aBestEfforts )
+            return;
+        else
+        {
+            THROW_IO_ERROR( wxString::Format( _( "footprint library path \"%s\" does not exist" ),
+                                              aLibraryPath ) );
+        }
     }
 
     init( aProperties );
 
-    wxString errorMsg;
-
-    // Some of the files may have been parsed correctly so we want to add the valid files to
-    // the library.
     try
     {
-        cacheLib( aLibraryPath );
+        validateCache( aLibraryPath );
     }
     catch( const IO_ERROR& ioe )
     {
         errorMsg = ioe.What();
     }
 
-    const MODULE_MAP& mods = m_cache->GetModules();
+    // Some of the files may have been parsed correctly so we want to add the valid files to
+    // the library.
 
-    for( MODULE_CITER it = mods.begin();  it != mods.end();  ++it )
-    {
+    for( MODULE_CITER it = m_cache->GetModules().begin(); it != m_cache->GetModules().end(); ++it )
         aFootprintNames.Add( FROM_UTF8( it->first.c_str() ) );
-    }
 
-    if( !errorMsg.IsEmpty() )
+    if( !errorMsg.IsEmpty() && !aBestEfforts )
         THROW_IO_ERROR( errorMsg );
 }
 
 
-MODULE* GPCB_PLUGIN::FootprintLoad( const wxString& aLibraryPath, const wxString& aFootprintName,
-                                    const PROPERTIES* aProperties )
+const MODULE* GPCB_PLUGIN::getFootprint( const wxString& aLibraryPath,
+                                         const wxString& aFootprintName,
+                                         const PROPERTIES* aProperties,
+                                         bool checkModified )
 {
     LOCALE_IO   toggle;     // toggles on, then off, the C locale.
 
     init( aProperties );
 
-    cacheLib( aLibraryPath, aFootprintName );
+    validateCache( aLibraryPath, checkModified );
 
     const MODULE_MAP& mods = m_cache->GetModules();
 
@@ -1030,8 +928,23 @@ MODULE* GPCB_PLUGIN::FootprintLoad( const wxString& aLibraryPath, const wxString
         return NULL;
     }
 
-    // copy constructor to clone the already loaded MODULE
-    return new MODULE( *it->second->GetModule() );
+    return it->second->GetModule();
+}
+
+
+const MODULE* GPCB_PLUGIN::GetEnumeratedFootprint( const wxString& aLibraryPath,
+                                                   const wxString& aFootprintName,
+                                                   const PROPERTIES* aProperties )
+{
+    return getFootprint( aLibraryPath, aFootprintName, aProperties, false );
+}
+
+
+MODULE* GPCB_PLUGIN::FootprintLoad( const wxString& aLibraryPath, const wxString& aFootprintName,
+                                    const PROPERTIES* aProperties )
+{
+    const MODULE* footprint = getFootprint( aLibraryPath, aFootprintName, aProperties, true );
+    return footprint ? (MODULE*) footprint->Duplicate() : nullptr;
 }
 
 
@@ -1042,11 +955,11 @@ void GPCB_PLUGIN::FootprintDelete( const wxString& aLibraryPath, const wxString&
 
     init( aProperties );
 
-    cacheLib( aLibraryPath );
+    validateCache( aLibraryPath );
 
     if( !m_cache->IsWritable() )
     {
-        THROW_IO_ERROR( wxString::Format( _( "Library '%s' is read only" ),
+        THROW_IO_ERROR( wxString::Format( _( "Library \"%s\" is read only" ),
                                           aLibraryPath.GetData() ) );
     }
 
@@ -1065,7 +978,7 @@ bool GPCB_PLUGIN::FootprintLibDelete( const wxString& aLibraryPath, const PROPER
 
     if( !fn.IsDirWritable() )
     {
-        THROW_IO_ERROR( wxString::Format( _( "user does not have permission to delete directory '%s'" ),
+        THROW_IO_ERROR( wxString::Format( _( "user does not have permission to delete directory \"%s\"" ),
                                           aLibraryPath.GetData() ) );
     }
 
@@ -1073,7 +986,7 @@ bool GPCB_PLUGIN::FootprintLibDelete( const wxString& aLibraryPath, const PROPER
 
     if( dir.HasSubDirs() )
     {
-        THROW_IO_ERROR( wxString::Format( _( "library directory '%s' has unexpected sub-directories" ),
+        THROW_IO_ERROR( wxString::Format( _( "library directory \"%s\" has unexpected sub-directories" ),
                                           aLibraryPath.GetData() ) );
     }
 
@@ -1092,7 +1005,7 @@ bool GPCB_PLUGIN::FootprintLibDelete( const wxString& aLibraryPath, const PROPER
 
             if( tmp.GetExt() != KiCadFootprintFileExtension )
             {
-                THROW_IO_ERROR( wxString::Format( _( "unexpected file '%s' was found in library path '%s'" ),
+                THROW_IO_ERROR( wxString::Format( _( "unexpected file \"%s\" was found in library path \"%s\"" ),
                                                   files[i].GetData(), aLibraryPath.GetData() ) );
             }
         }
@@ -1103,14 +1016,14 @@ bool GPCB_PLUGIN::FootprintLibDelete( const wxString& aLibraryPath, const PROPER
         }
     }
 
-    wxLogTrace( traceFootprintLibrary, wxT( "Removing footprint library '%s'" ),
+    wxLogTrace( traceGedaPcbPlugin, wxT( "Removing footprint library '%s'" ),
                 aLibraryPath.GetData() );
 
     // Some of the more elaborate wxRemoveFile() crap puts up its own wxLog dialog
     // we don't want that.  we want bare metal portability with no UI here.
     if( !wxRmdir( aLibraryPath ) )
     {
-        THROW_IO_ERROR( wxString::Format( _( "footprint library '%s' cannot be deleted" ),
+        THROW_IO_ERROR( wxString::Format( _( "footprint library \"%s\" cannot be deleted" ),
                                           aLibraryPath.GetData() ) );
     }
 
@@ -1131,13 +1044,19 @@ bool GPCB_PLUGIN::FootprintLibDelete( const wxString& aLibraryPath, const PROPER
 }
 
 
+long long GPCB_PLUGIN::GetLibraryTimestamp( const wxString& aLibraryPath ) const
+{
+    return GPCB_FPL_CACHE::GetTimestamp( aLibraryPath );
+}
+
+
 bool GPCB_PLUGIN::IsFootprintLibWritable( const wxString& aLibraryPath )
 {
     LOCALE_IO   toggle;
 
     init( NULL );
 
-    cacheLib( aLibraryPath );
+    validateCache( aLibraryPath );
 
     return m_cache->IsWritable();
 }

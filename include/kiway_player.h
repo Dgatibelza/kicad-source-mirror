@@ -27,75 +27,23 @@
 
 #include <wx/frame.h>
 #include <vector>
-#include <wxstruct.h>
+#include <kiway_holder.h>
+#include <eda_base_frame.h>
 
 
 class KIWAY;
 class PROJECT;
 struct KIFACE;
 class KIFACE_I;
-
-#define VTBL_ENTRY          virtual
-
-
-/**
- * Class KIWAY_HOLDER
- * is a mix in class which holds the location of a wxWindow's KIWAY.  It allows
- * calls to Kiway() and SetKiway().
- *
- * Known to be used in at least DIALOG_SHIM and KIWAY_PLAYER classes.
- */
-class KIWAY_HOLDER
-{
-public:
-    KIWAY_HOLDER( KIWAY* aKiway ) :
-        m_kiway( aKiway )
-    {}
-
-    /**
-     * Function Kiway
-     * returns a reference to the KIWAY that this object has an opportunity
-     * to participate in.  A KIWAY_HOLDER is not necessarily a KIWAY_PLAYER.
-     */
-    KIWAY& Kiway() const
-    {
-        wxASSERT( m_kiway );    // smoke out bugs in Debug build, then Release runs fine.
-        return *m_kiway;
-    }
-
-    /**
-     * Function Prj
-     * returns a reference to the PROJECT "associated with" this KIWAY.
-     */
-    PROJECT& Prj() const;
-
-    /**
-     * Function SetKiway
-     *
-     * @param aDest is the recipient of aKiway pointer.
-     *  It is only used for debugging, since "this" is not a wxWindow*.  "this" is
-     *  a KIWAY_HOLDER mix-in.
-     *
-     * @param aKiway is often from a parent window, or from KIFACE::CreateWindow().
-     */
-    void SetKiway( wxWindow* aDest, KIWAY* aKiway );
-
-private:
-    // private, all setting is done through SetKiway().
-    KIWAY*          m_kiway;            // no ownership.
-};
-
-
+class TOOL_MANAGER;
 class KIWAY_EXPRESS;
 
 #define WX_EVENT_LOOP      wxGUIEventLoop
-
-
 class WX_EVENT_LOOP;
 
 
 /**
- * Class KIWAY_PLAYER
+ * KIWAY_PLAYER
  * is a wxFrame capable of the OpenProjectFiles function, meaning it can load
  * a portion of a KiCad project.  Because this class provides a dummy implementation,
  * it is not a certainty that all classes which inherit from this clas intend to
@@ -108,7 +56,7 @@ class WX_EVENT_LOOP;
 #ifdef SWIG
 class KIWAY_PLAYER : public wxFrame, public KIWAY_HOLDER
 #else
-class KIWAY_PLAYER : public EDA_BASE_FRAME, public KIWAY_HOLDER
+class KIWAY_PLAYER : public EDA_BASE_FRAME
 #endif
 {
 public:
@@ -167,7 +115,7 @@ public:
      *
      * @return bool - true if all requested files were opened OK, else false.
      */
-    VTBL_ENTRY bool OpenProjectFiles( const std::vector<wxString>& aFileList, int aCtl = 0 )
+    virtual bool OpenProjectFiles( const std::vector<wxString>& aFileList, int aCtl = 0 )
     {
         // overload me for your wxFrame type.
 
@@ -178,48 +126,6 @@ public:
 
         return false;
     }
-
-    /**
-     * Function ImportFile
-     *  load the given filename but sets the path to the current project path.
-     *  @param full filepath of file to be imported.
-     *  @param aFileType enum value for filetype
-     */
-    VTBL_ENTRY bool ImportFile( const wxString& aFileName, int aFileType )
-    {
-        // overload me for your wxFrame type.
-
-        return false;
-    }
-
-    /**
-     * Function ReadPcbNetlist
-     *  provides access to PcbNew's function ReadPcbNetlist.
-     */
-    VTBL_ENTRY void ReadPcbNetlist( const wxString& aNetlistFileName,
-            const wxString& aCmpFileName,
-            REPORTER* aReporter,
-            bool aChangeFootprint,
-            bool aDeleteBadTracks,
-            bool aDeleteExtraFootprints,
-            bool aSelectByTimestamp,
-            bool aDeleteSinglePadNets,
-            bool aIsDryRun )
-    {
-    };
-
-    /**
-     * Function ReadPcbNetlist
-     *  provides access to Eeschema's function CreateNetlist.
-     */
-    VTBL_ENTRY bool CreateNetlist( int aFormat,
-            const wxString& aFullFileName,
-            unsigned aNetlistOptions,
-            REPORTER* aReporter = NULL,
-            bool silent = false )
-    {
-        return false;
-    };
 
 
     /**
@@ -237,7 +143,7 @@ public:
      * @return bool - true if frame implementation called KIWAY_PLAYER::DismissModal()
      *  with aRetVal of true.
      */
-    VTBL_ENTRY bool ShowModal( wxString* aResult = NULL, wxWindow* aResultantFocusWindow = NULL );
+    virtual bool ShowModal( wxString* aResult = NULL, wxWindow* aResultantFocusWindow = NULL );
 
     //----</Cross Module API>----------------------------------------------------
 
@@ -254,10 +160,8 @@ public:
      */
     bool Destroy() override;
 
-protected:
-
     bool IsModal()                      { return m_modal; }
-    void SetModal( bool aIsModal )       { m_modal = aIsModal; }
+    void SetModal( bool aIsModal )      { m_modal = aIsModal; }
 
     /**
      * Function IsDismissed
@@ -269,6 +173,8 @@ protected:
 
     void DismissModal( bool aRetVal, const wxString& aResult = wxEmptyString );
 
+protected:
+
     /// event handler, routes to derivative specific virtual KiwayMailIn()
     void kiway_express( KIWAY_EXPRESS& aEvent );
 
@@ -277,13 +183,6 @@ protected:
      * is an event handler called on a language menu selection.
      */
     void language_change( wxCommandEvent& event );
-
-    /**
-     * Function OnChangeIconsOptions
-     * is an event handler called on a icons options in menus or toolbars
-     * menu selection.
-     */
-    void OnChangeIconsOptions( wxCommandEvent& event ) override;
 
     // variables for modal behavior support, only used by a few derivatives.
     bool            m_modal;        // true if frame is intended to be modal, not modeless

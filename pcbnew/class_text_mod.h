@@ -2,7 +2,7 @@
  * This program source code file is part of KiCad, a free EDA CAD application.
  *
  * Copyright (C) 2004 Jean-Pierre Charras, jaen-pierre.charras@gipsa-lab.inpg.com
- * Copyright (C) 1992-2017 KiCad Developers, see AUTHORS.txt for contributors.
+ * Copyright (C) 1992-2019 KiCad Developers, see AUTHORS.txt for contributors.
  *
  * This program is free software; you can redistribute it and/or
  * modify it under the terms of the GNU General Public License
@@ -38,9 +38,9 @@
 
 class LINE_READER;
 class EDA_RECT;
-class EDA_DRAW_PANEL;
 class MODULE;
 class MSG_PANEL_ITEM;
+class PCB_BASE_FRAME;
 
 
 #define UMBILICAL_COLOR   LIGHTBLUE
@@ -74,7 +74,12 @@ public:
         return aItem && PCB_MODULE_TEXT_T == aItem->Type();
     }
 
-    virtual const wxPoint& GetPosition() const override
+    bool Matches( wxFindReplaceData& aSearchData, void* aAuxData ) override
+    {
+        return BOARD_ITEM::Matches( GetShownText(), aSearchData );
+    }
+
+    virtual const wxPoint GetPosition() const override
     {
         return EDA_TEXT::GetTextPos();
     }
@@ -87,14 +92,35 @@ public:
 
     void SetTextAngle( double aAngle );
 
+    /**
+     * Called when rotating the parent footprint.
+     */
+    void KeepUpright( double aOldOrientation, double aNewOrientation );
+
+    /**
+     * @return force the text rotation to be always between -90 .. 90 deg. Otherwise the text is not easy to read
+     * if false, the text rotation is free.
+     */
+    bool IsKeepUpright()
+    {
+        return m_keepUpright;
+    }
+
+    void SetKeepUpright( bool aKeepUpright )
+    {
+        m_keepUpright = aKeepUpright;
+    }
+
     /// Rotate text, in footprint editor
     /// (for instance in footprint rotation transform)
     void Rotate( const wxPoint& aOffset, double aAngle ) override;
 
     /// Flip entity during module flip
-    void Flip( const wxPoint& aCentre ) override;
+    void Flip( const wxPoint& aCentre, bool aFlipLeftRight ) override;
 
-    /// Mirror text position in footprint edition
+    bool IsParentFlipped() const;
+
+    /// Mirror text position in footprint editing
     /// the text itself is not mirrored, and the layer not modified,
     /// only position is mirrored.
     /// (use Flip to change layer to its paired and mirror the text in fp editor).
@@ -156,44 +182,25 @@ public:
     /* drawing functions */
 
     /**
-     * Function Draw
-     * Draw the text according to the footprint pos and orient
-     * @param aPanel = draw panel, Used to know the clip box
+     * Function Print
+     * Print the text according to the footprint pos and orient
+     * @param aFrame = the current Frame
      * @param aDC = Current Device Context
      * @param aOffset = draw offset (usually wxPoint(0,0)
-     * @param aDrawMode = GR_OR, GR_XOR..
      */
-    void Draw( EDA_DRAW_PANEL* aPanel,
-               wxDC*           aDC,
-               GR_DRAWMODE     aDrawMode,
-               const wxPoint&  aOffset = ZeroOffset ) override;
+    void Print( PCB_BASE_FRAME* aFrame, wxDC* aDC, const wxPoint&  aOffset = ZeroOffset ) override;
 
-    /**
-     * Function DrawUmbilical
-     * draws a line from the TEXTE_MODULE origin
-     * to parent MODULE origin.
-     * @param aPanel = the current DrawPanel
-     * @param aDC = the current device context
-     * @param aDrawMode = drawing mode, typically GR_XOR
-     * @param aOffset = offset for TEXTE_MODULE
-     */
-    void DrawUmbilical( EDA_DRAW_PANEL* aPanel,
-                        wxDC*           aDC,
-                        GR_DRAWMODE     aDrawMode,
-                        const wxPoint&  aOffset = ZeroOffset );
+    void GetMsgPanelInfo( EDA_UNITS aUnits, std::vector<MSG_PANEL_ITEM>& aList ) override;
 
-    void GetMsgPanelInfo( std::vector< MSG_PANEL_ITEM >& aList ) override;
+    bool TextHitTest( const wxPoint& aPoint, int aAccuracy = 0 ) const override;
+    bool TextHitTest( const EDA_RECT& aRect, bool aContains, int aAccuracy = 0 ) const override;
 
-    virtual bool TextHitTest( const wxPoint& aPoint, int aAccuracy = 0 ) const override;
-
-    virtual bool TextHitTest( const EDA_RECT& aRect, bool aContains = false, int aAccuracy = 0 ) const override;
-
-    virtual bool HitTest( const wxPoint& aPosition ) const override
+    bool HitTest( const wxPoint& aPosition, int aAccuracy ) const override
     {
-        return TextHitTest( aPosition );
+        return TextHitTest( aPosition, aAccuracy );
     }
 
-    virtual bool HitTest( const EDA_RECT& aRect, bool aContained = false, int aAccuracy = 0 ) const override
+    bool HitTest( const EDA_RECT& aRect, bool aContained, int aAccuracy = 0 ) const override
     {
         return TextHitTest( aRect, aContained, aAccuracy );
     }
@@ -203,7 +210,7 @@ public:
         return wxT( "MTEXT" );
     }
 
-    wxString GetSelectMenuText() const override;
+    wxString GetSelectMenuText( EDA_UNITS aUnits ) const override;
 
     BITMAP_DEF GetMenuImage() const override;
 
@@ -230,6 +237,10 @@ private:
 
     wxPoint   m_Pos0;       ///< text coordinates relative to the footprint anchor, orient 0.
                             ///< text coordinate ref point is the text center
+
+    bool      m_keepUpright;    ///< if true, keep rotation angle between -90 .. 90 deg.
+                                ///< to keep the text more easy to read
+
 };
 
 #endif // TEXT_MODULE_H_

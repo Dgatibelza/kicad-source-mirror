@@ -30,19 +30,17 @@
 #include <base_struct.h>    // for KICAD_T
 
 #include <tool/tool_event.h>
-#include <tool/tool_settings.h>
 
 #include <functional>
 
 class EDA_ITEM;
 class TOOL_MANAGER;
-class wxWindow;
 
 namespace KIGFX
 {
 class VIEW;
 class VIEW_CONTROLS;
-};
+}
 
 enum TOOL_TYPE
 {
@@ -60,7 +58,7 @@ using TOOL_STATE_FUNC = std::function<int(const TOOL_EVENT&)>;
 
 
 /**
- * Class TOOL_BASE
+ * TOOL_BASE
  *
  * Base abstract interface for all kinds of tools.
  */
@@ -146,7 +144,7 @@ public:
         return m_toolMgr;
     }
 
-    TOOL_SETTINGS& GetSettings();
+    //TOOL_SETTINGS& GetSettings();
 
     bool IsToolActive() const;
     
@@ -187,6 +185,9 @@ protected:
     template <typename T>
     T* getEditFrame() const
     {
+#if !defined( QA_TEST )   // Dynamic casts give the linker a siezure in the test framework
+        wxASSERT( dynamic_cast<T*>( getEditFrameInt() ) );
+#endif
         return static_cast<T*>( getEditFrameInt() );
     }
 
@@ -199,7 +200,9 @@ protected:
     T* getModel() const
     {
         EDA_ITEM* m = getModelInt();
-
+#if !defined( QA_TEST )   // Dynamic casts give the linker a siezure in the test framework
+        wxASSERT( dynamic_cast<T*>( m ) );
+#endif
         return static_cast<T*>( m );
     }
 
@@ -213,13 +216,13 @@ protected:
     ///> (eg. pcbnew.InteractiveSelection).
     std::string m_toolName;
     TOOL_MANAGER* m_toolMgr;
-    TOOL_SETTINGS m_toolSettings;
+    //TOOL_SETTINGS m_toolSettings;
 
 private:
     // hide the implementation to avoid spreading half of
     // kicad and wxWidgets headers to the tools that may not need them at all!
     EDA_ITEM* getModelInt() const;
-    wxWindow* getEditFrameInt() const;
+    EDA_BASE_FRAME* getEditFrameInt() const;
 };
 
 #endif

@@ -41,15 +41,6 @@ class PCB_BASE_EDIT_FRAME;
 namespace TOOL_EVT_UTILS
 {
     /**
-     * Function IsCancelInteractive()
-     *
-     * @return true if this event should restart/end an ongoing interactive
-     * tool's event loop (eg esc key, click cancel, start different
-     * tool)
-     */
-    bool IsCancelInteractive( const TOOL_EVENT& aEvt );
-
-    /**
      * Function isRotateToolEvt()
      *
      * @param aEvt event to check
@@ -72,6 +63,6 @@ namespace TOOL_EVT_UTILS
      */
     int GetEventRotationAngle( const PCB_BASE_EDIT_FRAME& aFrame,
                                const TOOL_EVENT& aEvt );
-};
+}
 
 #endif // TOOL_EVENT_UTILS_H

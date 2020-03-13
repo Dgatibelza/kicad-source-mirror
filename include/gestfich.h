@@ -54,28 +54,18 @@ class EDA_LIST_DIALOG;
  * @return true is success, false if no PDF viewer found
  */
 bool OpenPDF( const wxString& file );
-
 void OpenFile( const wxString& file );
 
+void PrintFile( const wxString& file );
+bool CanPrintFile( const wxString& file );
+
 /**
- * Function EDA_PATH_SELECTOR
- *
- * is a helper function that wraps wxDirDialog.
- *
- * @param aTitle is a string to display in the dialog title bar.
- * @param aPath is a string contain the default path for the path dialog.  This string also
- *              contains the result of the wxDirDialog when the OK button is used to dismiss
- *              the dialog.
- * @param aFlags is the style of the path dialog, wxDD_???.
- * @param aParent is the parent window of the dialog.
- * @param aPosition is the position of the dialog.
- * @return true if a path was selected.
+ * Function CopyFile
+ * @param aSrcPath
+ * @param aDestPath
+ * @param aErrors a wxString to *append* any errors to
  */
-bool EDA_PATH_SELECTOR( const wxString& aTitle,
-                        wxString&       aPath,
-                        int             aFlags,       /* reserve */
-                        wxWindow*       aParent,
-                        const wxPoint&  aPosition = wxDefaultPosition );
+void CopyFile( const wxString& aSrcPath, const wxString& aDestPath, wxString& aErrors );
 
 /**
  * Function EDA_FILE_SELECTOR
@@ -161,5 +151,22 @@ wxString FindKicadFile( const wxString& shortname );
  *    wrapped filename to another platform.
  */
 extern wxString QuoteFullPath( wxFileName& fn, wxPathFormat format = wxPATH_NATIVE );
+
+/**
+ * Delete a directory and all of its contents recursively.
+ * This function ensures that all contents of subdirectories are deleted before deleting
+ * the directory. If recursion is disabled, then the existence of subdirectories will
+ * cause the deletion to fail and the function to return false.
+ *
+ * Note that if hidden files/folders exist in the directory, and aIncludeHidden is false,
+ * then the directory may not be deleted.
+ *
+ * @param aRecurse specifies if subdirectories should also be deleted
+ * @param aIncludeHidden specifies if hidden files/directories should be deleted as well
+ * @return true if the directory could be deleted
+ *
+ */
+bool DeleteDirectory( const wxString& aDirName, bool aRecurse = true, bool aIncludeHidden = true );
+
 
 #endif /* __INCLUDE__GESTFICH_H__ */

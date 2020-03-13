@@ -26,7 +26,6 @@
 #include <iostream>
 #include <sstream>
 
-#include <wx/config.h>
 #include <wx/dir.h>
 #include <wx/dynlib.h>
 #include <wx/filename.h>
@@ -133,10 +132,13 @@ void S3D_PLUGIN_MANAGER::loadPlugins( void )
     checkPluginPath( testpath, searchpaths );
 
     // add subdirectories too
-    wxDir debugPluginDir( testpath );
+    wxDir debugPluginDir;
     wxString subdir;
 
-    if( debugPluginDir.GetFirst( &subdir, wxEmptyString, wxDIR_DIRS ) )
+    debugPluginDir.Open( testpath );
+
+    if( debugPluginDir.IsOpened() &&
+        debugPluginDir.GetFirst( &subdir, wxEmptyString, wxDIR_DIRS ) )
     {
         checkPluginPath( testpath + subdir, searchpaths );
 
@@ -146,14 +148,10 @@ void S3D_PLUGIN_MANAGER::loadPlugins( void )
     #endif
 
     #ifndef _WIN32
-        // multiarch friendly determination of the plugin directory: the executable dir
-        // is first determined via wxStandardPaths::Get().GetExecutablePath() and then
-        // the CMAKE_INSTALL_LIBDIR path is appended relative to the executable dir.
+        // PLUGINDIR = CMAKE_INSTALL_FULL_LIBDIR path is the absolute path
+        // corresponding to the install path used for constructing KICAD_USER_PLUGIN
 
-        fn.Assign( wxStandardPaths::Get().GetExecutablePath() );
-        fn.RemoveLastDir();
-        wxString tfname = fn.GetPathWithSep();
-        tfname.Append( wxString::FromUTF8Unchecked( PLUGINDIR ) );
+        wxString tfname = wxString::FromUTF8Unchecked( PLUGINDIR );
         fn.Assign( tfname, "");
         fn.AppendDir( "kicad" );
     #else
@@ -487,7 +485,7 @@ SCENEGRAPH* S3D_PLUGIN_MANAGER::Load3DModel( const wxString& aFileName, std::str
     wxFileName raw( aFileName );
     wxString ext = raw.GetExt();
 
-    #ifdef WIN32
+    #ifdef _WIN32
     // note: plugins only have a lowercase filter within Windows; including an uppercase
     // filter will result in duplicate file entries and should be avoided.
     ext.LowerCase();

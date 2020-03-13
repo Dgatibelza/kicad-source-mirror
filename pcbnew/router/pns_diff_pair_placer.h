@@ -46,7 +46,7 @@ class SIZES_SETTINGS;
 
 
 /**
- * Class LINE_PLACER
+ * LINE_PLACER
  *
  * Single track placement algorithm. Interactively routes a track.
  * Applies shove and walkaround algorithms when needed.
@@ -84,7 +84,16 @@ public:
      * result is violating design rules - in such case, the track is only committed
      * if Settings.CanViolateDRC() is on.
      */
-    bool FixRoute( const VECTOR2I& aP, ITEM* aEndItem ) override;
+    bool FixRoute( const VECTOR2I& aP, ITEM* aEndItem, bool aForceFinish ) override;
+
+    /// @copydoc PLACEMENT_ALGO::CommitPlacement()
+    bool CommitPlacement() override;
+
+    /// @copydoc PLACEMENT_ALGO::AbortPlacement()
+    bool AbortPlacement() override;
+
+    /// @copydoc PLACEMENT_ALGO::HasPlacedAnything()
+    bool HasPlacedAnything() const override;
 
     /**
      * Function ToggleVia()
@@ -226,7 +235,7 @@ private:
 
     const VIA makeVia ( const VECTOR2I& aP, int aNet );
 
-    bool findDpPrimitivePair( const VECTOR2I& aP, ITEM* aItem, DP_PRIMITIVE_PAIR& aPair );
+    bool findDpPrimitivePair( const VECTOR2I& aP, ITEM* aItem, DP_PRIMITIVE_PAIR& aPair, wxString* aErrorMsg = nullptr );
     OPT_VECTOR2I getDanglingAnchor( NODE* aNode, ITEM* aItem );
     bool attemptWalk( NODE* aNode, DIFF_PAIR* aCurrent, DIFF_PAIR& aWalk, bool aPFirst, bool aWindCw, bool aSolidsOnly );
     bool propagateDpHeadForces ( const VECTOR2I& aP, VECTOR2I& aNewP );
@@ -247,7 +256,7 @@ private:
     int m_netP, m_netN;
 
     DP_PRIMITIVE_PAIR m_start;
-    boost::optional<DP_PRIMITIVE_PAIR> m_prevPair;
+    OPT<DP_PRIMITIVE_PAIR> m_prevPair;
 
     ///> current algorithm iteration
     int m_iteration;

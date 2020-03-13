@@ -19,7 +19,7 @@
         """
         Add a BOARD_ITEM to this BOARD_ITEM_CONTAINER, clear the thisown to prevent
         python from deleting the object in the garbage collector
-        Add(BOARD_ITEM_CONTAINER self, BOARD_ITEM aItem, ADD_MODE aMode=ADD_INSERT)
+        Add(BOARD_ITEM_CONTAINER self, BOARD_ITEM aItem, BOARD_ADD_MODE aMode=BOARD_ADD_MODE::INSERT)
         Add(BOARD_ITEM_CONTAINER self, BOARD_ITEM aItem)
         """
         item.thisown=0
@@ -32,7 +32,8 @@
         Remove(self, BOARD_ITEM)
         """
         self.RemoveNative(item)
-        item.thisown=1
+        if (not IsActionRunning()):
+            item.thisown=1
 
     def Delete(self,item):
         """

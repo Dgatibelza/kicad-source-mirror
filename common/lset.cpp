@@ -22,12 +22,17 @@
  * 51 Franklin Street, Fifth Floor, Boston, MA  02110-1301, USA
  */
 
+#include <bitset>                             // for bitset, __bitset<>::ref...
+#include <cassert>
+#include <cstdarg>
+#include <iostream>                           // for string, endl, basic_ost...
+#include <stddef.h>                           // for size_t
 
-#include <stdarg.h>
-#include <assert.h>
-
-#include <layers_id_colors_and_visibility.h>
-#include <class_board.h>
+#include <math/util.h>                        // for Clamp
+#include <layers_id_colors_and_visibility.h>  // for LSET, PCB_LAYER_ID, LSEQ
+#include <macros.h>                           // for arrayDim
+#include <wx/debug.h>                         // for wxASSERT, wxASSERT_MSG
+#include <wx/wx.h>                            // for wxT, wxChar
 
 
 LSET::LSET( const PCB_LAYER_ID* aArray, unsigned aCount ) :
@@ -134,6 +139,9 @@ const wxChar* LSET::Name( PCB_LAYER_ID aLayerId )
     case F_Fab:             txt = wxT( "F.Fab" );           break;
     case B_Fab:             txt = wxT( "B.Fab" );           break;
 
+    // Rescue
+    case Rescue:            txt = wxT( "Rescue" );          break;
+
     default:
         std::cout << aLayerId << std::endl;
         wxASSERT_MSG( 0, wxT( "aLayerId out of range" ) );
@@ -182,7 +190,7 @@ LSEQ LSET::CuStack() const
         B_Cu,           // 31
     };
 
-    return Seq( sequence, DIM( sequence ) );
+    return Seq( sequence, arrayDim( sequence ) );
 }
 
 
@@ -190,23 +198,23 @@ LSEQ LSET::Technicals( LSET aSetToOmit ) const
 {
     // desired sequence
     static const PCB_LAYER_ID sequence[] = {
-        B_Adhes,
         F_Adhes,
-        B_Paste,
+        B_Adhes,
         F_Paste,
-        B_SilkS,
+        B_Paste,
         F_SilkS,
-        B_Mask,
+        B_SilkS,
         F_Mask,
-        B_CrtYd,
+        B_Mask,
         F_CrtYd,
-        B_Fab,
+        B_CrtYd,
         F_Fab,
+        B_Fab,
     };
 
     LSET subset = ~aSetToOmit & *this;
 
-    return subset.Seq( sequence, DIM( sequence ) );
+    return subset.Seq( sequence, arrayDim( sequence ) );
 }
 
 
@@ -222,7 +230,34 @@ LSEQ LSET::Users() const
         Margin,
    };
 
-   return Seq( sequence, DIM( sequence ) );
+   return Seq( sequence, arrayDim( sequence ) );
+}
+
+
+LSEQ LSET::TechAndUserUIOrder() const
+{
+    static const PCB_LAYER_ID sequence[] = {
+        F_Adhes,
+        B_Adhes,
+        F_Paste,
+        B_Paste,
+        F_SilkS,
+        B_SilkS,
+        F_Mask,
+        B_Mask,
+        Dwgs_User,
+        Cmts_User,
+        Eco1_User,
+        Eco2_User,
+        Edge_Cuts,
+        Margin,
+        F_CrtYd,
+        B_CrtYd,
+        F_Fab,
+        B_Fab,
+   };
+
+   return Seq( sequence, arrayDim( sequence ) );
 }
 
 
@@ -256,23 +291,28 @@ std::string LSET::FmtHex() const
 
     static const char hex[] = "0123456789abcdef";
 
-    int     nibble_count = ( size() + 3 ) / 4;
+    size_t nibble_count = ( size() + 3 ) / 4;
 
-    for( int nibble=0;  nibble<nibble_count;  ++nibble )
+    for( size_t nibble = 0; nibble < nibble_count; ++nibble )
     {
-        unsigned ndx = 0;
+        unsigned int ndx = 0;
 
-        // test 4 consecutive bits and set ndx to 0-15:
-        for( int nibble_bit=0;  nibble_bit<4;  ++nibble_bit )
+        // test 4 consecutive bits and set ndx to 0-15
+        for( size_t nibble_bit = 0; nibble_bit < 4; ++nibble_bit )
         {
-            if( (*this)[nibble_bit + nibble*4] )
-                ndx |= (1 << nibble_bit);
+            size_t nibble_pos = nibble_bit + ( nibble * 4 );
+            // make sure it's not extra bits that dont exist in the bitset but need to in the hex format
+            if( nibble_pos >= size() )
+                break;
+
+            if( ( *this )[nibble_pos] )
+                ndx |= ( 1 << nibble_bit );
         }
 
         if( nibble && !( nibble % 8 ) )
             ret += '_';
 
-        assert( ndx < DIM( hex ) );
+        assert( ndx < arrayDim( hex ) );
 
         ret += hex[ndx];
     }
@@ -438,7 +478,7 @@ LSEQ LSET::SeqStackupBottom2Top() const
         Edge_Cuts,
     };
 
-    return Seq( sequence, DIM( sequence ) );
+    return Seq( sequence, arrayDim( sequence ) );
 }
 
 
@@ -638,7 +678,7 @@ LSET LSET::InternalCuMask()
         In30_Cu,
     };
 
-    static const LSET saved( cu_internals, DIM( cu_internals ) );
+    static const LSET saved( cu_internals, arrayDim( cu_internals ) );
     return saved;
 }
 
@@ -756,24 +796,33 @@ LSET LSET::BackMask()
 }
 
 
+LSET LSET::ForbiddenFootprintLayers()
+{
+    static const LSET saved = InternalCuMask().set( Edge_Cuts ).set( Margin );
+    return saved;
+}
+
+
+LSET LSET::ForbiddenTextLayers()
+{
+    static const LSET saved( 1, Edge_Cuts );
+    return saved;
+}
+
+
 LSEQ LSET::UIOrder() const
 {
-    PCB_LAYER_ID order[PCB_LAYER_ID_COUNT];
+    LSEQ order = CuStack();
+    LSEQ techuser = TechAndUserUIOrder();
+    order.insert( order.end(), techuser.begin(), techuser.end() );
 
-    // Assmuming that the PCB_LAYER_ID order is according to preferred UI order, as of
-    // today this is true.  When that becomes not true, its easy to change the order
-    // in here to compensate.
-
-    for( unsigned i=0;  i<DIM(order);  ++i )
-        order[i] = PCB_LAYER_ID( i );
-
-    return Seq( order, DIM( order ) );
+    return order;
 }
 
 
 PCB_LAYER_ID ToLAYER_ID( int aLayer )
 {
-    wxASSERT( unsigned( aLayer ) < PCB_LAYER_ID_COUNT );
+    wxASSERT( aLayer < GAL_LAYER_ID_END );
     return PCB_LAYER_ID( aLayer );
 }
 

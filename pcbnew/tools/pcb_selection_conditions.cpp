@@ -24,7 +24,7 @@
 
 #include "pcb_selection_conditions.h"
 #include "selection_tool.h"
-#include <class_board_connected_item.h>
+#include <board_connected_item.h>
 
 #include <functional>
 using namespace std::placeholders;
@@ -39,7 +39,7 @@ bool PCB_SELECTION_CONDITIONS::OnlyConnectedItems( const SELECTION& aSelection )
     {
         auto type = item->Type();
 
-        if( type != PCB_PAD_T && type != PCB_VIA_T && type != PCB_TRACE_T && type != PCB_ZONE_T )
+        if( type != PCB_PAD_T && type != PCB_VIA_T && type != PCB_TRACE_T && type != PCB_ZONE_AREA_T )
             return false;
     }
 

@@ -38,7 +38,7 @@ class GPCB_FPL_CACHE;
 
 
 /**
- * Class GPCB_PLUGIN
+ * GPCB_PLUGIN
  * is a PLUGIN derivation for saving and loading Geda PCB files.
  *
  * @note This class is not thread safe, but it is re-entrant multiple times in sequence.
@@ -63,16 +63,22 @@ public:
     }
 
     void FootprintEnumerate( wxArrayString& aFootprintNames, const wxString& aLibraryPath,
-                             const PROPERTIES* aProperties = NULL) override;
+                             bool aBestEfforts, const PROPERTIES* aProperties = NULL ) override;
+
+    const MODULE* GetEnumeratedFootprint( const wxString& aLibraryPath,
+                                          const wxString& aFootprintName,
+                                          const PROPERTIES* aProperties = NULL ) override;
 
     MODULE* FootprintLoad( const wxString& aLibraryPath, const wxString& aFootprintName,
-            const PROPERTIES* aProperties = NULL ) override;
+                           const PROPERTIES* aProperties = NULL ) override;
 
     void FootprintDelete( const wxString& aLibraryPath, const wxString& aFootprintName,
-            const PROPERTIES* aProperties = NULL ) override;
+                          const PROPERTIES* aProperties = NULL ) override;
 
     bool FootprintLibDelete( const wxString& aLibraryPath,
                              const PROPERTIES* aProperties = NULL ) override;
+
+    long long GetLibraryTimestamp( const wxString& aLibraryPath ) const override;
 
     bool IsFootprintLibWritable( const wxString& aLibraryPath ) override;
 
@@ -94,8 +100,10 @@ protected:
     wxString          m_filename;     ///< for saves only, name is in m_reader for loads
 
 private:
-    /// we only cache one footprint library for now, this determines which one.
-    void cacheLib( const wxString& aLibraryPath, const wxString& aFootprintName = wxEmptyString );
+    void validateCache( const wxString& aLibraryPath, bool checkModified = true );
+
+    const MODULE* getFootprint( const wxString& aLibraryPath, const wxString& aFootprintName,
+                                const PROPERTIES* aProperties, bool checkModified );
 
     void init( const PROPERTIES* aProperties );
 };

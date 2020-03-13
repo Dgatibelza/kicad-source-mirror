@@ -1,7 +1,7 @@
 /*
  * KiRouter - a push-and-(sometimes-)shove PCB router
  *
- * Copyright (C) 2014  CERN
+ * Copyright (C) 2014-2018 CERN
  * Copyright (C) 2016 KiCad Developers, see AUTHORS.txt for contributors.
  * Author: Maciej Suminski <maciej.suminski@cern.ch>
  *
@@ -28,7 +28,7 @@
 
 #include "dialog_pns_length_tuning_settings_base.h"
 
-#include <wx_unit_binder.h>
+#include <widgets/unit_binder.h>
 
 #include <router/pns_router.h>
 
@@ -41,15 +41,19 @@ class MEANDER_SETTINGS;
 class DIALOG_PNS_LENGTH_TUNING_SETTINGS : public DIALOG_PNS_LENGTH_TUNING_SETTINGS_BASE
 {
 public:
-    DIALOG_PNS_LENGTH_TUNING_SETTINGS( wxWindow* aParent, PNS::MEANDER_SETTINGS& aSettings, PNS::ROUTER_MODE aMode );
-
-    virtual void OnOkClick( wxCommandEvent& aEvent ) override;
+    DIALOG_PNS_LENGTH_TUNING_SETTINGS( EDA_DRAW_FRAME* aParent, PNS::MEANDER_SETTINGS& aSettings, PNS::ROUTER_MODE aMode );
 
 private:
-    WX_UNIT_BINDER m_minAmpl;
-    WX_UNIT_BINDER m_maxAmpl;
-    WX_UNIT_BINDER m_spacing;
-    WX_UNIT_BINDER m_targetLength;
+    bool TransferDataToWindow() override;
+    bool TransferDataFromWindow() override;
+
+   bool AcceptOptions();
+
+    UNIT_BINDER m_minAmpl;
+    UNIT_BINDER m_maxAmpl;
+    UNIT_BINDER m_spacing;
+    UNIT_BINDER m_targetLength;
+    UNIT_BINDER m_radius;
 
     PNS::MEANDER_SETTINGS& m_settings;
     PNS::ROUTER_MODE m_mode;

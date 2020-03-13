@@ -34,7 +34,7 @@
 struct BITMAP_OPAQUE;
 
 /**
- * Class TOOL_ACTION
+ * TOOL_ACTION
  *
  * Represents a single user action. For instance:
  * - changing layer to top by pressing PgUp
@@ -47,11 +47,16 @@ class TOOL_ACTION
 {
 public:
     TOOL_ACTION( const std::string& aName, TOOL_ACTION_SCOPE aScope = AS_CONTEXT,
-            int aDefaultHotKey = 0, const wxString aMenuItem = wxEmptyString,
-            const wxString& aMenuDesc = wxEmptyString, const BITMAP_OPAQUE* aIcon = NULL,
-            TOOL_ACTION_FLAGS aFlags = AF_NONE, void* aParam = NULL );
+                 int aDefaultHotKey = 0, const std::string& aLegacyHotKeyName = "", 
+                 const wxString& aMenuText = wxEmptyString, const wxString& aTooltip = wxEmptyString, 
+                 const BITMAP_OPAQUE* aIcon = nullptr, TOOL_ACTION_FLAGS aFlags = AF_NONE, 
+                 void* aParam = nullptr );
 
     ~TOOL_ACTION();
+
+    // TOOL_ACTIONS are singletons; don't be copying them around....
+    TOOL_ACTION( const TOOL_ACTION& ) = delete;
+    TOOL_ACTION& operator= ( const TOOL_ACTION& ) = delete;
 
     bool operator==( const TOOL_ACTION& aRhs ) const
     {
@@ -66,15 +71,25 @@ public:
     /**
      * Function GetName()
      * Returns name of the action. It is the same one that is contained in TOOL_EVENT that is
-     * sent by activating the TOOL_ACTION.
+     * sent by activating the TOOL_ACTION.  Convention is "app.tool.actionName".
      *
      * @return Name of the action.
      */
-    const std::string& GetName() const
-    {
-        return m_name;
-    }
-
+    const std::string& GetName() const { return m_name; }
+    
+    /**
+     * Function GetDefaultHotKey()
+     * Returns the default hotkey (if any) for the action.
+     */
+    int GetDefaultHotKey() const { return m_defaultHotKey; }
+    
+    /**
+     * Function GetHotKey()
+     * Returns the hotkey keycode which initiates the action.
+     */
+    int GetHotKey() const { return m_hotKey; }
+    void SetHotKey( int aKeycode );
+    
     /**
      * Function GetId()
      * Returns the unique id of the TOOL_ACTION object. It is valid only after registering the
@@ -82,24 +97,12 @@ public:
      *
      * @return The unique identification number. If the number is negative, then it is not valid.
      */
-    int GetId() const
-    {
-        return m_id;
-    }
-
-    /**
-     * Function HasHotKey()
-     * Checks if the action has a hot key assigned.
-     *
-     * @return True if there is a hot key assigned, false otherwise.
-     */
+    int GetId() const { return m_id; }
 
     /**
      * Function MakeEvent()
      * Returns the event associated with the action (i.e. the event that will be sent after
      * activating the action).
-     *
-     * @return The event associated with the action.
      */
     TOOL_EVENT MakeEvent() const
     {
@@ -111,30 +114,11 @@ public:
             return TOOL_EVENT( TC_COMMAND, TA_ACTION, m_name, m_scope, m_param );
     }
 
-    const wxString& GetMenuItem() const
-    {
-        return m_menuItem;
-    }
+    wxString GetLabel() const;
+    wxString GetMenuItem() const;
+    wxString GetDescription() const;
 
-    void SetMenuItem( const wxString& aItem )
-    {
-        m_menuItem = aItem;
-    }
-
-    const wxString& GetDescription() const
-    {
-        return m_menuDescription;
-    }
-
-    void SetDescription( const wxString& aDescription )
-    {
-        m_menuDescription = aDescription;
-    }
-
-    TOOL_ACTION_SCOPE GetScope() const
-    {
-        return m_scope;
-    }
+    TOOL_ACTION_SCOPE GetScope() const { return m_scope; }
 
     /**
      * Returns name of the tool associated with the action. It is basically the action name
@@ -167,57 +151,27 @@ public:
         return m_icon;
     }
 
-    /**
-     * Creates a hot key code that refers to a legacy hot key setting, instead of a particular key.
-     * @param aHotKey is an ID of hot key to be referred (see hotkeys.h).
-     */
-    inline static int LegacyHotKey( int aHotKey )
-    {
-        assert( ( aHotKey & LEGACY_HK ) == 0 );
+protected:
+    TOOL_ACTION();
 
-        return aHotKey | LEGACY_HK;
-    }
-
-private:
     friend class ACTION_MANAGER;
 
-    /// Returns the hot key assigned in the object definition. It may refer to a legacy hot key setting
-    /// (if LEGACY_HK flag is set).
-    int getDefaultHotKey()
-    {
-        return m_defaultHotKey;
-    }
+    /// Name of the action (convention is "app.tool.actionName")
+    std::string          m_name;
+    TOOL_ACTION_SCOPE    m_scope;
 
-    /// Name of the action (convention is: app.[tool.]action.name)
-    std::string m_name;
+    const int            m_defaultHotKey;  // Default hot key  
+    int                  m_hotKey;         // The curret hotkey (post-user-settings-application)
+    const std::string    m_legacyName;     // Name for reading legacy hotkey settings
 
-    /// Scope of the action
-    TOOL_ACTION_SCOPE m_scope;
+    wxString             m_label;
+    wxString             m_tooltip;
+    const BITMAP_OPAQUE* m_icon;           // Icon for the menu entry
 
-    /// Default hot key that activates the action.
-    const int m_defaultHotKey;
+    int                  m_id;             // Unique ID for maps. Assigned by ACTION_MANAGER.
 
-    /// Menu entry text
-    wxString m_menuItem;
-
-    /// Pop-up help
-    wxString m_menuDescription;
-
-    // Icon for menu entry
-    const BITMAP_OPAQUE* m_icon;
-
-    /// Unique ID for fast matching. Assigned by ACTION_MANAGER.
-    int m_id;
-
-    /// Action flags
-    TOOL_ACTION_FLAGS m_flags;
-
-    /// Generic parameter
-    void* m_param;
-
-    /// Flag to determine the hot key settings is not a particular key, but a reference to legacy
-    /// hot key setting.
-    static const int LEGACY_HK = 0x800000;
+    TOOL_ACTION_FLAGS    m_flags;
+    void*                m_param;          // Generic parameter
 };
 
 #endif

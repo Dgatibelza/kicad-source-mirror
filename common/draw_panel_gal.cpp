@@ -24,15 +24,16 @@
  * 51 Franklin Street, Fifth Floor, Boston, MA  02110-1301, USA
  */
 
-#include <draw_frame.h>
-#include <kiface_i.h>
 #include <confirm.h>
+#include <eda_draw_frame.h>
+#include <kiface_i.h>
+#include <settings/app_settings.h>
 
 #include <class_draw_panel_gal.h>
 #include <view/view.h>
 #include <view/wx_view_controls.h>
 #include <painter.h>
-
+#include <base_screen.h>
 #include <gal/graphics_abstraction_layer.h>
 #include <gal/opengl/opengl_gal.h>
 #include <gal/cairo/cairo_gal.h>
@@ -48,7 +49,8 @@
 EDA_DRAW_PANEL_GAL::EDA_DRAW_PANEL_GAL( wxWindow* aParentWindow, wxWindowID aWindowId,
                                         const wxPoint& aPosition, const wxSize& aSize,
                                         KIGFX::GAL_DISPLAY_OPTIONS& aOptions, GAL_TYPE aGalType ) :
-    wxScrolledCanvas( aParentWindow, aWindowId, aPosition, aSize ), m_options( aOptions )
+    wxScrolledCanvas( aParentWindow, aWindowId, aPosition, aSize ),
+    m_options( aOptions )
 {
     m_parent     = aParentWindow;
     m_edaFrame   = dynamic_cast<EDA_DRAW_FRAME*>( aParentWindow );
@@ -60,11 +62,7 @@ EDA_DRAW_PANEL_GAL::EDA_DRAW_PANEL_GAL( wxWindow* aParentWindow, wxWindowID aWin
     m_lostFocus  = false;
     m_stealsFocus = true;
 
-#ifdef __WXMAC__
-    m_defaultCursor = m_currentCursor = wxCURSOR_CROSS;
-#else
-    m_defaultCursor = m_currentCursor = wxCURSOR_ARROW;
-#endif
+    m_currentCursor = wxStockCursor( wxCURSOR_ARROW );
 
     SetLayoutDirection( wxLayout_LeftToRight );
 
@@ -74,12 +72,10 @@ EDA_DRAW_PANEL_GAL::EDA_DRAW_PANEL_GAL( wxWindow* aParentWindow, wxWindowID aWin
     ShowScrollbars( wxSHOW_SB_ALWAYS, wxSHOW_SB_ALWAYS );
     EnableScrolling( false, false );    // otherwise Zoom Auto disables GAL canvas
 
-    m_view = new KIGFX::VIEW( true );
-    m_view->SetGAL( m_gal );
-
     Connect( wxEVT_SIZE, wxSizeEventHandler( EDA_DRAW_PANEL_GAL::onSize ), NULL, this );
     Connect( wxEVT_ENTER_WINDOW, wxEventHandler( EDA_DRAW_PANEL_GAL::onEnter ), NULL, this );
     Connect( wxEVT_KILL_FOCUS, wxFocusEventHandler( EDA_DRAW_PANEL_GAL::onLostFocus ), NULL, this );
+    Connect( wxEVT_SET_CURSOR, wxSetCursorEventHandler( EDA_DRAW_PANEL_GAL::onSetCursor ), NULL, this );
 
     const wxEventType events[] =
     {
@@ -98,14 +94,7 @@ EDA_DRAW_PANEL_GAL::EDA_DRAW_PANEL_GAL( wxWindow* aParentWindow, wxWindowID aWin
     };
 
     for( wxEventType eventType : events )
-    {
-        Connect( eventType, wxEventHandler( EDA_DRAW_PANEL_GAL::onEvent ),
-                 NULL, m_eventDispatcher );
-    }
-
-    // View controls is the first in the event handler chain, so the Tool Framework operates
-    // on updated viewport data.
-    m_viewControls = new KIGFX::WX_VIEW_CONTROLS( m_view, this );
+        Connect( eventType, wxEventHandler( EDA_DRAW_PANEL_GAL::OnEvent ), NULL, m_eventDispatcher );
 
     m_pendingRefresh = false;
     m_drawing = false;
@@ -128,7 +117,7 @@ EDA_DRAW_PANEL_GAL::~EDA_DRAW_PANEL_GAL()
 {
     StopDrawing();
 
-    assert( !m_drawing );
+    wxASSERT( !m_drawing );
 
     delete m_viewControls;
     delete m_view;
@@ -154,6 +143,19 @@ void EDA_DRAW_PANEL_GAL::SetFocus()
 
 void EDA_DRAW_PANEL_GAL::onPaint( wxPaintEvent& WXUNUSED( aEvent ) )
 {
+    // Update current zoom settings if the canvas is managed by a EDA frame
+    // (i.e. not by a preview panel in a dialog)
+    if( GetParentEDAFrame() && GetParentEDAFrame()->GetScreen() )
+    {
+        GetParentEDAFrame()->GetScreen()->SetZoom( GetLegacyZoom() );
+        GetParentEDAFrame()->GetScreen()->m_ScrollCenter = GetView()->GetCenter();
+    }
+
+    m_viewControls->UpdateScrollbars();
+
+    if( !m_gal->IsVisible() )
+        return;
+
     m_pendingRefresh = false;
 
     if( m_drawing )
@@ -168,19 +170,28 @@ void EDA_DRAW_PANEL_GAL::onPaint( wxPaintEvent& WXUNUSED( aEvent ) )
     m_drawing = true;
     KIGFX::RENDER_SETTINGS* settings = static_cast<KIGFX::RENDER_SETTINGS*>( m_painter->GetSettings() );
 
-    m_viewControls->UpdateScrollbars();
-
-    m_view->UpdateItems();
-
     try
     {
-        m_gal->BeginDrawing();
+        m_view->UpdateItems();
+
+        KIGFX::GAL_DRAWING_CONTEXT ctx( m_gal );
+
         m_gal->SetClearColor( settings->GetBackgroundColor() );
-        m_gal->SetCursorColor( settings->GetLayerColor( LAYER_CURSOR ) );
-        m_gal->ClearScreen( );
+        m_gal->SetGridColor( settings->GetGridColor() );
+        m_gal->SetCursorColor( settings->GetCursorColor() );
+
+        // TODO: find why ClearScreen() must be called here in opengl mode
+        // and only if m_view->IsDirty() in Cairo mode to avoid distaly artifacts
+        // when moving the mouse cursor
+        if( m_backend == GAL_TYPE_OPENGL )
+            m_gal->ClearScreen();
 
         if( m_view->IsDirty() )
         {
+            if( m_backend != GAL_TYPE_OPENGL &&     // Already called in opengl
+                m_view->IsTargetDirty( KIGFX::TARGET_NONCACHED ) )
+                m_gal->ClearScreen();
+
             m_view->ClearTargets();
 
             // Grid has to be redrawn only when the NONCACHED target is redrawn
@@ -191,24 +202,21 @@ void EDA_DRAW_PANEL_GAL::onPaint( wxPaintEvent& WXUNUSED( aEvent ) )
         }
 
         m_gal->DrawCursor( m_viewControls->GetCursorPosition() );
-        m_gal->EndDrawing();
     }
     catch( std::runtime_error& err )
     {
-        assert( GetBackend() != GAL_TYPE_CAIRO );
+        constexpr auto GAL_FALLBACK = GAL_TYPE_CAIRO;
 
-        // Cairo is supposed to be the safe backend, there is not a single "throw" in its code
-        SwitchBackend( GAL_TYPE_CAIRO );
+        SwitchBackend( GAL_FALLBACK );
 
-        if( m_edaFrame )
-            m_edaFrame->UseGalCanvas( true );
-
-        DisplayError( m_parent, wxString( err.what() ) );
+        DisplayInfoMessage( m_parent,
+                            _( "Could not use OpenGL, falling back to software rendering" ),
+                            wxString( err.what() ) );
     }
 
 #ifdef PROFILE
     totalRealTime.Stop();
-    wxLogDebug( "EDA_DRAW_PANEL_GAL::onPaint(): %.1f ms", totalRealTime.msecs() );
+    wxLogTrace( "GAL_PROFILE", "EDA_DRAW_PANEL_GAL::onPaint(): %.1f ms", totalRealTime.msecs() );
 #endif /* PROFILE */
 
     m_lastRefresh = wxGetLocalTimeMillis();
@@ -218,10 +226,17 @@ void EDA_DRAW_PANEL_GAL::onPaint( wxPaintEvent& WXUNUSED( aEvent ) )
 
 void EDA_DRAW_PANEL_GAL::onSize( wxSizeEvent& aEvent )
 {
+    KIGFX::GAL_CONTEXT_LOCKER locker( m_gal );
     wxSize clientSize = GetClientSize();
-    m_gal->ResizeScreen( clientSize.x, clientSize.y );
-    m_view->MarkTargetDirty( KIGFX::TARGET_CACHED );
-    m_view->MarkTargetDirty( KIGFX::TARGET_NONCACHED );
+    clientSize.x = std::max( 10, clientSize.x );
+    clientSize.y = std::max( 10, clientSize.y );
+    m_gal->ResizeScreen( clientSize.GetX(), clientSize.GetY() );
+
+    if( m_view )
+    {
+        m_view->MarkTargetDirty( KIGFX::TARGET_CACHED );
+        m_view->MarkTargetDirty( KIGFX::TARGET_NONCACHED );
+    }
 }
 
 
@@ -327,8 +342,7 @@ void EDA_DRAW_PANEL_GAL::SetTopLayer( int aLayer )
 
 double EDA_DRAW_PANEL_GAL::GetLegacyZoom() const
 {
-    double zoomFactor = m_gal->GetWorldScale() / m_gal->GetZoomFactor();
-    return ( 1.0 / ( zoomFactor * m_view->GetScale() ) );
+    return m_edaFrame->GetZoomLevelCoeff() / m_gal->GetZoomFactor();
 }
 
 
@@ -350,7 +364,20 @@ bool EDA_DRAW_PANEL_GAL::SwitchBackend( GAL_TYPE aGalType )
         switch( aGalType )
         {
         case GAL_TYPE_OPENGL:
-            new_gal = new KIGFX::OPENGL_GAL( m_options, this, this, this );
+            try
+            {
+                new_gal = new KIGFX::OPENGL_GAL( m_options, this, this, this );
+                break;
+            }
+            catch( std::runtime_error& err )
+            {
+                aGalType = GAL_TYPE_CAIRO;
+                DisplayInfoMessage( m_parent,
+                        _( "Could not use OpenGL, falling back to software rendering" ),
+                        wxString( err.what() ) );
+            }
+
+            new_gal = new KIGFX::CAIRO_GAL( m_options, this, this, this );
             break;
 
         case GAL_TYPE_CAIRO:
@@ -358,7 +385,7 @@ bool EDA_DRAW_PANEL_GAL::SwitchBackend( GAL_TYPE aGalType )
             break;
 
         default:
-            assert( false );
+            wxASSERT( false );
             // warn about unhandled GAL canvas type, but continue with the fallback option
 
         case GAL_TYPE_NONE:
@@ -370,6 +397,7 @@ bool EDA_DRAW_PANEL_GAL::SwitchBackend( GAL_TYPE aGalType )
     }
     catch( std::runtime_error& err )
     {
+        // Create a dummy GAL
         new_gal = new KIGFX::GAL( m_options );
         aGalType = GAL_TYPE_NONE;
         DisplayError( m_parent, wxString( err.what() ) );
@@ -380,12 +408,18 @@ bool EDA_DRAW_PANEL_GAL::SwitchBackend( GAL_TYPE aGalType )
     // from the defaults
     m_options.NotifyChanged();
 
-    assert( new_gal );
+    wxWindow* galWindow = dynamic_cast<wxWindow*>( new_gal );
+
+    if( galWindow )
+        galWindow->Connect( wxEVT_SET_CURSOR, wxSetCursorEventHandler( EDA_DRAW_PANEL_GAL::onSetCursor ), NULL, this );
+
     delete m_gal;
     m_gal = new_gal;
 
-    wxSize size = GetClientSize();
-    m_gal->ResizeScreen( size.GetX(), size.GetY() );
+    wxSize clientSize = GetClientSize();
+    clientSize.x = std::max( 10, clientSize.x );
+    clientSize.y = std::max( 10, clientSize.y );
+    m_gal->ResizeScreen( clientSize.GetX(), clientSize.GetY() );
 
     if( m_painter )
         m_painter->SetGAL( m_gal );
@@ -403,7 +437,7 @@ bool EDA_DRAW_PANEL_GAL::SwitchBackend( GAL_TYPE aGalType )
 }
 
 
-void EDA_DRAW_PANEL_GAL::onEvent( wxEvent& aEvent )
+void EDA_DRAW_PANEL_GAL::OnEvent( wxEvent& aEvent )
 {
     if( m_lostFocus && m_stealsFocus )
         SetFocus();
@@ -466,4 +500,26 @@ void EDA_DRAW_PANEL_GAL::onShowTimer( wxTimerEvent& aEvent )
         m_onShowTimer.Stop();
         OnShow();
     }
+}
+
+
+void EDA_DRAW_PANEL_GAL::SetCurrentCursor( wxStockCursor aStockCursorID )
+{
+    if ( aStockCursorID <= wxCURSOR_NONE || aStockCursorID >= wxCURSOR_MAX )
+        aStockCursorID = wxCURSOR_ARROW;
+
+    SetCurrentCursor( wxCursor( aStockCursorID ) );
+}
+
+
+void EDA_DRAW_PANEL_GAL::SetCurrentCursor( const wxCursor& aCursor )
+{
+    m_currentCursor = aCursor;
+    SetCursor( m_currentCursor );
+}
+
+
+void EDA_DRAW_PANEL_GAL::onSetCursor( wxSetCursorEvent& event )
+{
+    event.SetCursor( m_currentCursor );
 }

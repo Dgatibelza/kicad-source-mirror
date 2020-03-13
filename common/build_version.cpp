@@ -2,7 +2,7 @@
  * This program source code file is part of KiCad, a free EDA CAD application.
  *
  * Copyright (C) 2015 Jean-Pierre Charras, jp.charras at wanadoo.fr
- * Copyright (C) 2015-2016 KiCad Developers, see AUTHORS.txt for contributors.
+ * Copyright (C) 2015-2020 KiCad Developers, see AUTHORS.txt for contributors.
  *
  * This program is free software; you can redistribute it and/or
  * modify it under the terms of the GNU General Public License
@@ -26,20 +26,34 @@
 #include <fctsys.h>
 
 // The include file version.h is always created even if the repo version cannot be
-// determined.  In this case KICAD_BUILD_VERSION will default to "no-bzr".
+// determined.  In this case KICAD_VERSION_FULL will default to the KICAD_VERSION
+// that is set in KiCadVersion.cmake.
 #include <kicad_build_version.h>
 
 
-/**
- * Function GetBuildVersion
- * Return the build version string.
- */
 wxString GetBuildVersion()
 {
-    wxString msg = wxString::Format(
-        wxT( "%s" ),
-        wxT( KICAD_VERSION_FULL )
-        );
+    wxString msg = wxString::Format( wxT( "%s" ), wxT( KICAD_VERSION_FULL ) );
+    return msg;
+}
 
+
+wxString GetBuildDate()
+{
+    wxString msg = wxString::Format( wxT( "%s %s" ), wxT( __DATE__ ), wxT( __TIME__ ) );
+    return msg;
+}
+
+
+wxString GetSemanticVersion()
+{
+    wxString msg = wxString::Format( wxT( "%s" ), wxT( KICAD_SEMANTIC_VERSION ) );
+    return msg;
+}
+
+
+wxString GetMajorMinorVersion()
+{
+    wxString msg = wxString::Format( wxT( "%s" ), wxT( KICAD_MAJOR_MINOR_VERSION ) );
     return msg;
 }

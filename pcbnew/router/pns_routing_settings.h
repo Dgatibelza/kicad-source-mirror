@@ -24,6 +24,8 @@
 
 #include <cstdio>
 
+#include <settings/nested_settings.h>
+
 #include "time_limit.h"
 
 class DIRECTION_45;
@@ -49,18 +51,15 @@ enum PNS_OPTIMIZATION_EFFORT
 };
 
 /**
- * Class ROUTING_SETTINGS
+ * ROUTING_SETTINGS
  *
  * Contains all persistent settings of the router, such as the mode, optimization effort, etc.
  */
 
-class ROUTING_SETTINGS
+class ROUTING_SETTINGS : public NESTED_SETTINGS
 {
 public:
-    ROUTING_SETTINGS();
-
-    void Load( const TOOL_SETTINGS& where );
-    void Save( TOOL_SETTINGS& where ) const;
+    ROUTING_SETTINGS( JSON_SETTINGS* aParent, const std::string& aPath );
 
     ///> Returns the routing mode.
     PNS_MODE Mode() const { return m_routingMode; }
@@ -92,10 +91,10 @@ public:
     ///> Enables displaying suggestions for finishing the currently placed track.
     void SetSuggestFinish( bool aSuggestFinish ) { m_suggestFinish = aSuggestFinish; }
 
-    ///> Returns true if Smart Pads (automatic neckdown) is enabled.
+    ///> Returns true if Smart Pads (optimized connections) is enabled.
     bool SmartPads() const { return m_smartPads; }
 
-    ///> Enables/disables Smart Pads (automatic neckdown).
+    ///> Enables/disables Smart Pads (optimized connections).
     void SetSmartPads( bool aSmartPads ) { m_smartPads = aSmartPads; }
 
     ///> Returns true if follow mouse mode is active (permanently on for the moment).
@@ -142,6 +141,31 @@ public:
     bool GetSnapToTracks() const { return m_snapToTracks; }
     bool GetSnapToPads() const { return m_snapToPads; }
 
+    bool GetRounded() const { return m_roundedCorners; }
+    void SetRounded( bool aRound ) { m_roundedCorners = aRound; }
+
+    bool GetOptimizeDraggedTrack() const { return m_optimizeDraggedTrack; }
+    void SetOptimizeDraggedTrack( bool aEnable ) { m_optimizeDraggedTrack = aEnable; }
+
+    void SetMinRadius( int aRadius )
+    {
+        m_minRadius = aRadius;
+
+        if( m_maxRadius < m_minRadius )
+            m_maxRadius = m_minRadius;
+    }
+
+    void SetMaxRadius( int aRadius )
+    {
+        m_maxRadius = aRadius;
+
+        if( m_maxRadius < m_minRadius )
+            m_minRadius = m_maxRadius;
+    }
+
+    int GetMinRadius() const { return m_minRadius; }
+    int GetMaxRadius() const { return m_maxRadius; }
+
 private:
     bool m_shoveVias;
     bool m_startDiagonal;
@@ -156,6 +180,11 @@ private:
     bool m_inlineDragEnabled;
     bool m_snapToTracks;
     bool m_snapToPads;
+    bool m_roundedCorners;
+    bool m_optimizeDraggedTrack;
+
+    int m_minRadius;
+    int m_maxRadius;
 
     PNS_MODE m_routingMode;
     PNS_OPTIMIZATION_EFFORT m_optimizerEffort;

@@ -1,7 +1,8 @@
 /*
  * This program source code file is part of KiCad, a free EDA CAD application.
  *
- * Copyright (C) 2013-2017 CERN
+ * Copyright (C) 2013-2018 CERN
+ * Copyright (C) 2019 KiCad Developers, see AUTHORS.txt for contributors.
  * @author Tomasz Wlostowski <tomasz.wlostowski@cern.ch>
  * @author Maciej Suminski <maciej.suminski@cern.ch>
  *
@@ -23,28 +24,25 @@
  * 51 Franklin Street, Fifth Floor, Boston, MA  02110-1301, USA
  */
 
+#include <algorithm>
+#include <core/optional.h>
 #include <map>
 #include <stack>
-#include <algorithm>
-
-#include <boost/optional.hpp>
+#include <trace_helpers.h>
 
 #include <wx/event.h>
 #include <wx/clipbrd.h>
 
 #include <view/view.h>
-
+#include <eda_base_frame.h>
 #include <tool/tool_base.h>
 #include <tool/tool_interactive.h>
 #include <tool/tool_manager.h>
-#include <tool/context_menu.h>
+#include <tool/action_menu.h>
 #include <tool/coroutine.h>
 #include <tool/action_manager.h>
 
-#include <wxPcbStruct.h>
 #include <class_draw_panel_gal.h>
-
-using boost::optional;
 
 /// Struct describing the current execution state of a TOOL
 struct TOOL_MANAGER::TOOL_STATE
@@ -57,23 +55,25 @@ struct TOOL_MANAGER::TOOL_STATE
 
     TOOL_STATE( const TOOL_STATE& aState )
     {
-        theTool = aState.theTool;
-        idle = aState.idle;
-        pendingWait = aState.pendingWait;
+        theTool            = aState.theTool;
+        idle               = aState.idle;
+        shutdown           = aState.shutdown;
+        pendingWait        = aState.pendingWait;
         pendingContextMenu = aState.pendingContextMenu;
-        contextMenu = aState.contextMenu;
+        contextMenu        = aState.contextMenu;
         contextMenuTrigger = aState.contextMenuTrigger;
-        cofunc = aState.cofunc;
-        wakeupEvent = aState.wakeupEvent;
-        waitEvents = aState.waitEvents;
-        transitions = aState.transitions;
-        vcSettings = aState.vcSettings;
+        cofunc             = aState.cofunc;
+        wakeupEvent        = aState.wakeupEvent;
+        waitEvents         = aState.waitEvents;
+        transitions        = aState.transitions;
+        vcSettings         = aState.vcSettings;
         // do not copy stateStack
     }
 
     ~TOOL_STATE()
     {
-        assert( stateStack.empty() );
+        if( !stateStack.empty() )
+            wxFAIL;
     }
 
     /// The tool itself
@@ -81,6 +81,9 @@ struct TOOL_MANAGER::TOOL_STATE
 
     /// Is the tool active (pending execution) or disabled at the moment
     bool idle;
+
+    /// Should the tool shutdown during next execution
+    bool shutdown;
 
     /// Flag defining if the tool is waiting for any event (i.e. if it
     /// issued a Wait() call).
@@ -90,7 +93,7 @@ struct TOOL_MANAGER::TOOL_STATE
     bool pendingContextMenu;
 
     /// Context menu currently used by the tool
-    CONTEXT_MENU* contextMenu;
+    ACTION_MENU* contextMenu;
 
     /// Defines when the context menu is opened
     CONTEXT_MENU_TRIGGER contextMenuTrigger;
@@ -111,20 +114,22 @@ struct TOOL_MANAGER::TOOL_STATE
     /// VIEW_CONTROLS settings to preserve settings when the tools are switched
     KIGFX::VC_SETTINGS vcSettings;
 
-    void operator=( const TOOL_STATE& aState )
+    TOOL_STATE& operator=( const TOOL_STATE& aState )
     {
-        theTool = aState.theTool;
-        idle = aState.idle;
-        pendingWait = aState.pendingWait;
+        theTool            = aState.theTool;
+        idle               = aState.idle;
+        shutdown           = aState.shutdown;
+        pendingWait        = aState.pendingWait;
         pendingContextMenu = aState.pendingContextMenu;
-        contextMenu = aState.contextMenu;
+        contextMenu        = aState.contextMenu;
         contextMenuTrigger = aState.contextMenuTrigger;
-        cofunc = aState.cofunc;
-        wakeupEvent = aState.wakeupEvent;
-        waitEvents = aState.waitEvents;
-        transitions = aState.transitions;
-        vcSettings = aState.vcSettings;
+        cofunc             = aState.cofunc;
+        wakeupEvent        = aState.wakeupEvent;
+        waitEvents         = aState.waitEvents;
+        transitions        = aState.transitions;
+        vcSettings         = aState.vcSettings;
         // do not copy stateStack
+        return *this;
     }
 
     bool operator==( const TOOL_MANAGER::TOOL_STATE& aRhs ) const
@@ -179,11 +184,12 @@ private:
     ///> Restores the initial state.
     void clear()
     {
-        idle = true;
-        pendingWait = false;
+        idle               = true;
+        shutdown           = false;
+        pendingWait        = false;
         pendingContextMenu = false;
-        cofunc = NULL;
-        contextMenu = NULL;
+        cofunc             = NULL;
+        contextMenu        = NULL;
         contextMenuTrigger = CMENU_OFF;
         vcSettings.Reset();
         transitions.clear();
@@ -192,17 +198,16 @@ private:
 
 
 TOOL_MANAGER::TOOL_MANAGER() :
-    m_model( NULL ),
-    m_view( NULL ),
-    m_viewControls( NULL ),
-    m_editFrame( NULL ),
-    m_passEvent( false ),
-    m_menuActive( false )
+        m_model( NULL ),
+        m_view( NULL ),
+        m_viewControls( NULL ),
+        m_frame( NULL ),
+        m_warpMouseAfterContextMenu( true ),
+        m_menuActive( false ),
+        m_menuOwner( -1 ),
+        m_activeState( nullptr )
 {
     m_actionMgr = new ACTION_MANAGER( this );
-
-    // Keep default VIEW_CONTROLS settings at the bottom of the stack
-    m_vcStack.push( KIGFX::VC_SETTINGS() );
 }
 
 
@@ -263,18 +268,6 @@ bool TOOL_MANAGER::InvokeTool( const std::string& aToolName )
 }
 
 
-void TOOL_MANAGER::RegisterAction( TOOL_ACTION* aAction )
-{
-    m_actionMgr->RegisterAction( aAction );
-}
-
-
-void TOOL_MANAGER::UnregisterAction( TOOL_ACTION* aAction )
-{
-    m_actionMgr->UnregisterAction( aAction );
-}
-
-
 bool TOOL_MANAGER::RunAction( const std::string& aActionName, bool aNow, void* aParam )
 {
     TOOL_ACTION* action = m_actionMgr->FindAction( aActionName );
@@ -291,18 +284,69 @@ bool TOOL_MANAGER::RunAction( const std::string& aActionName, bool aNow, void* a
 }
 
 
-void TOOL_MANAGER::RunAction( const TOOL_ACTION& aAction, bool aNow, void* aParam )
+VECTOR2D TOOL_MANAGER::GetMousePosition()
 {
+    if( m_viewControls )
+        return m_viewControls->GetMousePosition();
+    else
+        return wxGetMousePosition();
+}
+
+
+VECTOR2D TOOL_MANAGER::GetCursorPosition()
+{
+   if( m_viewControls )
+       return m_viewControls->GetCursorPosition();
+   else
+       return wxGetMousePosition();
+}
+
+
+bool TOOL_MANAGER::RunAction( const TOOL_ACTION& aAction, bool aNow, void* aParam )
+{
+    bool       handled = false;
     TOOL_EVENT event = aAction.MakeEvent();
+
+    if( event.Category() == TC_COMMAND )
+        event.SetMousePosition( GetCursorPosition() );
 
     // Allow to override the action parameter
     if( aParam )
         event.SetParameter( aParam );
 
     if( aNow )
-        processEvent( event );
+    {
+        TOOL_STATE* current = m_activeState;
+        handled = processEvent( event );
+        setActiveState( current );
+        UpdateUI( event );
+    }
     else
+    {
         PostEvent( event );
+    }
+
+    return handled;
+}
+
+
+void TOOL_MANAGER::PrimeTool( const VECTOR2D& aPosition )
+{
+    int modifiers = 0;
+    modifiers |= wxGetKeyState( WXK_SHIFT ) ? MD_SHIFT : 0;
+    modifiers |= wxGetKeyState( WXK_CONTROL ) ? MD_CTRL : 0;
+    modifiers |= wxGetKeyState( WXK_ALT ) ? MD_ALT : 0;
+
+    TOOL_EVENT evt( TC_MOUSE, TA_PRIME, BUT_LEFT | modifiers );
+    evt.SetMousePosition( aPosition );
+
+    PostEvent( evt );
+}
+
+
+const std::map<std::string, TOOL_ACTION*>& TOOL_MANAGER::GetActions()
+{
+    return m_actionMgr->GetActions();
 }
 
 
@@ -312,18 +356,16 @@ int TOOL_MANAGER::GetHotKey( const TOOL_ACTION& aAction )
 }
 
 
-void TOOL_MANAGER::UpdateHotKeys()
-{
-    m_actionMgr->UpdateHotKeys();
-}
-
-
 bool TOOL_MANAGER::invokeTool( TOOL_BASE* aTool )
 {
     wxASSERT( aTool != NULL );
 
     TOOL_EVENT evt( TC_COMMAND, TA_ACTIVATE, aTool->GetName() );
+    evt.SetMousePosition( GetCursorPosition() );
     processEvent( evt );
+
+    if( TOOL_STATE* active = GetCurrentToolState() )
+        setActiveState( active );
 
     return true;
 }
@@ -363,23 +405,101 @@ bool TOOL_MANAGER::runTool( TOOL_BASE* aTool )
 
     TOOL_ID id = aTool->GetId();
 
-    // If the tool is already active, bring it to the top of the active tools stack
-    if( isActive( aTool ) )
-    {
-        m_activeTools.erase( std::find( m_activeTools.begin(), m_activeTools.end(), id ) );
-        m_activeTools.push_front( id );
-        return false;
-    }
-
-    aTool->Reset( TOOL_INTERACTIVE::RUN );
-
     if( aTool->GetType() == INTERACTIVE )
         static_cast<TOOL_INTERACTIVE*>( aTool )->resetTransitions();
+
+    // If the tool is already active, bring it to the top of the active tools stack
+    if( isActive( aTool ) && m_activeTools.size() > 1 )
+    {
+        auto it = std::find( m_activeTools.begin(), m_activeTools.end(), id );
+
+        if( it != m_activeTools.end() )
+        {
+            if( it != m_activeTools.begin() )
+            {
+                m_activeTools.erase( it );
+                m_activeTools.push_front( id );
+            }
+
+            return false;
+        }
+    }
+
+    setActiveState( m_toolIdIndex[id] );
+    aTool->Reset( TOOL_INTERACTIVE::RUN );
 
     // Add the tool on the front of the processing queue (it gets events first)
     m_activeTools.push_front( id );
 
     return true;
+}
+
+
+void TOOL_MANAGER::ShutdownAllTools()
+{
+    // Create a temporary list of tools to iterate over since when the tools shutdown
+    // they remove themselves from the list automatically (invalidating the iterator)
+    ID_LIST tmpList = m_activeTools;
+
+    for( auto id : tmpList )
+    {
+        ShutdownTool( id );
+    }
+}
+
+
+void TOOL_MANAGER::ShutdownTool( TOOL_ID aToolId )
+{
+    TOOL_BASE* tool = FindTool( aToolId );
+
+    if( tool && tool->GetType() == INTERACTIVE )
+        ShutdownTool( tool );
+}
+
+
+void TOOL_MANAGER::ShutdownTool( const std::string& aToolName )
+{
+    TOOL_BASE* tool = FindTool( aToolName );
+
+    if( tool && tool->GetType() == INTERACTIVE )
+        ShutdownTool( tool );
+}
+
+
+void TOOL_MANAGER::ShutdownTool( TOOL_BASE* aTool )
+{
+    wxASSERT( aTool != NULL );
+
+    TOOL_ID id = aTool->GetId();
+
+    if( isActive( aTool ) )
+    {
+        auto it = std::find( m_activeTools.begin(), m_activeTools.end(), id );
+
+        TOOL_STATE* st = m_toolIdIndex[*it];
+
+        // the tool state handler is waiting for events (i.e. called Wait() method)
+        if( st && st->pendingWait )
+        {
+            // Wake up the tool and tell it to shutdown
+            st->shutdown = true;
+            st->pendingWait = false;
+            st->waitEvents.clear();
+
+            if( st->cofunc )
+            {
+                wxLogTrace( kicadTraceToolStack,
+                        "TOOL_MANAGER::ShutdownTool is shutting down tool %s",
+                        st->theTool->GetName() );
+
+                setActiveState( st );
+                bool end = !st->cofunc->Resume();
+
+                if( end )
+                    it = finishTool( st );
+            }
+        }
+    }
 }
 
 
@@ -420,6 +540,7 @@ void TOOL_MANAGER::ResetTools( TOOL_BASE::RESET_REASON aReason )
     for( auto& state : m_toolState )
     {
         TOOL_BASE* tool = state.first;
+        setActiveState( state.second );
         tool->Reset( aReason );
 
         if( tool->GetType() == INTERACTIVE )
@@ -434,14 +555,16 @@ void TOOL_MANAGER::InitTools()
     {
         TOOL_BASE* tool = it->first;
         TOOL_STATE* state = it->second;
+        setActiveState( state );
         ++it;   // keep the iterator valid if the element is going to be erased
 
         if( !tool->Init() )
         {
-            wxMessageBox(
-                    wxString::Format( "Initialization of tool '%s' failed", tool->GetName() ) );
+            wxMessageBox( wxString::Format( "Initialization of tool \"%s\" failed",
+                                            tool->GetName() ) );
 
             // Unregister the tool
+            setActiveState( nullptr );
             m_toolState.erase( tool );
             m_toolNameIndex.erase( tool->GetName() );
             m_toolIdIndex.erase( tool->GetId() );
@@ -452,6 +575,8 @@ void TOOL_MANAGER::InitTools()
         }
     }
 
+    m_actionMgr->UpdateHotKeys( true );
+
     ResetTools( TOOL_BASE::RUN );
 }
 
@@ -460,9 +585,9 @@ int TOOL_MANAGER::GetPriority( int aToolId ) const
 {
     int priority = 0;
 
-    for( auto it = m_activeTools.begin(), itEnd = m_activeTools.end(); it != itEnd; ++it )
+    for( TOOL_ID tool : m_activeTools )
     {
-        if( *it == aToolId )
+        if( tool == aToolId )
             return priority;
 
         ++priority;
@@ -477,7 +602,7 @@ void TOOL_MANAGER::ScheduleNextState( TOOL_BASE* aTool, TOOL_STATE_FUNC& aHandle
 {
     TOOL_STATE* st = m_toolState[aTool];
 
-    st->transitions.push_back( TRANSITION( aConditions, aHandler ) );
+    st->transitions.emplace_back( TRANSITION( aConditions, aHandler ) );
 }
 
 
@@ -490,16 +615,16 @@ void TOOL_MANAGER::ClearTransitions( TOOL_BASE* aTool )
 void TOOL_MANAGER::RunMainStack( TOOL_BASE* aTool, std::function<void()> aFunc )
 {
     TOOL_STATE* st = m_toolState[aTool];
+    setActiveState( st );
     st->cofunc->RunMainStack( std::move( aFunc ) );
 }
 
 
-optional<TOOL_EVENT> TOOL_MANAGER::ScheduleWait( TOOL_BASE* aTool,
-                                                 const TOOL_EVENT_LIST& aConditions )
+TOOL_EVENT* TOOL_MANAGER::ScheduleWait( TOOL_BASE* aTool, const TOOL_EVENT_LIST& aConditions )
 {
     TOOL_STATE* st = m_toolState[aTool];
 
-    assert( !st->pendingWait ); // everything collapses on two KiYield() in a row
+    wxASSERT( !st->pendingWait ); // everything collapses on two KiYield() in a row
 
     // indicate to the manager that we are going to sleep and we shall be
     // woken up when an event matching aConditions arrive
@@ -509,24 +634,39 @@ optional<TOOL_EVENT> TOOL_MANAGER::ScheduleWait( TOOL_BASE* aTool,
     // switch context back to event dispatcher loop
     st->cofunc->KiYield();
 
-    return st->wakeupEvent;
+    // If the tool should shutdown, it gets a null event to break the loop
+    if( st->shutdown )
+        return nullptr;
+    else
+        return &st->wakeupEvent;
 }
 
 
-void TOOL_MANAGER::dispatchInternal( const TOOL_EVENT& aEvent )
+bool TOOL_MANAGER::dispatchInternal( const TOOL_EVENT& aEvent )
 {
-    // iterate over all registered tools
+    bool handled = false;
+
+    wxLogTrace( kicadTraceToolStack, "TOOL_MANAGER::dispatchInternal %s", aEvent.Format() );
+
+    // iterate over active tool stack
     for( auto it = m_activeTools.begin(); it != m_activeTools.end(); ++it )
     {
         TOOL_STATE* st = m_toolIdIndex[*it];
 
+        // forward context menu events to the tool that created the menu
+        if( aEvent.IsChoiceMenu() )
+        {
+            if( *it != m_menuOwner )
+                continue;
+        }
+
         // the tool state handler is waiting for events (i.e. called Wait() method)
-        if( st->pendingWait )
+        if( st && st->pendingWait )
         {
             if( st->waitEvents.Matches( aEvent ) )
             {
-                // By default, only messages are passed further
-                m_passEvent = ( aEvent.Category() == TC_MESSAGE );
+                if( !aEvent.FirstResponder() )
+                    const_cast<TOOL_EVENT*>( &aEvent )->SetFirstResponder( st->theTool );
 
                 // got matching event? clear wait list and wake up the coroutine
                 st->wakeupEvent = aEvent;
@@ -535,20 +675,27 @@ void TOOL_MANAGER::dispatchInternal( const TOOL_EVENT& aEvent )
 
                 if( st->cofunc )
                 {
-                    pushViewControls();
-                    applyViewControls( st );
+                    wxLogTrace( kicadTraceToolStack,
+                            "TOOL_MANAGER::dispatchInternal Waking tool %s for event: %s",
+                            st->theTool->GetName(), aEvent.Format() );
+
+                    setActiveState( st );
                     bool end = !st->cofunc->Resume();
-                    saveViewControls( st );
-                    popViewControls();
 
                     if( end )
                         it = finishTool( st );
                 }
 
-                // If the tool did not request to propagate
-                // the event to other tools, we should stop it now
-                if( !m_passEvent )
+                // If the tool did not request the event be passed to other tools, we're done
+                if( !st->wakeupEvent.PassEvent() )
+                {
+                    wxLogTrace( kicadTraceToolStack,
+                            "TOOL_MANAGER::dispatchInternal %s stopped passing event: %s",
+                            st->theTool->GetName(), aEvent.Format() );
+
+                    handled = true;
                     break;
+                }
             }
         }
     }
@@ -568,22 +715,32 @@ void TOOL_MANAGER::dispatchInternal( const TOOL_EVENT& aEvent )
                 {
                     auto func_copy = tr.second;
 
-                    // if there is already a context, then store it
+                    if( !aEvent.FirstResponder() )
+                        const_cast<TOOL_EVENT*>( &aEvent )->SetFirstResponder( st->theTool );
+
+                    // if there is already a context, then push it on the stack
+                    // and transfer the previous view control settings to the new context
                     if( st->cofunc )
+                    {
+                        auto vc = st->vcSettings;
                         st->Push();
+                        st->vcSettings = vc;
+                    }
 
                     st->cofunc = new COROUTINE<int, const TOOL_EVENT&>( std::move( func_copy ) );
 
                     // as the state changes, the transition table has to be set up again
                     st->transitions.clear();
 
+                    wxLogTrace( kicadTraceToolStack,
+                            "TOOL_MANAGER::dispatchInternal Running tool %s for event: %s",
+                            st->theTool->GetName(), aEvent.Format() );
+
                     // got match? Run the handler.
-                    pushViewControls();
-                    applyViewControls( st );
+                    setActiveState( st );
                     st->idle = false;
                     st->cofunc->Call( aEvent );
-                    saveViewControls( st );
-                    popViewControls();
+                    handled = true;
 
                     if( !st->cofunc->Running() )
                         finishTool( st ); // The couroutine has finished immediately?
@@ -600,30 +757,38 @@ void TOOL_MANAGER::dispatchInternal( const TOOL_EVENT& aEvent )
         if( finished )
             break;      // only the first tool gets the event
     }
+
+    wxLogTrace( kicadTraceToolStack, "TOOL_MANAGER::dispatchInternal handled: %s  %s",
+            ( handled ? "true" : "false" ), aEvent.Format() );
+
+    return handled;
 }
 
 
-bool TOOL_MANAGER::dispatchStandardEvents( const TOOL_EVENT& aEvent )
+bool TOOL_MANAGER::dispatchHotKey( const TOOL_EVENT& aEvent )
 {
     if( aEvent.Action() == TA_KEY_PRESSED )
-    {
-        // Check if there is a hotkey associated
-        if( m_actionMgr->RunHotKey( aEvent.Modifier() | aEvent.KeyCode() ) )
-            return false;                 // hotkey event was handled so it does not go any further
-    }
+        return m_actionMgr->RunHotKey( aEvent.Modifier() | aEvent.KeyCode() );
 
-    return true;
+    return false;
 }
 
 
 bool TOOL_MANAGER::dispatchActivation( const TOOL_EVENT& aEvent )
 {
+    wxLogTrace( kicadTraceToolStack, "TOOL_MANAGER::dispatchActivation %s", aEvent.Format() );
     if( aEvent.IsActivate() )
     {
-        std::map<std::string, TOOL_STATE*>::iterator tool = m_toolNameIndex.find( *aEvent.GetCommandStr() );
+        wxString cmdStr( *aEvent.GetCommandStr() );
+
+        auto tool = m_toolNameIndex.find( *aEvent.GetCommandStr() );
 
         if( tool != m_toolNameIndex.end() )
         {
+            wxLogTrace( kicadTraceToolStack,
+                    "TOOL_MANAGER::dispatchActivation Running tool %s for event: %s",
+                    tool->second->theTool->GetName(), aEvent.Format() );
+
             runTool( tool->second->theTool );
             return true;
         }
@@ -632,12 +797,8 @@ bool TOOL_MANAGER::dispatchActivation( const TOOL_EVENT& aEvent )
     return false;
 }
 
-
-void TOOL_MANAGER::dispatchContextMenu( const TOOL_EVENT& aEvent )
+void TOOL_MANAGER::DispatchContextMenu( const TOOL_EVENT& aEvent )
 {
-    // Store the current tool ID to decide whether to restore the cursor position
-    TOOL_ID activeTool = GetCurrentToolId();
-
     for( TOOL_ID toolId : m_activeTools )
     {
         TOOL_STATE* st = m_toolIdIndex[toolId];
@@ -654,52 +815,77 @@ void TOOL_MANAGER::dispatchContextMenu( const TOOL_EVENT& aEvent )
         st->waitEvents = TOOL_EVENT( TC_ANY, TA_ANY );
 
         // Store the menu pointer in case it is changed by the TOOL when handling menu events
-        CONTEXT_MENU* m = st->contextMenu;
+        ACTION_MENU* m = st->contextMenu;
 
         if( st->contextMenuTrigger == CMENU_NOW )
             st->contextMenuTrigger = CMENU_OFF;
 
-        VECTOR2D cursor = m_viewControls->GetCursorPosition();
-
-        // Temporarily store the cursor position, so the tools could execute actions
+        // Store the cursor position, so the tools could execute actions
         // using the point where the user has invoked a context menu
-        if( m_viewControls->ForcedCursorPosition() )
-            m_origCursor = cursor;
+        m_menuCursor = m_viewControls->GetCursorPosition();
 
-        m_viewControls->ForceCursorPosition( true, cursor );
+        // Save all tools cursor settings, as they will be overridden
+        for( auto idState : m_toolIdIndex )
+        {
+            TOOL_STATE* s = idState.second;
+            const auto& vc = s->vcSettings;
+
+            if( vc.m_forceCursorPosition )
+                m_cursorSettings[idState.first] = vc.m_forcedPosition;
+            else
+                m_cursorSettings[idState.first] = NULLOPT;
+        }
+
+        m_viewControls->ForceCursorPosition( true, m_menuCursor );
 
         // Display a copy of menu
-        std::unique_ptr<CONTEXT_MENU> menu( m->Clone() );
+        std::unique_ptr<ACTION_MENU> menu( m->Clone() );
 
-        // Run update handlers on the created copy
-        menu->UpdateAll();
+        m_menuOwner = toolId;
         m_menuActive = true;
-        GetEditFrame()->PopupMenu( menu.get() );
-        m_menuActive = false;
 
-        m_viewControls->WarpCursor( cursor, true, false );
+        if( auto frame = dynamic_cast<wxFrame*>( m_frame ) )
+            frame->PopupMenu( menu.get() );
 
-        // If nothing was chosen from the context menu, we must notify the tool as well
-        if( menu->GetSelected() < 0 )
+        // Warp the cursor if a menu item was selected
+        if( menu->GetSelected() >= 0 && m_warpMouseAfterContextMenu )
+            m_viewControls->WarpCursor( m_menuCursor, true, false );
+        // Otherwise notify the tool of a cancelled menu
+        else
         {
-            TOOL_EVENT evt( TC_COMMAND, TA_CONTEXT_MENU_CHOICE, -1 );
+            TOOL_EVENT evt( TC_COMMAND, TA_CHOICE_MENU_CHOICE, -1 );
+            evt.SetHasPosition( false );
             evt.SetParameter( m );
             dispatchInternal( evt );
         }
 
+        // Restore setting in case it was vetoed
+        m_warpMouseAfterContextMenu = true;
+
         // Notify the tools that menu has been closed
-        TOOL_EVENT evt( TC_COMMAND, TA_CONTEXT_MENU_CLOSED );
+        TOOL_EVENT evt( TC_COMMAND, TA_CHOICE_MENU_CLOSED );
+        evt.SetHasPosition( false );
         evt.SetParameter( m );
         dispatchInternal( evt );
 
-        // Restore the cursor settings if the tool is still active
-        if( activeTool == GetCurrentToolId() )
+        m_menuActive = false;
+        m_menuOwner = -1;
+
+        // Restore cursor settings
+        for( auto cursorSetting : m_cursorSettings )
         {
-            m_viewControls->ForceCursorPosition( (bool) m_origCursor,
-                    m_origCursor.get_value_or( VECTOR2D( 0, 0 ) ) );
+            auto it = m_toolIdIndex.find( cursorSetting.first );
+            wxASSERT( it != m_toolIdIndex.end() );
+
+            if( it == m_toolIdIndex.end() )
+                continue;
+
+            KIGFX::VC_SETTINGS& vc = it->second->vcSettings;
+            vc.m_forceCursorPosition = (bool) cursorSetting.second;
+            vc.m_forcedPosition = cursorSetting.second ? *cursorSetting.second : VECTOR2D( 0, 0 );
         }
 
-        m_origCursor = boost::none;
+        m_cursorSettings.clear();
         break;
     }
 }
@@ -714,7 +900,12 @@ TOOL_MANAGER::ID_LIST::iterator TOOL_MANAGER::finishTool( TOOL_STATE* aState )
         // Deactivate the tool if there are no other contexts saved on the stack
         if( it != m_activeTools.end() )
             it = m_activeTools.erase( it );
+
+        aState->idle = true;
     }
+
+    if( aState == m_activeState )
+        setActiveState( nullptr );
 
     // Set transitions to be ready for future TOOL_EVENTs
     TOOL_BASE* tool = aState->theTool;
@@ -722,32 +913,43 @@ TOOL_MANAGER::ID_LIST::iterator TOOL_MANAGER::finishTool( TOOL_STATE* aState )
     if( tool->GetType() == INTERACTIVE )
         static_cast<TOOL_INTERACTIVE*>( tool )->resetTransitions();
 
-    aState->idle = true;
+    // Don't move the iterator past the stack beginning
+    if( it == m_activeTools.begin() )
+        return it;
 
-    return it;
+    return --it;
 }
 
 
 bool TOOL_MANAGER::ProcessEvent( const TOOL_EVENT& aEvent )
 {
-    bool hotkey_handled = processEvent( aEvent );
+    bool handled = processEvent( aEvent );
 
-    if( TOOL_STATE* active = GetCurrentToolState() )
+    TOOL_STATE* activeTool = GetCurrentToolState();
+
+    if( activeTool )
+        setActiveState( activeTool );
+
+    if( m_view && m_view->IsDirty() )
     {
-        applyViewControls( active );
+        auto frame = GetEditFrame();
+        if( frame )
+        {
+            frame->RefreshCanvas();
+        }
+
+#if defined( __WXMAC__ ) || defined( __WINDOWS__ )
+        wxTheApp->ProcessPendingEvents(); // required for updating brightening behind a popup menu
+#endif
     }
 
-    if( m_view->IsDirty() )
-    {
-        EDA_DRAW_FRAME* f = static_cast<EDA_DRAW_FRAME*>( GetEditFrame() );
-        f->GetGalCanvas()->Refresh();    // fixme: ugly hack, provide a method in TOOL_DISPATCHER.
-    }
+    UpdateUI( aEvent );
 
-    return hotkey_handled;
+    return handled;
 }
 
 
-void TOOL_MANAGER::ScheduleContextMenu( TOOL_BASE* aTool, CONTEXT_MENU* aMenu,
+void TOOL_MANAGER::ScheduleContextMenu( TOOL_BASE* aTool, ACTION_MENU* aMenu,
                                         CONTEXT_MENU_TRIGGER aTrigger )
 {
     TOOL_STATE* st = m_toolState[aTool];
@@ -792,6 +994,15 @@ std::string TOOL_MANAGER::GetClipboard() const
 }
 
 
+const KIGFX::VC_SETTINGS& TOOL_MANAGER::GetCurrentToolVC() const
+{
+    if( TOOL_STATE* active = GetCurrentToolState() )
+        return active->vcSettings;
+
+    return m_viewControls->GetSettings();
+}
+
+
 TOOL_ID TOOL_MANAGER::MakeToolId( const std::string& aToolName )
 {
     static int currentId;
@@ -801,13 +1012,12 @@ TOOL_ID TOOL_MANAGER::MakeToolId( const std::string& aToolName )
 
 
 void TOOL_MANAGER::SetEnvironment( EDA_ITEM* aModel, KIGFX::VIEW* aView,
-                                   KIGFX::VIEW_CONTROLS* aViewControls, wxWindow* aFrame )
+                                   KIGFX::VIEW_CONTROLS* aViewControls, EDA_BASE_FRAME* aFrame )
 {
     m_model = aModel;
     m_view = aView;
     m_viewControls = aViewControls;
-    m_editFrame = aFrame;
-    m_actionMgr->UpdateHotKeys();
+    m_frame = aFrame;
 }
 
 
@@ -825,18 +1035,37 @@ void TOOL_MANAGER::saveViewControls( TOOL_STATE* aState )
 {
     aState->vcSettings = m_viewControls->GetSettings();
 
-    // If context menu has overridden the cursor position, restore the original position
-    // (see dispatchContextMenu())
     if( m_menuActive )
     {
-        if( m_origCursor )
+        // Context menu is active, so the cursor settings are overridden (see DispatchContextMenu())
+        auto it = m_cursorSettings.find( aState->theTool->GetId() );
+
+        if( it != m_cursorSettings.end() )
         {
-            aState->vcSettings.m_forceCursorPosition = true;
-            aState->vcSettings.m_forcedPosition = *m_origCursor;
-        }
-        else
-        {
-            aState->vcSettings.m_forceCursorPosition = false;
+            const KIGFX::VC_SETTINGS& curr = m_viewControls->GetSettings();
+
+            // Tool has overridden the cursor position, so store the new settings
+            if( !curr.m_forceCursorPosition || curr.m_forcedPosition != m_menuCursor )
+            {
+                if( !curr.m_forceCursorPosition )
+                    it->second = NULLOPT;
+                else
+                    it->second = curr.m_forcedPosition;
+            }
+            else
+            {
+                OPT<VECTOR2D> cursor = it->second;
+
+                if( cursor )
+                {
+                    aState->vcSettings.m_forceCursorPosition = true;
+                    aState->vcSettings.m_forcedPosition = *cursor;
+                }
+                else
+                {
+                    aState->vcSettings.m_forceCursorPosition = false;
+                }
+            }
         }
     }
 }
@@ -848,42 +1077,80 @@ void TOOL_MANAGER::applyViewControls( TOOL_STATE* aState )
 }
 
 
-void TOOL_MANAGER::pushViewControls()
-{
-    m_vcStack.push( m_viewControls->GetSettings() );
-}
-
-
-void TOOL_MANAGER::popViewControls()
-{
-    m_viewControls->ApplySettings( m_vcStack.top() );
-    m_vcStack.pop();
-}
-
-
 bool TOOL_MANAGER::processEvent( const TOOL_EVENT& aEvent )
 {
-    // Early dispatch of events destined for the TOOL_MANAGER
-    if( !dispatchStandardEvents( aEvent ) )
-        return true;
+    wxLogTrace( kicadTraceToolStack, "TOOL_MANAGER::processEvent %s", aEvent.Format() );
 
-    dispatchInternal( aEvent );
-    dispatchActivation( aEvent );
-    dispatchContextMenu( aEvent );
+    // First try to dispatch the action associated with the event if it is a key press event
+    bool handled = dispatchHotKey( aEvent );
 
-    // Dispatch queue
-    while( !m_eventQueue.empty() )
+    if( !handled )
     {
-        TOOL_EVENT event = m_eventQueue.front();
-        m_eventQueue.pop_front();
-        processEvent( event );
+        TOOL_EVENT mod_event( aEvent );
+
+        // Only immediate actions get the position.  Otherwise clear for tool activation
+        if( GetEditFrame() && !GetEditFrame()->GetDoImmediateActions() )
+        {
+            // An tool-selection-event has no position
+            if( mod_event.GetCommandStr().is_initialized()
+                    && mod_event.GetCommandStr().get() != GetEditFrame()->CurrentToolName() )
+            {
+                mod_event.SetHasPosition( false );
+            }
+        }
+
+        // If the event is not handled through a hotkey activation, pass it to the currently
+        // running tool loops
+        handled |= dispatchInternal( mod_event );
+        handled |= dispatchActivation( mod_event );
+
+        // Open the context menu if requested by a tool
+        DispatchContextMenu( mod_event );
+
+        // Dispatch any remaining events in the event queue
+        while( !m_eventQueue.empty() )
+        {
+            TOOL_EVENT event = m_eventQueue.front();
+            m_eventQueue.pop_front();
+            processEvent( event );
+        }
     }
 
-    return false;
+    wxLogTrace( kicadTraceToolStack, "TOOL_MANAGER::processEvent handled: %s  %s",
+            ( handled ? "true" : "false" ), aEvent.Format() );
+
+    return handled;
 }
+
+
+void TOOL_MANAGER::setActiveState( TOOL_STATE* aState )
+{
+    if( m_activeState && m_viewControls )
+        saveViewControls( m_activeState );
+
+    m_activeState = aState;
+
+    if( m_activeState && m_viewControls )
+        applyViewControls( aState );
+}
+
 
 bool TOOL_MANAGER::IsToolActive( TOOL_ID aId ) const
 {
     auto it = m_toolIdIndex.find( aId );
     return !it->second->idle;
+}
+
+
+void TOOL_MANAGER::UpdateUI( const TOOL_EVENT& aEvent )
+{
+    EDA_BASE_FRAME* frame = GetEditFrame();
+
+    if( frame )
+    {
+        frame->UpdateStatusBar();
+
+        if( !aEvent.IsMotion() && !aEvent.IsDrag() )
+            frame->SyncToolbars();
+    }
 }

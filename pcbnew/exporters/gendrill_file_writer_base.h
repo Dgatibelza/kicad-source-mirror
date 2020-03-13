@@ -136,7 +136,7 @@ public:
 protected:
     BOARD*                   m_pcb;
     wxString                 m_drillFileExtension;      // .drl or .gbr, depending on format
-    bool                     m_unitsDecimal;            // true = decimal, false = inches
+    bool                     m_unitsMetric;             // true = mm, false = inches
     ZEROS_FMT                m_zeroFormat;              // the zero format option for output file
     DRILL_PRECISION          m_precision;               // The current coordinate precision (not used in decimal format)
     double                   m_conversionUnits;         // scaling factor to convert the board unites to
@@ -146,7 +146,7 @@ protected:
     std::vector<HOLE_INFO>   m_holeListBuffer;          // Buffer containing holes
     std::vector<DRILL_TOOL>  m_toolListBuffer;          // Buffer containing tools
 
-    PlotFormat               m_mapFileFmt;              // the format of the map drill file,
+    PLOT_FORMAT m_mapFileFmt;                           // the format of the map drill file,
                                                         // if this map is needed
     const PAGE_INFO*         m_pageInfo;                // the page info used to plot drill maps
                                                         // If NULL, use a A4 page format
@@ -154,13 +154,13 @@ protected:
     // Use derived classes to build a fully initialized GENDRILL_WRITER_BASE class.
     GENDRILL_WRITER_BASE( BOARD* aPcb )
     {
-        m_pcb  = aPcb;
+        m_pcb             = aPcb;
         m_conversionUnits = 1.0;
-        m_unitsDecimal    = true;
-        m_mapFileFmt = PLOT_FORMAT_PDF;
-        m_pageInfo = NULL;
-        m_merge_PTH_NPTH = false;
-        m_zeroFormat = DECIMAL_FORMAT;
+        m_unitsMetric     = true;
+        m_mapFileFmt      = PLOT_FORMAT::PDF;
+        m_pageInfo        = NULL;
+        m_merge_PTH_NPTH  = false;
+        m_zeroFormat      = DECIMAL_FORMAT;
     }
 
 public:
@@ -195,7 +195,10 @@ public:
      * PLOT_FORMAT_DXF, PLOT_FORMAT_SVG, PLOT_FORMAT_PDF
      * the most useful are PLOT_FORMAT_PDF and PLOT_FORMAT_POST
      */
-    void SetMapFileFormat( PlotFormat aMapFmt ) { m_mapFileFmt = aMapFmt; }
+    void SetMapFileFormat( PLOT_FORMAT aMapFmt )
+    {
+        m_mapFileFmt = aMapFmt;
+    }
 
     /**
      * Function CreateMapFilesSet
@@ -273,7 +276,7 @@ protected:
      * @param aFullFileName : the full filename of the map file to create,
      * @param aFormat : one of the supported plot formats (see enum PlotFormat )
      */
-    bool genDrillMapFile( const wxString& aFullFileName, PlotFormat aFormat );
+    bool genDrillMapFile( const wxString& aFullFileName, PLOT_FORMAT aFormat );
 
     /**
      * Function BuildHolesList
@@ -340,6 +343,20 @@ protected:
      */
     virtual const wxString getDrillFileName( DRILL_LAYER_PAIR aPair, bool aNPTH,
                                              bool aMerge_PTH_NPTH ) const;
+
+
+    /**
+     * @return a wxString containing the .FileFunction attribute.
+     * the standard X2 FileFunction for drill files is
+     * %TF.FileFunction,Plated[NonPlated],layer1num,layer2num,PTH[NPTH][Blind][Buried],Drill[Route][Mixed]*%
+     * There is no X1 version, as the Gerber drill files uses only X2 format
+     * There is a compatible NC drill version.
+     * @param aLayerPair is the layer pair (Drill from rom first layer to second layer)
+     * @param aIsNpth is true when generating NPTH drill file
+     * @param aCompatNCdrill is true when generating NC (Excellon) compatible drill file
+     */
+    const wxString BuildFileFunctionAttributeString( DRILL_LAYER_PAIR aLayerPair,
+                                                     bool aIsNpth, bool aCompatNCdrill = false ) const;
 };
 
 #endif      // #define GENDRILL_FILE_WRITER_BASE_H

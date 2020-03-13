@@ -32,11 +32,9 @@
 
 #include <eda_text.h>
 #include <class_board_item.h>
-#include <PolyLine.h>
 
 
 class LINE_READER;
-class EDA_DRAW_PANEL;
 class MSG_PANEL_ITEM;
 
 
@@ -55,7 +53,12 @@ public:
         return aItem && PCB_TEXT_T == aItem->Type();
     }
 
-    virtual const wxPoint& GetPosition() const override
+    bool Matches( wxFindReplaceData& aSearchData, void* aAuxData ) override
+    {
+        return BOARD_ITEM::Matches( GetShownText(), aSearchData );
+    }
+
+    virtual const wxPoint GetPosition() const override
     {
         return EDA_TEXT::GetTextPos();
     }
@@ -74,22 +77,21 @@ public:
 
     void Rotate( const wxPoint& aRotCentre, double aAngle ) override;
 
-    void Flip( const wxPoint& aCentre ) override;
+    void Flip( const wxPoint& aCentre, bool aFlipLeftRight ) override;
 
-    void Draw( EDA_DRAW_PANEL* panel, wxDC* DC,
-               GR_DRAWMODE aDrawMode, const wxPoint& offset = ZeroOffset ) override;
+    void Print( PCB_BASE_FRAME* aFrame, wxDC* DC, const wxPoint& offset = ZeroOffset ) override;
 
-    void GetMsgPanelInfo( std::vector< MSG_PANEL_ITEM >& aList ) override;
+    void GetMsgPanelInfo( EDA_UNITS aUnits, std::vector<MSG_PANEL_ITEM>& aList ) override;
 
-    virtual bool HitTest( const wxPoint& aPosition ) const override
+    bool HitTest( const wxPoint& aPosition, int aAccuracy ) const override
     {
-        return TextHitTest( aPosition );
+        return TextHitTest( aPosition, aAccuracy );
     }
 
     /** @copydoc BOARD_ITEM::HitTest(const EDA_RECT& aRect,
      *                               bool aContained = true, int aAccuracy ) const
      */
-    virtual bool HitTest( const EDA_RECT& aRect, bool aContained = true, int aAccuracy = 0 ) const override
+    bool HitTest( const EDA_RECT& aRect, bool aContained, int aAccuracy = 0 ) const override
     {
         return TextHitTest( aRect, aContained, aAccuracy );
     }
@@ -100,38 +102,18 @@ public:
     }
 
     /**
-     * Function TransformBoundingBoxWithClearanceToPolygon
-     * Convert the text bounding box to a rectangular polygon
-     * depending on the text orientation, the bounding box
-     * is not always horizontal or vertical
-     * Used in filling zones calculations
-     * Circles and arcs are approximated by segments
-     * @param aCornerBuffer = a buffer to store the polygon
-     * @param aClearanceValue = the clearance around the text bounding box
-     * to the real clearance value (usually near from 1.0)
-     */
-    void TransformBoundingBoxWithClearanceToPolygon(
-                    SHAPE_POLY_SET& aCornerBuffer,
-                    int                    aClearanceValue ) const;
-
-    /**
      * Function TransformShapeWithClearanceToPolygonSet
      * Convert the text shape to a set of polygons (one by segment)
      * Used in 3D viewer
      * Circles and arcs are approximated by segments
      * @param aCornerBuffer = a buffer to store the polygon
      * @param aClearanceValue = the clearance around the text
-     * @param aCircleToSegmentsCount = the number of segments to approximate a circle
-     * @param aCorrectionFactor = the correction to apply to circles radius to keep
-     * clearance when the circle is approximated by segment bigger or equal
-     * to the real clearance value (usually near from 1.0)
+     * @param aError = deviation from true arc position to segment approx
      */
-    void TransformShapeWithClearanceToPolygonSet( SHAPE_POLY_SET& aCornerBuffer,
-                                               int                aClearanceValue,
-                                               int                aCircleToSegmentsCount,
-                                               double             aCorrectionFactor ) const;
+    void TransformShapeWithClearanceToPolygonSet(
+            SHAPE_POLY_SET& aCornerBuffer, int aClearanceValue, int aError = ARC_HIGH_DEF ) const;
 
-    wxString GetSelectMenuText() const override;
+    wxString GetSelectMenuText( EDA_UNITS aUnits ) const override;
 
     BITMAP_DEF GetMenuImage() const override;
 
@@ -139,6 +121,8 @@ public:
     const EDA_RECT GetBoundingBox() const override;
 
     EDA_ITEM* Clone() const override;
+
+    virtual void SwapData( BOARD_ITEM* aImage ) override;
 
 #if defined(DEBUG)
     virtual void Show( int nestLevel, std::ostream& os ) const override { ShowDummy( os ); }

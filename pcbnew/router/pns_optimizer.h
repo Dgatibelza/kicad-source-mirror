@@ -22,7 +22,7 @@
 #ifndef __PNS_OPTIMIZER_H
 #define __PNS_OPTIMIZER_H
 
-#include <boost/unordered_map.hpp>
+#include <unordered_map>
 #include <memory>
 
 #include <geometry/shape_index_list.h>
@@ -30,15 +30,18 @@
 
 #include "range.h"
 
+
 namespace PNS {
 
 class NODE;
 class ROUTER;
 class LINE;
 class DIFF_PAIR;
+class ITEM;
+class JOINT;
 
 /**
- * Class COST_ESTIMATOR
+ * COST_ESTIMATOR
  *
  * Calculates the cost of a given line, taking corner angles and total length into account.
  **/
@@ -76,8 +79,10 @@ private:
     int m_cornerCost;
 };
 
+class OPT_CONSTRAINT;
+
 /**
- * Class OPTIMIZER
+ * OPTIMIZER
  *
  * Performs various optimizations of the lines being routed, attempting to make the lines shorter
  * and less cornery. There are 3 kinds of optimizations so far:
@@ -95,15 +100,17 @@ public:
         MERGE_SEGMENTS  = 0x01,
         SMART_PADS      = 0x02,
         MERGE_OBTUSE    = 0x04,
-        FANOUT_CLEANUP    = 0x08
+        FANOUT_CLEANUP    = 0x08,
+        KEEP_TOPOLOGY = 0x10,
+        PRESERVE_VERTEX = 0x20
     };
 
     OPTIMIZER( NODE* aWorld );
     ~OPTIMIZER();
 
     ///> a quick shortcut to optmize a line without creating and setting up an optimizer
-    static bool Optimize( LINE* aLine, int aEffortLevel, NODE* aWorld);
-
+    static bool Optimize( LINE* aLine, int aEffortLevel, NODE* aWorld, const VECTOR2I aV = VECTOR2I(0, 0) );
+    
     bool Optimize( LINE* aLine, LINE* aResult = NULL );
     bool Optimize( DIFF_PAIR* aPair );
 
@@ -129,6 +136,12 @@ public:
         m_restrictArea = aArea;
         m_restrictAreaActive = true;
     }
+
+    void ClearConstraints();
+    void AddConstraint ( OPT_CONSTRAINT *aConstraint );
+
+    bool extractPadGrids( std::vector<JOINT*>& aPadJoints );
+    void BuildPadGrids();
 
 private:
     static const int MaxCachedItems = 256;
@@ -158,10 +171,14 @@ private:
     void cacheAdd( ITEM* aItem, bool aIsStatic );
     void removeCachedSegments( LINE* aLine, int aStartVertex = 0, int aEndVertex = -1 );
 
+    bool checkConstraints(  int aVertex1, int aVertex2, LINE* aOriginLine, const SHAPE_LINE_CHAIN& aCurrentPath, const SHAPE_LINE_CHAIN& aReplacement );
+
+
+
     BREAKOUT_LIST circleBreakouts( int aWidth, const SHAPE* aShape, bool aPermitDiagonal ) const;
     BREAKOUT_LIST rectBreakouts( int aWidth, const SHAPE* aShape, bool aPermitDiagonal ) const;
     BREAKOUT_LIST ovalBreakouts( int aWidth, const SHAPE* aShape, bool aPermitDiagonal ) const;
-    BREAKOUT_LIST convexBreakouts( int aWidth, const SHAPE* aShape, bool aPermitDiagonal ) const;
+    BREAKOUT_LIST customBreakouts( int aWidth, const ITEM* aItem, bool aPermitDiagonal ) const;
     BREAKOUT_LIST computeBreakouts( int aWidth, const ITEM* aItem, bool aPermitDiagonal ) const;
 
     int smartPadsSingle( LINE* aLine, ITEM* aPad, bool aEnd, int aEndVertex );
@@ -170,7 +187,8 @@ private:
 
     SHAPE_INDEX_LIST<ITEM*> m_cache;
 
-    typedef boost::unordered_map<ITEM*, CACHED_ITEM> CachedItemTags;
+    std::vector<OPT_CONSTRAINT*> m_constraints;
+    typedef std::unordered_map<ITEM*, CACHED_ITEM> CachedItemTags;
     CachedItemTags m_cacheTags;
     NODE* m_world;
     int m_collisionKindMask;
@@ -181,6 +199,93 @@ private:
     bool m_restrictAreaActive;
 };
 
-}
+class OPT_CONSTRAINT
+{
+public:
+    OPT_CONSTRAINT( NODE* aWorld ) :
+        m_world( aWorld )
+        {
+            m_priority = 0;
+        };
+
+    virtual ~OPT_CONSTRAINT() {};
+
+    virtual bool Check ( int aVertex1, int aVertex2, LINE* aOriginLine, const SHAPE_LINE_CHAIN& aCurrentPath, const SHAPE_LINE_CHAIN& aReplacement ) = 0;
+
+    int GetPriority() const
+    {
+        return m_priority;
+    }
+
+    void SetPriority( int aPriority )
+    {
+        m_priority = aPriority;
+    }
+
+protected:
+    NODE* m_world;
+    int m_priority;
+};
+
+class ANGLE_CONSTRAINT_45: public OPT_CONSTRAINT
+{
+public:
+    ANGLE_CONSTRAINT_45( NODE* aWorld, int aEntryDirectionMask = -1, int aExitDirectionMask = -1 ) :
+        OPT_CONSTRAINT( aWorld ),
+        m_entryDirectionMask( aEntryDirectionMask ),
+        m_exitDirectionMask( aExitDirectionMask )
+        {
+
+        }
+
+    virtual ~ANGLE_CONSTRAINT_45() {};
+
+    virtual bool Check ( int aVertex1, int aVertex2, LINE* aOriginLine, const SHAPE_LINE_CHAIN& aCurrentPath, const SHAPE_LINE_CHAIN& aReplacement ) override;
+
+private:
+    int m_entryDirectionMask;
+    int m_exitDirectionMask;
+};
+
+class AREA_CONSTRAINT : public OPT_CONSTRAINT
+{
+public:
+    AREA_CONSTRAINT( NODE* aWorld, const  BOX2I& aAllowedArea ) :
+        OPT_CONSTRAINT( aWorld ),
+        m_allowedArea ( aAllowedArea ) {};
+
+        virtual bool Check ( int aVertex1, int aVertex2, LINE* aOriginLine, const SHAPE_LINE_CHAIN& aCurrentPath, const SHAPE_LINE_CHAIN& aReplacement ) override;
+
+private:
+    BOX2I m_allowedArea;
+
+};
+
+class KEEP_TOPOLOGY_CONSTRAINT: public OPT_CONSTRAINT
+{
+public:
+    KEEP_TOPOLOGY_CONSTRAINT( NODE* aWorld ) :
+        OPT_CONSTRAINT( aWorld )
+        {};
+
+    virtual bool Check ( int aVertex1, int aVertex2, LINE* aOriginLine, const SHAPE_LINE_CHAIN& aCurrentPath, const SHAPE_LINE_CHAIN& aReplacement ) override;
+};
+
+class PRESERVE_VERTEX_CONSTRAINT: public OPT_CONSTRAINT
+{
+public:
+    PRESERVE_VERTEX_CONSTRAINT( NODE* aWorld, const VECTOR2I& aV ) :
+        OPT_CONSTRAINT( aWorld ),
+        m_v( aV )
+        {};
+
+    virtual bool Check ( int aVertex1, int aVertex2, LINE* aOriginLine, const SHAPE_LINE_CHAIN& aCurrentPath, const SHAPE_LINE_CHAIN& aReplacement ) override;
+private:
+
+    VECTOR2I m_v;
+};
+
+
+};
 
 #endif

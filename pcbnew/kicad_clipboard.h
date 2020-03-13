@@ -7,7 +7,7 @@
  *
  * This program source code file is part of KiCad, a free EDA CAD application.
  *
- * Copyright (C) 2017 KiCad Developers, see CHANGELOG.TXT for contributors.
+ * Copyright (C) 2017-2020 KiCad Developers, see CHANGELOG.TXT for contributors.
  *
  * This program is free software; you can redistribute it and/or
  * modify it under the terms of the GNU General Public License
@@ -35,8 +35,7 @@
 #include <class_module.h>
 #include <pcb_parser.h>
 #include <memory.h>
-
-#include <tool/selection.h>
+#include <tools/pcbnew_selection.h>
 
 class CLIPBOARD_PARSER : public PCB_PARSER
 {
@@ -45,11 +44,7 @@ public:
 
     MODULE* parseMODULE( wxArrayString* aInitialComments )
     {
-       MODULE* mod = PCB_PARSER::parseMODULE( aInitialComments );
-
-       //TODO: figure out better way of handling paths
-       mod->SetPath( wxT( "" ) );
-       return mod;
+       return PCB_PARSER::parseMODULE( aInitialComments );
     }
 };
 
@@ -63,7 +58,7 @@ public:
     /* Writes all the settings of the BOARD* set by setBoard() and then adds all
      * the BOARD_ITEM* found in selection formatted by PCB_IO to clipboard as a text
      */
-    void SaveSelection( const SELECTION& selected );
+    void SaveSelection( const PCBNEW_SELECTION& selected );
 
     BOARD_ITEM* Parse();
 

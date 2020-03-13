@@ -1,8 +1,8 @@
 /*
  * This program source code file is part of KiCad, a free EDA CAD application.
  *
- * Copyright (C) 2016 Jean-Pierre Charras, jp.charras at wanadoo.fr
- * Copyright (C) 1992-2017 KiCad Developers, see AUTHORS.txt for contributors.
+ * Copyright (C) 2019 Jean-Pierre Charras, jp.charras at wanadoo.fr
+ * Copyright (C) 1992-2019 KiCad Developers, see AUTHORS.txt for contributors.
  *
  * This program is free software; you can redistribute it and/or
  * modify it under the terms of the GNU General Public License
@@ -22,112 +22,119 @@
  * 51 Franklin Street, Fifth Floor, Boston, MA  02110-1301, USA
  */
 
-/**
- * @file dialog_select_net_from_list.cpp
- * @brief methods to show available net names and select and highligth a net
- */
-
-#include <wx/grid.h>
-
 #include <fctsys.h>
 #include <kicad_string.h>
-#include <kicad_device_context.h>
-#include <class_drawpanel.h>
 #include <pcbnew.h>
-#include <wxPcbStruct.h>
+#include <tools/pcb_inspection_tool.h>
 #include <class_board.h>
+#include <class_track.h>
 #include <dialog_select_net_from_list_base.h>
 #include <eda_pattern_match.h>
-
+#include <wildcards_and_files_ext.h>
 #include <view/view.h>
 #include <view/view_controls.h>
 #include <pcb_painter.h>
-#include <connectivity.h>
-
-#define COL_NETNAME 0
-#define COL_NETINFO 1
+#include <connectivity/connectivity_data.h>
 
 class DIALOG_SELECT_NET_FROM_LIST: public DIALOG_SELECT_NET_FROM_LIST_BASE
 {
 private:
-    wxString m_selection;
-    bool m_wasSelected;
-    BOARD* m_brd;
-
 public:
-    DIALOG_SELECT_NET_FROM_LIST( PCB_EDIT_FRAME * aParent );
+    DIALOG_SELECT_NET_FROM_LIST( PCB_EDIT_FRAME* aParent );
     ~DIALOG_SELECT_NET_FROM_LIST();
 
     // returns true if a net was selected, and its name in aName
     bool GetNetName( wxString& aName );
 
+    /**
+     * Visually highlights a net.
+     * @param aNetName is the name of net to be highlighted.  An empty string will unhighlight
+     * any currently highlighted net.
+     */
+    void HighlightNet( const wxString& aNetName );
+
 private:
-    void onCellClick( wxGridEvent& event ) override;
-	void onFilterChange( wxCommandEvent& event ) override;
+    void onSelChanged( wxDataViewEvent& event ) override;
+    void onFilterChange( wxCommandEvent& event ) override;
+    void onListSize( wxSizeEvent& event ) override;
+    void onReport( wxCommandEvent& event ) override;
 
     void buildNetsList();
+    wxString getListColumnHeaderNet() { return _( "Net" ); };
+    wxString getListColumnHeaderName() { return _( "Name" ); };
+    wxString getListColumnHeaderCount() { return _( "Pad Count" ); };
+    wxString getListColumnHeaderVias() { return _( "Via Count" ); };
+    wxString getListColumnHeaderBoard() { return _( "Board Length" ); };
+    wxString getListColumnHeaderDie() { return _( "Die Length" ); };
+    wxString getListColumnHeaderLength() { return _( "Length" ); };
+    void adjustListColumns();
+
+    wxArrayString   m_netsInitialNames;   // The list of escaped netnames (original names)
+    wxString        m_selection;
+    bool            m_wasSelected;
+    BOARD*          m_brd;
+    PCB_EDIT_FRAME* m_frame;
 };
 
 
-void PCB_EDIT_FRAME::ListNetsAndSelect( wxCommandEvent& event )
+int PCB_INSPECTION_TOOL::ListNets( const TOOL_EVENT& aEvent )
 {
-    DIALOG_SELECT_NET_FROM_LIST dlg( this );
+    DIALOG_SELECT_NET_FROM_LIST dlg( m_frame );
     wxString netname;
 
-    if( dlg.ShowModal() == wxID_CANCEL || !dlg.GetNetName( netname ) )
-        return;
-
-    // Search for the net selected.
-    NETINFO_ITEM* net = GetBoard()->FindNet( netname );
-
-    if( net == NULL )   // Should not occur.
-        return;
-
-    if( IsGalCanvasActive() )
+    if( dlg.ShowModal() == wxID_CANCEL )
     {
-        KIGFX::RENDER_SETTINGS* render = GetGalCanvas()->GetView()->GetPainter()->GetSettings();
-        render->SetHighlight( true, net->GetNet() );
-
-        GetGalCanvas()->GetView()->UpdateAllLayersColor();
-        GetGalCanvas()->Refresh();
+        // Clear highlight
+        dlg.HighlightNet( "" );
     }
-    else
-    {
-        INSTALL_UNBUFFERED_DC( dc, m_canvas );
 
-        if( GetBoard()->IsHighLightNetON() )
-            HighLight( &dc );
-
-        GetBoard()->SetHighLightNet( net->GetNet() );
-        HighLight( &dc );
-    }
+    return 0;
 }
 
 
 DIALOG_SELECT_NET_FROM_LIST::DIALOG_SELECT_NET_FROM_LIST( PCB_EDIT_FRAME* aParent )
-    : DIALOG_SELECT_NET_FROM_LIST_BASE( aParent )
+    : DIALOG_SELECT_NET_FROM_LIST_BASE( aParent ), m_frame( aParent )
 {
     m_brd = aParent->GetBoard();
     m_wasSelected = false;
 
-    // Choose selection mode
-    m_netsListGrid->SetSelectionMode( wxGrid::wxGridSelectRows );
+    m_netsList->AppendTextColumn( getListColumnHeaderNet(),    wxDATAVIEW_CELL_INERT, 0, wxALIGN_LEFT, 0 );
+    m_netsList->AppendTextColumn( getListColumnHeaderName(),   wxDATAVIEW_CELL_INERT, 0, wxALIGN_LEFT, 0 );
+    m_netsList->AppendTextColumn( getListColumnHeaderCount(),  wxDATAVIEW_CELL_INERT, 0, wxALIGN_CENTER, 0 );
+    m_netsList->AppendTextColumn( getListColumnHeaderVias(),   wxDATAVIEW_CELL_INERT, 0, wxALIGN_CENTER, 0 );
+    m_netsList->AppendTextColumn( getListColumnHeaderBoard(),  wxDATAVIEW_CELL_INERT, 0, wxALIGN_CENTER, 0 );
+    m_netsList->AppendTextColumn( getListColumnHeaderDie(),    wxDATAVIEW_CELL_INERT, 0, wxALIGN_CENTER, 0 );
+    m_netsList->AppendTextColumn( getListColumnHeaderLength(), wxDATAVIEW_CELL_INERT, 0, wxALIGN_CENTER, 0 );
+
+    // The fact that we're a list should keep the control from reserving space for the
+    // expander buttons... but it doesn't.  Fix by forcing the indent to 0.
+    m_netsList->SetIndent( 0 );
 
     buildNetsList();
 
+    adjustListColumns();
+
     m_sdbSizerOK->SetDefault();
-    GetSizer()->SetSizeHints( this );
-    Center();
+
+    FinishDialogSettings();
 }
+
 
 void DIALOG_SELECT_NET_FROM_LIST::buildNetsList()
 {
-    wxString netFilter = m_textCtrlFilter->GetValue();
+    wxString                   netFilter = m_textCtrlFilter->GetValue();
     EDA_PATTERN_MATCH_WILDCARD filter;
-    filter.SetPattern( netFilter.MakeUpper() );
-    wxString txt;
 
-    int row_idx = 0;
+    constexpr KICAD_T types[] = { PCB_TRACE_T, PCB_VIA_T, PCB_PAD_T, EOT };
+
+    filter.SetPattern( netFilter.MakeUpper() );
+
+    m_netsList->DeleteAllItems();
+    m_netsInitialNames.Clear();
+
+    auto connectivity = m_brd->GetConnectivity();
+
+    auto units = GetUserUnits();
 
     // Populate the nets list with nets names matching the filters:
     // Note: the filtering is case insensitive.
@@ -137,46 +144,88 @@ void DIALOG_SELECT_NET_FROM_LIST::buildNetsList()
 
         if( !netFilter.IsEmpty() )
         {
-            wxString netname = net->GetNetname();
+            wxString netname = UnescapeString( net->GetNetname() );
+
             if( filter.Find( netname.MakeUpper() ) == EDA_PATTERN_NOT_FOUND )
                 continue;
         }
 
-        unsigned nPads = m_brd->GetConnectivity()->GetPadCount( netcode );
+        unsigned nodes = m_brd->GetNodesCount( netcode );
 
-        if( !m_cbShowZeroPad->IsChecked() && nPads == 0 )
+        if( !m_cbShowZeroPad->IsChecked() && nodes == 0 )
             continue;
 
-        if( m_netsListGrid->GetNumberRows() <= row_idx )
-            m_netsListGrid->AppendRows( 1 );
+        wxVector<wxVariant> dataLine;
 
-        txt.Printf( _( "net %.3d" ), net->GetNet() );
-        m_netsListGrid->SetRowLabelValue( row_idx, txt );
-
-        m_netsListGrid->SetCellValue( row_idx, COL_NETNAME, net->GetNetname() );
+        dataLine.push_back( wxVariant( wxString::Format( "%.3d", netcode ) ) );
+        dataLine.push_back( wxVariant( UnescapeString( net->GetNetname() ) ) );
+        m_netsInitialNames.Add( net->GetNetname() );
 
         if( netcode )
         {
-            txt.Printf( wxT( "%u" ), nPads );
-            m_netsListGrid->SetCellValue( row_idx, COL_NETINFO, txt );
+            dataLine.push_back( wxVariant( wxString::Format( "%u", nodes ) ) );
+
+            int lenPadToDie = 0;
+            int len = 0;
+            int viaCount = 0;
+
+            for( auto item : connectivity->GetNetItems( netcode, types ) )
+            {
+
+                if( item->Type() == PCB_PAD_T )
+                {
+                    D_PAD *pad = dyn_cast<D_PAD*>( item );
+                    lenPadToDie += pad->GetPadToDieLength();
+                }
+                else if( item->Type() == PCB_TRACE_T )
+                {
+                    TRACK *track = dyn_cast<TRACK*>( item );
+                    len += track->GetLength();
+                }
+                else if( item->Type() == PCB_VIA_T )
+                {
+                    viaCount++;
+                }
+            }
+
+            dataLine.push_back( wxVariant( wxString::Format( "%u", viaCount ) ) );
+            dataLine.push_back( wxVariant( MessageTextFromValue( units, len ) ) );
+            dataLine.push_back( wxVariant( MessageTextFromValue( units, lenPadToDie ) ) );
+            dataLine.push_back( wxVariant( MessageTextFromValue( units, len + lenPadToDie ) ) );
         }
         else    // For the net 0 (unconnected pads), the pad count is not known
-            m_netsListGrid->SetCellValue( row_idx, COL_NETINFO, "---" );
+        {
+            dataLine.push_back( wxVariant( "---" ) );
+            dataLine.push_back( wxVariant( "---" ) );   // vias
+            dataLine.push_back( wxVariant( "---" ) );   // board
+            dataLine.push_back( wxVariant( "---" ) );   // die
+            dataLine.push_back( wxVariant( "---" ) );   // length
+        }
 
-        row_idx++;
+        m_netsList->AppendItem( dataLine );
     }
 
-    // Remove extra rows, if any:
-    int extra_row_idx = m_netsListGrid->GetNumberRows() - row_idx;
-
-    if( extra_row_idx > 0 )
-        m_netsListGrid->DeleteRows( row_idx, extra_row_idx );
-
-    m_netsListGrid->SetColLabelSize( wxGRID_AUTOSIZE );
-    m_netsListGrid->SetRowLabelSize( wxGRID_AUTOSIZE );
-
-    m_netsListGrid->ClearSelection();
     m_wasSelected = false;
+}
+
+
+void DIALOG_SELECT_NET_FROM_LIST::HighlightNet( const wxString& aNetName )
+{
+    int           netCode = -1;
+
+    if( !aNetName.IsEmpty() )
+    {
+        NETINFO_ITEM* net = m_brd->FindNet( aNetName );
+
+        if( net )
+            netCode = net->GetNet();
+    }
+
+    KIGFX::RENDER_SETTINGS* render = m_frame->GetCanvas()->GetView()->GetPainter()->GetSettings();
+    render->SetHighlight( netCode >= 0, netCode );
+
+    m_frame->GetCanvas()->GetView()->UpdateAllLayersColor();
+    m_frame->GetCanvas()->Refresh();
 }
 
 
@@ -184,21 +233,91 @@ DIALOG_SELECT_NET_FROM_LIST::~DIALOG_SELECT_NET_FROM_LIST()
 {
 }
 
+
 void DIALOG_SELECT_NET_FROM_LIST::onFilterChange( wxCommandEvent& event )
 {
     buildNetsList();
 }
 
 
-void DIALOG_SELECT_NET_FROM_LIST::onCellClick( wxGridEvent& event )
+void DIALOG_SELECT_NET_FROM_LIST::onSelChanged( wxDataViewEvent&  )
 {
-    int selected_row = event.GetRow();
-    m_selection = m_netsListGrid->GetCellValue( selected_row, COL_NETNAME );
-    m_wasSelected = true;
+    int selected_row = m_netsList->GetSelectedRow();
 
-    // Select the full row when clicking on any cell off the row
-    m_netsListGrid->SelectRow( selected_row, false );
-    m_netsListGrid->SetGridCursor(selected_row, COL_NETNAME );
+    if( selected_row >= 0 )
+    {
+        // We no not use the displayed net name returnded by
+        // m_netsList->GetTextValue( selected_row, 1 ); because we need the initial escaped net name
+        m_selection = m_netsInitialNames[ selected_row ];
+        m_wasSelected = true;
+
+        HighlightNet( m_selection );
+    }
+    else
+    {
+        HighlightNet( "" );
+        m_wasSelected = false;
+    }
+}
+
+
+void DIALOG_SELECT_NET_FROM_LIST::adjustListColumns()
+{
+    int w0, w1, w2, w3, w4, w5, w6;
+
+    /**
+     * Calculating optimal width of the first (Net) and
+     * the last (Pad Count) columns. That width must be
+     * enough to fit column header label and be not less
+     * than width of four chars (0000).
+     */
+
+    wxClientDC dc( GetParent() );
+    int h, minw, minw_col0;
+
+    dc.GetTextExtent( getListColumnHeaderNet()+"MM", &w0, &h );
+    dc.GetTextExtent( getListColumnHeaderCount()+"MM", &w2, &h );
+    dc.GetTextExtent( getListColumnHeaderVias()+"MM", &w3, &h );
+    dc.GetTextExtent( getListColumnHeaderBoard()+"MM", &w4, &h );
+    dc.GetTextExtent( getListColumnHeaderDie()+"MM", &w5, &h );
+    dc.GetTextExtent( getListColumnHeaderLength()+"MM", &w6, &h );
+    dc.GetTextExtent( "M00000,000 mmM", &minw, &h );
+    dc.GetTextExtent( "M00000M", &minw_col0, &h );
+
+    // Considering left and right margins.
+    // For wxRenderGeneric it is 5px.
+    w0 = std::max( w0+10, minw_col0);
+    w2 = std::max( w2+10, minw);
+    w3 = std::max( w3+10, minw);
+    w4 = std::max( w4+10, minw);
+    w5 = std::max( w5+10, minw);
+    w6 = std::max( w6+10, minw);
+
+    m_netsList->GetColumn( 0 )->SetWidth( w0 );
+    m_netsList->GetColumn( 2 )->SetWidth( w2 );
+    m_netsList->GetColumn( 3 )->SetWidth( w3 );
+    m_netsList->GetColumn( 4 )->SetWidth( w4 );
+    m_netsList->GetColumn( 5 )->SetWidth( w5 );
+    m_netsList->GetColumn( 6 )->SetWidth( w6 );
+
+    // At resizing of the list the width of middle column (Net Names) changes only.
+    int width = m_netsList->GetClientSize().x;
+    w1 = width - w0 - w2 - w3 - w4 - w5 - w6;
+
+    // Column 1 (net names) need a minimal width to display net names
+    dc.GetTextExtent( "MMMMMMMMMMMMMMMMMMMM", &minw, &h );
+    w1 = std::max( w1, minw );
+
+    m_netsList->GetColumn( 1 )->SetWidth( w1 );
+
+    m_netsList->Refresh();
+}
+
+
+void DIALOG_SELECT_NET_FROM_LIST::onListSize( wxSizeEvent& aEvent )
+{
+    aEvent.Skip();
+    adjustListColumns();
 }
 
 
@@ -207,3 +326,47 @@ bool DIALOG_SELECT_NET_FROM_LIST::GetNetName( wxString& aName )
     aName = m_selection;
     return m_wasSelected;
 }
+
+
+void DIALOG_SELECT_NET_FROM_LIST::onReport( wxCommandEvent& aEvent )
+{
+    wxFileDialog dlg( this, _( "Report file" ), "", "",
+                      _( "Report file" ) + AddFileExtListToFilter( { "csv" } ),
+                      wxFD_SAVE );
+
+    if( dlg.ShowModal() == wxID_CANCEL )
+       return;
+
+    wxTextFile f( dlg.GetPath() );
+
+    f.Create();
+
+    int rows = m_netsList->GetItemCount();
+    wxString txt;
+
+    // Print Header:
+    txt.Printf( "\"%s\";\"%s\";\"%s\";\"%s\";\"%s\";\"%s\";\"%s\";",
+                _( "Net Id" ), _( "Net name" ),
+                _( "Pad count" ), _( "Via count" ),
+                _( "Board length" ), _( "Die length" ), _( "Net length" ) );
+    f.AddLine( txt );
+
+    // Print list of nets:
+   for( int row = 1; row < rows; row++ )
+   {
+        txt.Printf( "%s;\"%s\";%s;%s;%s;%s;%s;",
+                    m_netsList->GetTextValue( row, 0 ),     // net id
+                    m_netsList->GetTextValue( row, 1 ),     // net name
+                    m_netsList->GetTextValue( row, 2 ),     // Pad count
+                    m_netsList->GetTextValue( row, 3 ),     // Via count
+                    m_netsList->GetTextValue( row, 4 ),     // Board length
+                    m_netsList->GetTextValue( row, 5 ),     // Die length
+                    m_netsList->GetTextValue( row, 6 ) );   // net length
+
+        f.AddLine( txt );
+   }
+
+   f.Write();
+   f.Close();
+}
+

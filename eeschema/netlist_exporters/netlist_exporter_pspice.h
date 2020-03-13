@@ -3,7 +3,7 @@
  *
  * Copyright (C) 1992-2013 jp.charras at wanadoo.fr
  * Copyright (C) 2013 SoftPLC Corporation, Dick Hollenbeck <dick@softplc.com>
- * Copyright (C) 1992-2016 KiCad Developers
+ * Copyright (C) 1992-2017 KiCad Developers
  *
  * This program is free software; you can redistribute it and/or
  * modify it under the terms of the GNU General Public License
@@ -30,7 +30,7 @@
 #include <list>
 #include <map>
 
-class SEARCH_STACK;
+class PROJECT;
 
 /// Flags for Spice netlist generation (can be combined)
 enum SPICE_NETLIST_OPTIONS {
@@ -50,12 +50,14 @@ enum SPICE_FIELD {
 
 ///> Basic Spice component primitives
 enum SPICE_PRIMITIVE {
+    SP_UNKNOWN      = ' ',
     SP_RESISTOR     = 'R',
     SP_CAPACITOR    = 'C',
     SP_INDUCTOR     = 'L',
     SP_DIODE        = 'D',
     SP_BJT          = 'Q',
     SP_MOSFET       = 'M',
+    SP_JFET         = 'J',
     SP_SUBCKT       = 'X',
     SP_VSOURCE      = 'V',
     SP_ISOURCE      = 'I'
@@ -93,15 +95,15 @@ struct SPICE_ITEM
 
 
 /**
- * Class NETLIST_EXPORTER_PSPICE
+ * NETLIST_EXPORTER_PSPICE
  * generates a PSPICE compatible netlist
  */
 class NETLIST_EXPORTER_PSPICE : public NETLIST_EXPORTER
 {
 public:
-    NETLIST_EXPORTER_PSPICE( NETLIST_OBJECT_LIST* aMasterList, PART_LIBS* aLibs,
-            SEARCH_STACK* aPaths = NULL ) :
-        NETLIST_EXPORTER( aMasterList, aLibs ), m_paths( aPaths )
+    NETLIST_EXPORTER_PSPICE( NETLIST_OBJECT_LIST* aMasterList, PROJECT* aProject = NULL ) :
+        NETLIST_EXPORTER( aMasterList ),
+        m_project( aProject )
     {
     }
 
@@ -121,6 +123,17 @@ public:
     {
         return m_spiceItems;
     }
+
+    /**
+     * @brief Returns name of Spice device corresponding to a schematic component.
+     *
+     * @param aComponent is the component reference.
+     * @return Spice device name or empty string if there is no such component in the netlist. The
+     * name is either plain reference if the first character of reference corresponds to the
+     * assigned device model type or it is the reference prefixed with a character defining
+     * the device model type.
+     */
+    wxString GetSpiceDevice( const wxString& aComponent ) const;
 
     /**
      * Function WriteNetlist
@@ -216,6 +229,9 @@ protected:
     virtual void writeDirectives( OUTPUTFORMATTER* aFormatter, unsigned aCtl ) const;
 
 private:
+    ///> Spice simulation title found in the processed schematic sheet
+    wxString m_title;
+
     ///> Spice directives found in the processed schematic sheet
     std::vector<wxString> m_directives;
 
@@ -228,8 +244,8 @@ private:
     ///> List of items representing schematic components in the Spice world
     SPICE_ITEM_LIST m_spiceItems;
 
-    ///> Paths to be searched for included Spice libraries
-    SEARCH_STACK* m_paths;
+    ///> Project object to fetch its settings (e.g. paths)
+    PROJECT* m_project;
 
     // Component fields that are processed during netlist export & simulation
     static const std::vector<wxString> m_spiceFields;

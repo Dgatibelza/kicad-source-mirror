@@ -1,7 +1,7 @@
 /*
  * This program source code file is part of KiCad, a free EDA CAD application.
  *
- * Copyright (C) 2017 KiCad Developers, see AUTHORS.txt for contributors.
+ * Copyright (C) 2017-2019 KiCad Developers, see AUTHORS.txt for contributors.
  *
  * This program is free software; you can redistribute it and/or
  * modify it under the terms of the GNU General Public License
@@ -23,132 +23,26 @@
 
 
 #include "pad_tool.h"
-
-#include <wxPcbStruct.h>
 #include <class_draw_panel_gal.h>
 #include <view/view_controls.h>
 #include <view/view.h>
 #include <tool/tool_manager.h>
 #include <bitmaps.h>
-
 #include <class_board_item.h>
 #include <class_module.h>
 #include <board_commit.h>
-
-#include <dialogs/dialog_global_pads_edition.h>
-
-#include "pcb_actions.h"
-#include "selection_tool.h"
-#include "pcb_selection_conditions.h"
-#include "edit_tool.h"
-
-// Pad tools
-TOOL_ACTION PCB_ACTIONS::copyPadSettings(
-        "pcbnew.PadTool.CopyPadSettings",
-        AS_GLOBAL, 0,
-        _( "Copy Pad Settings" ), _( "Copy current pad's settings to the board design settings" ),
-        copy_pad_settings_xpm );
-
-TOOL_ACTION PCB_ACTIONS::applyPadSettings(
-        "pcbnew.PadTool.ApplyPadSettings",
-        AS_GLOBAL, 0,
-        _( "Apply Pad Settings" ), _( "Copy the board design settings pad properties to the current pad" ),
-        apply_pad_settings_xpm );
-
-TOOL_ACTION PCB_ACTIONS::pushPadSettings(
-        "pcbnew.PadTool.PushPadSettings",
-        AS_GLOBAL, 0,
-        _( "Push Pad Settings" ), _( "Copy the current pad settings to other pads" ),
-        push_pad_settings_xpm );
-
-
-class PAD_CONTEXT_MENU : public CONTEXT_MENU
-{
-public:
-
-    using SHOW_FUNCTOR = std::function<bool()>;
-
-    PAD_CONTEXT_MENU( bool aEditingFootprint,
-                      SHOW_FUNCTOR aHaveGlobalPadSetting ):
-        m_editingFootprint( aEditingFootprint ),
-        m_haveGlobalPadSettings( aHaveGlobalPadSetting )
-    {
-        SetIcon( pad_xpm );
-        SetTitle( _( "Pads" ) );
-
-        Add( PCB_ACTIONS::copyPadSettings );
-        Add( PCB_ACTIONS::applyPadSettings );
-        Add( PCB_ACTIONS::pushPadSettings );
-
-
-        // show modedit-specific items
-        if( m_editingFootprint )
-        {
-            AppendSeparator();
-
-            Add( PCB_ACTIONS::enumeratePads );
-        }
-    }
-
-protected:
-
-    CONTEXT_MENU* create() const override
-    {
-        return new PAD_CONTEXT_MENU( m_editingFootprint, m_haveGlobalPadSettings );
-    }
-
-private:
-
-    struct ENABLEMENTS
-    {
-        bool canImport;
-        bool canExport;
-        bool canPush;
-    };
-
-    ENABLEMENTS getEnablements( const SELECTION& aSelection )
-    {
-        using S_C = SELECTION_CONDITIONS;
-        ENABLEMENTS enablements;
-
-        auto anyPadSel = S_C::HasType( PCB_PAD_T );
-        auto singlePadSel = S_C::Count( 1 ) && S_C::OnlyType( PCB_PAD_T );
-
-        // Apply pads enabled when any pads selected (it applies to each one
-        // individually), plus need a valid global pad setting
-        enablements.canImport = m_haveGlobalPadSettings() && ( anyPadSel )( aSelection );
-
-        // Copy pads item enabled only when there is a single pad selected
-        // (otherwise how would we know which one to copy?)
-        enablements.canExport = ( singlePadSel )( aSelection );
-
-        // Push pads available when there is a single pad to push from
-        enablements.canPush = ( singlePadSel )( aSelection );
-
-        return enablements;
-    }
-
-    void update() override
-    {
-        auto selTool = getToolManager()->GetTool<SELECTION_TOOL>();
-        const SELECTION& selection = selTool->GetSelection();
-
-        auto enablements = getEnablements( selection );
-
-        Enable( getMenuId( PCB_ACTIONS::applyPadSettings ), enablements.canImport );
-        Enable( getMenuId( PCB_ACTIONS::copyPadSettings ), enablements.canExport );
-        Enable( getMenuId( PCB_ACTIONS::pushPadSettings ), enablements.canPush );
-    }
-
-    bool m_editingFootprint;
-    SHOW_FUNCTOR m_haveGlobalPadSettings;
-};
+#include <dialogs/dialog_push_pad_properties.h>
+#include <tools/pcb_actions.h>
+#include <tools/selection_tool.h>
+#include <tools/pcb_selection_conditions.h>
+#include <tools/edit_tool.h>
+#include <dialogs/dialog_enum_pads.h>
 
 
 PAD_TOOL::PAD_TOOL() :
-        PCB_TOOL( "pcbnew.PadTool" ), m_padCopied( false )
-{
-}
+        PCB_TOOL_BASE( "pcbnew.PadTool" ),
+        m_padCopied( false )
+{}
 
 
 PAD_TOOL::~PAD_TOOL()
@@ -161,72 +55,59 @@ void PAD_TOOL::Reset( RESET_REASON aReason )
 }
 
 
-bool PAD_TOOL::haveFootprints()
-{
-    auto& board = *getModel<BOARD>();
-    return board.m_Modules.GetCount() > 0;
-}
-
-
 bool PAD_TOOL::Init()
 {
-    auto contextMenu = std::make_shared<PAD_CONTEXT_MENU>( EditingModules(),
-            [this]() { return m_padCopied; } );
-    contextMenu->SetTool( this );
-
     SELECTION_TOOL* selTool = m_toolMgr->GetTool<SELECTION_TOOL>();
 
     if( selTool )
     {
-        auto& toolMenu = selTool->GetToolMenu();
-        auto& menu = toolMenu.GetMenu();
+        // Add context menu entries that are displayed when selection tool is active
+        CONDITIONAL_MENU& menu = selTool->GetToolMenu().GetMenu();
 
-        toolMenu.AddSubMenu( contextMenu );
+        SELECTION_CONDITION padSel = SELECTION_CONDITIONS::HasType( PCB_PAD_T );
+        SELECTION_CONDITION singlePadSel = SELECTION_CONDITIONS::Count( 1 ) &&
+                                           SELECTION_CONDITIONS::OnlyType( PCB_PAD_T );
 
-        SELECTION_CONDITION canShowMenuCond = [this, contextMenu] ( const SELECTION& aSel ) {
-            contextMenu->UpdateAll();
-            return haveFootprints() && contextMenu->HasEnabledItems();
-        };
+        menu.AddSeparator( 400 );
 
-        // show menu when there is a footprint, and the menu has any items
-        auto showCond = canShowMenuCond &&
-                        ( SELECTION_CONDITIONS::HasType( PCB_PAD_T )
-                            || SELECTION_CONDITIONS::Count( 0 ) );
+        if( m_editModules )
+        {
+            menu.AddItem( PCB_ACTIONS::createPadFromShapes,  SELECTION_CONDITIONS::NotEmpty, 400 );
+            menu.AddItem( PCB_ACTIONS::explodePadToShapes,   singlePadSel, 400 );
+        }
 
-        menu.AddMenu( contextMenu.get(), false, showCond );
+        menu.AddItem( PCB_ACTIONS::copyPadSettings,      singlePadSel, 400 );
+        menu.AddItem( PCB_ACTIONS::applyPadSettings,     padSel, 400 );
+        menu.AddItem( PCB_ACTIONS::pushPadSettings,      singlePadSel, 400 );
+        menu.AddItem( PCB_ACTIONS::enumeratePads,        SELECTION_CONDITIONS::ShowAlways, 400 );
     }
 
     return true;
 }
 
 
-int PAD_TOOL::applyPadSettings( const TOOL_EVENT& aEvent )
+int PAD_TOOL::pastePadProperties( const TOOL_EVENT& aEvent )
 {
     auto& selTool = *m_toolMgr->GetTool<SELECTION_TOOL>();
     const auto& selection = selTool.GetSelection();
+    const D_PAD& masterPad = frame()->GetDesignSettings().m_Pad_Master;
 
-    auto& frame = *getEditFrame<PCB_EDIT_FRAME>();
+    BOARD_COMMIT commit( frame() );
 
-    const D_PAD& masterPad = frame.GetDesignSettings().m_Pad_Master;
-
-    BOARD_COMMIT commit( &frame );
-
-    // for every selected pad, copy global settings
+    // for every selected pad, paste global settings
     for( auto item : selection )
     {
         if( item->Type() == PCB_PAD_T )
         {
             commit.Modify( item );
-
-            D_PAD& destPad = static_cast<D_PAD&>( *item );
-            destPad.ImportSettingsFromMaster( masterPad );
+            static_cast<D_PAD&>( *item ).ImportSettingsFrom( masterPad );
         }
     }
 
-    commit.Push( _( "Apply Pad Settings" ) );
+    commit.Push( _( "Paste Pad Properties" ) );
 
-    m_toolMgr->RunAction( PCB_ACTIONS::selectionModified, true );
-    frame.Refresh();
+    m_toolMgr->ProcessEvent( EVENTS::SelectedItemsModified );
+    frame()->Refresh();
 
     return 0;
 }
@@ -237,9 +118,7 @@ int PAD_TOOL::copyPadSettings( const TOOL_EVENT& aEvent )
     auto& selTool = *m_toolMgr->GetTool<SELECTION_TOOL>();
     const auto& selection = selTool.GetSelection();
 
-    auto& frame = *getEditFrame<PCB_EDIT_FRAME>();
-
-    D_PAD& masterPad = frame.GetDesignSettings().m_Pad_Master;
+    D_PAD& masterPad = frame()->GetDesignSettings().m_Pad_Master;
 
     // can only copy from a single pad
     if( selection.Size() == 1 )
@@ -249,7 +128,7 @@ int PAD_TOOL::copyPadSettings( const TOOL_EVENT& aEvent )
         if( item->Type() == PCB_PAD_T )
         {
             const auto& selPad = static_cast<const D_PAD&>( *item );
-            masterPad.ImportSettingsFromMaster( selPad );
+            masterPad.ImportSettingsFrom( selPad );
             m_padCopied = true;
         }
     }
@@ -258,27 +137,18 @@ int PAD_TOOL::copyPadSettings( const TOOL_EVENT& aEvent )
 }
 
 
-static void globalChangePadSettings( BOARD& board,
-                                     const D_PAD& aSrcPad,
-                                     BOARD_COMMIT& commit,
-                                     bool aSameFootprints,
-                                     bool aPadShapeFilter,
-                                     bool aPadOrientFilter,
-                                     bool aPadLayerFilter )
+static void doPushPadProperties( BOARD& board, const D_PAD& aSrcPad, BOARD_COMMIT& commit,
+                                 bool aSameFootprints,
+                                 bool aPadShapeFilter,
+                                 bool aPadOrientFilter,
+                                 bool aPadLayerFilter,
+                                 bool aPadTypeFilter )
 {
     const MODULE* moduleRef = aSrcPad.GetParent();
 
-    // If there is no module, we can't make the comparisons to see which
-    // pads to apply the source pad settings to
-    if( moduleRef == nullptr )
-    {
-        wxLogDebug( "globalChangePadSettings() Error: NULL module" );
-        return;
-    }
-
     double pad_orient = aSrcPad.GetOrientation() - moduleRef->GetOrientation();
 
-    for( const MODULE* module = board.m_Modules; module; module = module->Next() )
+    for( auto module : board.Modules() )
     {
         if( !aSameFootprints && ( module != moduleRef ) )
             continue;
@@ -286,9 +156,8 @@ static void globalChangePadSettings( BOARD& board,
         if( module->GetFPID() != moduleRef->GetFPID() )
             continue;
 
-        for( D_PAD* pad = module->PadsList();  pad;  pad = pad->Next() )
+        for( auto pad : module->Pads() )
         {
-            // Filters changes prohibited.
             if( aPadShapeFilter && ( pad->GetShape() != aSrcPad.GetShape() ) )
                 continue;
 
@@ -300,13 +169,20 @@ static void globalChangePadSettings( BOARD& board,
             if( aPadLayerFilter && ( pad->GetLayerSet() != aSrcPad.GetLayerSet() ) )
                 continue;
 
-            if( aPadLayerFilter && ( pad->GetLayerSet() != aSrcPad.GetLayerSet() ) )
-                continue;
+            if( aPadTypeFilter && ( pad->GetAttribute() != aSrcPad.GetAttribute() ) )
+                    continue;
+
+            // Special-case for aperture pads
+            if( aPadTypeFilter && pad->GetAttribute() == PAD_ATTRIB_CONN )
+            {
+                if( pad->IsAperturePad() != aSrcPad.IsAperturePad() )
+                    continue;
+            }
 
             commit.Modify( pad );
 
             // Apply source pad settings to this pad
-            pad->ImportSettingsFromMaster( aSrcPad );
+            pad->ImportSettingsFrom( aSrcPad );
         }
     }
 }
@@ -314,80 +190,239 @@ static void globalChangePadSettings( BOARD& board,
 
 int PAD_TOOL::pushPadSettings( const TOOL_EVENT& aEvent )
 {
-    auto& selTool = *m_toolMgr->GetTool<SELECTION_TOOL>();
+    auto&       selTool = *m_toolMgr->GetTool<SELECTION_TOOL>();
     const auto& selection = selTool.GetSelection();
+    D_PAD*      srcPad;
 
-    auto& frame = *getEditFrame<PCB_EDIT_FRAME>();
-
-    // not const - can be changed in the dialog
-    D_PAD* srcPad = nullptr;
-
-    // If nothing selected, use the master pad setting,
-    // otherwise, if one pad selected, use the selected pad
-    if( selection.Size() == 0 )
-    {
-        srcPad = &frame.GetDesignSettings().m_Pad_Master;
-    }
-    else if( selection.Size() == 1 )
-    {
-        if( selection[0]->Type() == PCB_PAD_T )
-        {
-            srcPad = static_cast<D_PAD*>( selection[0] );
-        }
-    }
+    if( selection.Size() == 1 && selection[0]->Type() == PCB_PAD_T )
+        srcPad = static_cast<D_PAD*>( selection[0] );
     else
-    {
-        // multiple selected what to do?
-        // maybe master->selection? same as apply multiple?
-    }
-
-    // no valid selection, nothing to do
-    if( !srcPad )
-    {
         return 0;
-    }
 
     MODULE* module = srcPad->GetParent();
 
-    if( module != nullptr )
-    {
-        frame.SetMsgPanel( module );
-    }
-
-    int dialogRet;
-    {
-        DIALOG_GLOBAL_PADS_EDITION dlg( &frame, srcPad );
-        dialogRet = dlg.ShowModal();
-    }
-
-    // cancel
-    if( dialogRet == -1 )
-    {
+    if( !module )
         return 0;
-    }
+
+    frame()->SetMsgPanel( module );
+
+    DIALOG_PUSH_PAD_PROPERTIES dlg( frame() );
+    int dialogRet = dlg.ShowModal();
+
+    if( dialogRet == wxID_CANCEL )
+        return 0;
 
     const bool edit_Same_Modules = (dialogRet == 1);
 
-    BOARD_COMMIT commit( &frame );
+    BOARD_COMMIT commit( frame() );
 
-    globalChangePadSettings( *getModel<BOARD>(), *srcPad, commit,
-                              edit_Same_Modules,
-                              DIALOG_GLOBAL_PADS_EDITION::m_Pad_Shape_Filter,
-                              DIALOG_GLOBAL_PADS_EDITION::m_Pad_Orient_Filter,
-                              DIALOG_GLOBAL_PADS_EDITION::m_Pad_Layer_Filter );
+    doPushPadProperties( *getModel<BOARD>(), *srcPad, commit, edit_Same_Modules,
+                         DIALOG_PUSH_PAD_PROPERTIES::m_Pad_Shape_Filter,
+                         DIALOG_PUSH_PAD_PROPERTIES::m_Pad_Orient_Filter,
+                         DIALOG_PUSH_PAD_PROPERTIES::m_Pad_Layer_Filter,
+                         DIALOG_PUSH_PAD_PROPERTIES::m_Pad_Type_Filter );
 
-    commit.Push( _( "Apply Pad Settings" ) );
+    commit.Push( _( "Push Pad Settings" ) );
 
-    m_toolMgr->RunAction( PCB_ACTIONS::selectionModified, true );
-    frame.Refresh();
+    m_toolMgr->ProcessEvent( EVENTS::SelectedItemsModified );
+    frame()->Refresh();
 
+    return 0;
+}
+
+
+int PAD_TOOL::EnumeratePads( const TOOL_EVENT& aEvent )
+{
+    if( !board()->GetFirstModule() || board()->GetFirstModule()->Pads().empty() )
+        return 0;
+
+    DIALOG_ENUM_PADS settingsDlg( frame() );
+
+    if( settingsDlg.ShowModal() != wxID_OK )
+        return 0;
+
+    std::string tool = aEvent.GetCommandStr().get();
+    frame()->PushTool( tool );
+    Activate();
+
+    GENERAL_COLLECTOR collector;
+    const KICAD_T types[] = { PCB_PAD_T, EOT };
+
+    GENERAL_COLLECTORS_GUIDE guide = frame()->GetCollectorsGuide();
+    guide.SetIgnoreMTextsMarkedNoShow( true );
+    guide.SetIgnoreMTextsOnBack( true );
+    guide.SetIgnoreMTextsOnFront( true );
+    guide.SetIgnoreModulesVals( true );
+    guide.SetIgnoreModulesRefs( true );
+
+    int seqPadNum = settingsDlg.GetStartNumber();
+    wxString padPrefix = settingsDlg.GetPrefix();
+    std::deque<int> storedPadNumbers;
+
+    m_toolMgr->RunAction( PCB_ACTIONS::selectionClear, true );
+    getViewControls()->ShowCursor( true );
+
+    KIGFX::VIEW* view = m_toolMgr->GetView();
+    VECTOR2I oldCursorPos;  // store the previous mouse cursor position, during mouse drag
+    std::list<D_PAD*> selectedPads;
+    BOARD_COMMIT commit( frame() );
+    std::map<wxString, std::pair<int, wxString>> oldNames;
+    bool isFirstPoint = true;   // used to be sure oldCursorPos will be initialized at least once.
+
+    STATUS_TEXT_POPUP statusPopup( frame() );
+    wxString msg = _( "Click on pad %s%d\nPress <esc> to cancel or double-click to commit" );
+    statusPopup.SetText( wxString::Format( msg, padPrefix, seqPadNum ) );
+    statusPopup.Popup();
+    statusPopup.Move( wxGetMousePosition() + wxPoint( 20, 20 ) );
+
+    while( TOOL_EVENT* evt = Wait() )
+    {
+        frame()->GetCanvas()->SetCurrentCursor( wxCURSOR_BULLSEYE );
+
+        if( evt->IsCancelInteractive() )
+        {
+            m_toolMgr->RunAction( PCB_ACTIONS::selectionClear, true );
+            commit.Revert();
+
+            frame()->PopTool( tool );
+            break;
+        }
+
+        else if( evt->IsActivate() )
+        {
+            commit.Push( _( "Renumber pads" ) );
+
+            frame()->PopTool( tool );
+            break;
+        }
+
+        else if( evt->IsDrag( BUT_LEFT ) || evt->IsClick( BUT_LEFT ) )
+        {
+            selectedPads.clear();
+            VECTOR2I cursorPos = getViewControls()->GetCursorPosition();
+
+            // Be sure the old cursor mouse position was initialized:
+            if( isFirstPoint )
+            {
+                oldCursorPos = cursorPos;
+                isFirstPoint = false;
+            }
+
+            // wxWidgets deliver mouse move events not frequently enough, resulting in skipping
+            // pads if the user moves cursor too fast. To solve it, create a line that approximates
+            // the mouse move and search pads that are on the line.
+            int distance = ( cursorPos - oldCursorPos ).EuclideanNorm();
+            // Search will be made every 0.1 mm:
+            int segments = distance / int( 0.1*IU_PER_MM ) + 1;
+            const wxPoint line_step( ( cursorPos - oldCursorPos ) / segments );
+
+            collector.Empty();
+
+            for( int j = 0; j < segments; ++j )
+            {
+                wxPoint testpoint( cursorPos.x - j * line_step.x, cursorPos.y - j * line_step.y );
+                collector.Collect( board(), types, testpoint, guide );
+
+                for( int i = 0; i < collector.GetCount(); ++i )
+                    selectedPads.push_back( static_cast<D_PAD*>( collector[i] ) );
+            }
+
+            selectedPads.unique();
+
+            for( D_PAD* pad : selectedPads )
+            {
+                // If pad was not selected, then enumerate it
+                if( !pad->IsSelected() )
+                {
+                    commit.Modify( pad );
+
+                    // Rename pad and store the old name
+                    int newval;
+
+                    if( storedPadNumbers.size() > 0 )
+                    {
+                        newval = storedPadNumbers.front();
+                        storedPadNumbers.pop_front();
+                    }
+                    else
+                        newval = seqPadNum++;
+
+                    wxString newName = wxString::Format( wxT( "%s%d" ), padPrefix, newval );
+                    oldNames[newName] = { newval, pad->GetName() };
+                    pad->SetName( newName );
+                    pad->SetSelected();
+                    getView()->Update( pad );
+
+                    // Ensure the popup text shows the correct next value
+                    if( storedPadNumbers.size() > 0 )
+                        newval = storedPadNumbers.front();
+                    else
+                        newval = seqPadNum;
+
+                    statusPopup.SetText( wxString::Format( msg, padPrefix, newval ) );
+                }
+
+                // ... or restore the old name if it was enumerated and clicked again
+                else if( pad->IsSelected() && evt->IsClick( BUT_LEFT ) )
+                {
+                    auto it = oldNames.find( pad->GetName() );
+                    wxASSERT( it != oldNames.end() );
+
+                    if( it != oldNames.end() )
+                    {
+                        storedPadNumbers.push_back( it->second.first );
+                        pad->SetName( it->second.second );
+                        oldNames.erase( it );
+
+                        int newval = storedPadNumbers.front();
+
+                        statusPopup.SetText( wxString::Format( msg, padPrefix, newval ) );
+                    }
+
+                    pad->ClearSelected();
+                    getView()->Update( pad );
+                }
+            }
+        }
+
+        else if( ( evt->IsKeyPressed() && evt->KeyCode() == WXK_RETURN ) ||
+                 evt->IsDblClick( BUT_LEFT ) )
+        {
+            commit.Push( _( "Renumber pads" ) );
+            frame()->PopTool( tool );
+            break;
+        }
+
+        else if( evt->IsClick( BUT_RIGHT ) )
+        {
+            m_menu.ShowContextMenu( selection() );
+        }
+
+        else
+            evt->SetPassEvent();
+
+        // Prepare the next loop by updating the old cursor mouse position
+        // to this last mouse cursor position
+        oldCursorPos = getViewControls()->GetCursorPosition();
+        statusPopup.Move( wxGetMousePosition() + wxPoint( 20, 20 ) );
+    }
+
+    for( auto p : board()->GetFirstModule()->Pads() )
+    {
+        p->ClearSelected();
+        view->Update( p );
+    }
+
+    statusPopup.Hide();
     return 0;
 }
 
 
 void PAD_TOOL::setTransitions()
 {
-    Go( &PAD_TOOL::applyPadSettings, PCB_ACTIONS::applyPadSettings.MakeEvent() );
-    Go( &PAD_TOOL::copyPadSettings,  PCB_ACTIONS::copyPadSettings.MakeEvent() );
-    Go( &PAD_TOOL::pushPadSettings,  PCB_ACTIONS::pushPadSettings.MakeEvent() );
+    Go( &PAD_TOOL::pastePadProperties, PCB_ACTIONS::applyPadSettings.MakeEvent() );
+    Go( &PAD_TOOL::copyPadSettings,    PCB_ACTIONS::copyPadSettings.MakeEvent() );
+    Go( &PAD_TOOL::pushPadSettings,    PCB_ACTIONS::pushPadSettings.MakeEvent() );
+
+    Go( &PAD_TOOL::EnumeratePads,      PCB_ACTIONS::enumeratePads.MakeEvent() );
 }

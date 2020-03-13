@@ -33,7 +33,7 @@
 
 
 /**
- * Class KIWAY_EXPRESS
+ * KIWAY_EXPRESS
  * carries a payload from one KIWAY_PLAYER to another within a PROJECT.
  */
 class KIWAY_EXPRESS : public wxEvent
@@ -59,17 +59,15 @@ public:
      * returns the payload, which can be any text but it typicall self
      * identifying s-expression.
      */
-    const std::string&  GetPayload()                    { return m_payload; }
+    std::string&  GetPayload()                          { return m_payload; }
     void SetPayload( const std::string& aPayload )      { m_payload = aPayload; }
 
     KIWAY_EXPRESS* Clone() const override   { return new KIWAY_EXPRESS( *this ); }
 
     //KIWAY_EXPRESS() {}
 
-    KIWAY_EXPRESS( FRAME_T aDestination,
-            MAIL_T aCommand,
-            const std::string& aPayload,
-            wxWindow* aSource = NULL );
+    KIWAY_EXPRESS( FRAME_T aDestination, MAIL_T aCommand, std::string& aPayload,
+                   wxWindow* aSource = NULL );
 
     KIWAY_EXPRESS( const KIWAY_EXPRESS& anOther );
 
@@ -82,7 +80,7 @@ public:
 
 private:
     FRAME_T         m_destination;      ///< could have been a bitmap indicating multiple recipients
-    std::string     m_payload;          ///< very often s-expression text, but not always
+    std::string&    m_payload;          ///< very often s-expression text, but not always
 
     // possible new ideas here.
 };
@@ -90,16 +88,11 @@ private:
 
 typedef void ( wxEvtHandler::*kiwayExpressFunction )( KIWAY_EXPRESS& );
 
-#define wxKiwayExressHandler(func) \
-    (wxObjectEventFunction)(wxEventFunction)wxStaticCastEvent(kiwayExpressFunction, &func)
+/// Typecast an event handler for the KIWAY_EXPRESS event class
+#define kiwayExpressHandler( func ) wxEVENT_HANDLER_CAST( kiwayExpressFunction, func )
 
-
+/// Event table definition for the KIWAY_EXPRESS event class
 #define EVT_KIWAY_EXPRESS( func ) \
-    DECLARE_EVENT_TABLE_ENTRY( \
-        KIWAY_EXPRESS::wxEVENT_ID, -1, -1, \
-        (wxObjectEventFunction) \
-        (kiwayExpressFunction) & func, \
-        (wxObject*) NULL ),
-
+    wx__DECLARE_EVT0( KIWAY_EXPRESS::wxEVENT_ID, kiwayExpressHandler( func ) )
 
 #endif  // KIWAY_EXPRESS_H_

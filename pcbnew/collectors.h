@@ -2,7 +2,7 @@
  * This program source code file is part of KiCad, a free EDA CAD application.
  *
  * Copyright (C) 2007-2008 SoftPLC Corporation, Dick Hollenbeck <dick@softplc.com>
- * Copyright (C) 2004-2017 KiCad Developers, see change_log.txt for contributors.
+ * Copyright (C) 2004-2019 KiCad Developers, see AUTHORS.txt for contributors.
  *
  * This program is free software; you can redistribute it and/or
  * modify it under the terms of the GNU General Public License
@@ -22,10 +22,6 @@
  * 51 Franklin Street, Fifth Floor, Boston, MA  02110-1301, USA
  */
 
-/**
- * @file collectors.h
- */
-
 #ifndef COLLECTORS_H
 #define COLLECTORS_H
 
@@ -35,11 +31,11 @@
  */
 
 
-#include <class_collector.h>
+#include <collector.h>
 #include <layers_id_colors_and_visibility.h>              // LAYER_COUNT, layer defs
+#include <view/view.h>
+#include <class_board_item.h>
 
-
-class BOARD_ITEM;
 
 
 /**
@@ -146,11 +142,16 @@ public:
     virtual     bool IgnorePadsOnFront() const = 0;
 
     /**
+     * @return bool - ture if should ignore through-hole PADSs.
+     */
+    virtual     bool IgnoreThroughHolePads() const = 0;
+
+    /**
      * @return bool - true if should ignore PADSs on Front side and Back side.
      */
     virtual     bool IgnorePads() const
     {
-        return IgnorePadsOnFront() && IgnorePadsOnBack();
+        return IgnorePadsOnFront() && IgnorePadsOnBack() && IgnoreThroughHolePads();
     }
 
     /**
@@ -162,6 +163,33 @@ public:
      * @return bool - true if should ignore module references.
      */
     virtual     bool IgnoreModulesRefs() const = 0;
+
+    /**
+     * @return true if should ignore through-hole vias
+     */
+    virtual     bool IgnoreThroughVias() const = 0;
+
+    /**
+     * @return true if should ignore blind/buried vias
+     */
+    virtual     bool IgnoreBlindBuriedVias() const = 0;
+
+    /**
+     * @return true if should ignore micro vias
+     */
+    virtual     bool IgnoreMicroVias() const = 0;
+
+    /**
+     * @return true if should ignore tracks
+     */
+    virtual     bool IgnoreTracks() const = 0;
+
+    /**
+     * @return true if should ignore the interiors of zones
+     */
+    virtual     bool IgnoreZoneFills() const = 0;
+
+    virtual     double OnePixelInIU() const = 0;
 
     /**
      * @return bool - true if Inspect() should use BOARD_ITEM::HitTest()
@@ -190,7 +218,7 @@ public:
      * @param ndx The index into the list.
      * @return BOARD_ITEM* - or something derived from it, or NULL.
      */
-    BOARD_ITEM* operator[]( int ndx ) const
+    BOARD_ITEM* operator[]( int ndx ) const override
     {
         if( (unsigned)ndx < (unsigned)GetCount() )
             return (BOARD_ITEM*) m_List[ ndx ];
@@ -234,7 +262,7 @@ protected:
 public:
 
     /**
-     * A scan list for all editable board items, like PcbGeneralLocateAndDisplay()
+     * A scan list for all editable board items
      */
     static const KICAD_T AllBoardItems[];
 
@@ -265,9 +293,9 @@ public:
     static const KICAD_T PadsOrModules[];
 
     /**
-     * A scan list for PADs, TRACKs, VIAs, or ZONEs
+     * A scan list for PADs, TRACKs, or VIAs
      */
-    static const KICAD_T PadsTracksOrZones[];
+    static const KICAD_T PadsOrTracks[];
 
     /**
      * A scan list for MODULEs and their items (for Modedit)
@@ -283,6 +311,11 @@ public:
      * A scan list for only TRACKS
      */
     static const KICAD_T Tracks[];
+
+    /**
+     * A scan list for TRACKS, VIAS, MODULES
+     */
+    static const KICAD_T LockableItems[];
 
     /**
      * Constructor GENERALCOLLECTOR
@@ -311,6 +344,8 @@ public:
      */
     void SetGuide( const COLLECTORS_GUIDE* aGuide ) { m_Guide = aGuide; }
 
+    const COLLECTORS_GUIDE* GetGuide() { return m_Guide; }
+
     /**
      * @return int - The number if items which met the primary search criteria
      */
@@ -319,8 +354,7 @@ public:
     /**
      * The examining function within the INSPECTOR which is passed to the Iterate function.
      *
-     * Searches and collects all the objects that the old function PcbGeneralLocateAndDisplay()
-     * would find, except that it keeps all that it finds and does not do any displaying.
+     * Searches and collects all the objects which match the test data.
      *
      * @param testItem An EDA_ITEM to examine.
      * @param testData is not used in this class.
@@ -373,8 +407,16 @@ private:
     bool    m_IgnoreModulesOnFront;
     bool    m_IgnorePadsOnFront;
     bool    m_IgnorePadsOnBack;
+    bool    m_IgnoreThroughHolePads;
     bool    m_IgnoreModulesVals;
     bool    m_IgnoreModulesRefs;
+    bool    m_IgnoreThroughVias;
+    bool    m_IgnoreBlindBuriedVias;
+    bool    m_IgnoreMicroVias;
+    bool    m_IgnoreTracks;
+    bool    m_IgnoreZoneFills;
+
+    double  m_OnePixelInIU;
 
 public:
 
@@ -386,8 +428,11 @@ public:
      * @param aVisibleLayerMask = current visible layers (bit mask)
      * @param aPreferredLayer = the layer to search first
      */
-    GENERAL_COLLECTORS_GUIDE( LSET aVisibleLayerMask, PCB_LAYER_ID aPreferredLayer )
+    GENERAL_COLLECTORS_GUIDE( LSET aVisibleLayerMask, PCB_LAYER_ID aPreferredLayer,
+                              KIGFX::VIEW* aView )
     {
+        VECTOR2I one( 1, 1 );
+
         m_PreferredLayer            = aPreferredLayer;
         m_IgnorePreferredLayer      = false;
         m_LayerVisible              = aVisibleLayerMask;
@@ -409,9 +454,18 @@ public:
 
         m_IgnorePadsOnFront         = false;
         m_IgnorePadsOnBack          = false;
+        m_IgnoreThroughHolePads     = false;
 
         m_IgnoreModulesVals         = false;
         m_IgnoreModulesRefs         = false;
+
+        m_IgnoreThroughVias         = false;
+        m_IgnoreBlindBuriedVias     = false;
+        m_IgnoreMicroVias           = false;
+        m_IgnoreTracks              = false;
+        m_IgnoreZoneFills           = true;
+
+        m_OnePixelInIU              = aView->ToWorld( one, false ).x;
     }
 
     /**
@@ -523,6 +577,12 @@ public:
     void SetIgnorePadsOnFront(bool ignore) { m_IgnorePadsOnFront = ignore; }
 
     /**
+     * @return bool - true if should ignore through-hole PADSs.
+     */
+    bool IgnoreThroughHolePads() const override { return m_IgnoreThroughHolePads; }
+    void SetIgnoreThroughHolePads(bool ignore) { m_IgnoreThroughHolePads = ignore; }
+
+    /**
      * @return bool - true if should ignore modules values.
      */
     bool IgnoreModulesVals() const override { return m_IgnoreModulesVals; }
@@ -533,6 +593,23 @@ public:
      */
     bool IgnoreModulesRefs() const override { return m_IgnoreModulesRefs; }
     void SetIgnoreModulesRefs(bool ignore) { m_IgnoreModulesRefs = ignore; }
+
+    bool IgnoreThroughVias() const override { return m_IgnoreThroughVias; }
+    void SetIgnoreThroughVias( bool ignore ) { m_IgnoreThroughVias = ignore; }
+
+    bool IgnoreBlindBuriedVias() const override { return m_IgnoreBlindBuriedVias; }
+    void SetIgnoreBlindBuriedVias( bool ignore ) { m_IgnoreBlindBuriedVias = ignore; }
+
+    bool IgnoreMicroVias() const override { return m_IgnoreMicroVias; }
+    void SetIgnoreMicroVias( bool ignore ) { m_IgnoreMicroVias = ignore; }
+
+    bool IgnoreTracks() const override { return m_IgnoreTracks; }
+    void SetIgnoreTracks( bool ignore ) { m_IgnoreTracks = ignore; }
+
+    bool IgnoreZoneFills() const override { return m_IgnoreZoneFills; }
+    void SetIgnoreZoneFills( bool ignore ) { m_IgnoreZoneFills = ignore; }
+
+    double OnePixelInIU() const override { return m_OnePixelInIU; }
 };
 
 

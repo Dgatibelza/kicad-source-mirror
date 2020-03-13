@@ -34,7 +34,7 @@ class FP_LIB_TABLE_GRID;
 
 
 /**
- * Class FP_LIB_TABLE_ROW
+ * FP_LIB_TABLE_ROW
  *
  * holds a record identifying a library accessed by the appropriate footprint library #PLUGIN
  * object in the #FP_LIB_TABLE.
@@ -105,6 +105,7 @@ class FP_LIB_TABLE : public LIB_TABLE
     friend class FP_LIB_TABLE_GRID;
 
 public:
+    KICAD_T Type() override { return FP_LIB_TABLE_T; }
 
     virtual void Parse( LIB_TABLE_LEXER* aLexer ) override;
 
@@ -146,10 +147,18 @@ public:
      * @param aFootprintNames is the list to fill with the footprint names found in \a aNickname
      *
      * @param aNickname is a locator for the "library", it is a "name" in LIB_TABLE_ROW.
+     * @param aBestEfforts if true, don't throw on errors
      *
      * @throw IO_ERROR if the library cannot be found, or footprint cannot be loaded.
      */
-    void FootprintEnumerate( wxArrayString& aFootprintNames, const wxString& aNickname );
+    void FootprintEnumerate( wxArrayString& aFootprintNames, const wxString& aNickname,
+                             bool aBestEfforts );
+
+    /**
+     * Generate a hashed timestamp representing the last-mod-times of the library indicated
+     * by \a aNickname, or all libraries if \a aNickname is NULL.
+     */
+    long long GenerateTimestamp( const wxString* aNickname );
 
     /**
      * Function PrefetchLib
@@ -180,6 +189,22 @@ public:
      */
     MODULE* FootprintLoad( const wxString& aNickname, const wxString& aFootprintName );
 
+    /**
+     * Function FootprintExists
+     *
+     * indicates whether or not the given footprint already exists in the given library.
+     */
+    bool FootprintExists( const wxString& aNickname, const wxString& aFootprintName );
+
+    /**
+     * Function GetEnumeratedFootprint
+     *
+     * a version of FootprintLoad() for use after FootprintEnumerate() for more efficient
+     * cache management.  Return value is const to allow it to return a reference to a cached
+     * item.
+     */
+    const MODULE* GetEnumeratedFootprint( const wxString& aNickname,
+                                          const wxString& aFootprintName );
     /**
      * Enum SAVE_T
      * is the set of return values from FootprintSave() below.

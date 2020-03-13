@@ -36,26 +36,16 @@
 #include <widgets/two_column_tree_list.h>
 
 #include <hotkeys_basic.h>
+#include <hotkey_store.h>
 
-/**
- * struct HOTKEY_SECTION
- * Associates a hotkey configuration with a name.
- */
-struct HOTKEY_SECTION
-{
-    wxString            m_name;
-    EDA_HOTKEY_CONFIG*  m_section;
-};
-
-typedef std::vector<HOTKEY_SECTION> HOTKEY_SECTIONS;
-typedef std::vector<EDA_HOTKEY>     HOTKEY_LIST;
 
 class WIDGET_HOTKEY_CLIENT_DATA;
 
 class WIDGET_HOTKEY_LIST : public TWO_COLUMN_TREE_LIST
 {
-    HOTKEY_SECTIONS             m_sections;
-    std::vector<HOTKEY_LIST>    m_hotkeys;
+    HOTKEY_STORE&               m_hk_store;
+    bool                        m_readOnly;
+
     wxTreeListItem              m_context_menu_item;
 
     /**
@@ -66,11 +56,11 @@ class WIDGET_HOTKEY_LIST : public TWO_COLUMN_TREE_LIST
     WIDGET_HOTKEY_CLIENT_DATA* GetHKClientData( wxTreeListItem aItem );
 
     /**
-     * Method GetSelHKClientData
-     * Return the WIDGET_HOTKEY_CLIENT_DATA for the item being edited, or NULL if
-     * none is selected.
+     * Get the WIDGET_HOTKEY_CLIENT_DATA form an item and assert if it isn't
+     * found. This is for use when the data not being present indicates an
+     * error.
      */
-    WIDGET_HOTKEY_CLIENT_DATA* GetSelHKClientData();
+    WIDGET_HOTKEY_CLIENT_DATA* getExpectedHkClientData( wxTreeListItem aItem );
 
     /**
      * Method UpdateFromClientData
@@ -78,13 +68,27 @@ class WIDGET_HOTKEY_LIST : public TWO_COLUMN_TREE_LIST
      */
     void UpdateFromClientData();
 
-protected:
     /**
-     * Method LoadSection
-     * Generates a HOTKEY_LIST from the given hotkey configuration array and pushes
-     * it to m_hotkeys.
+     * Method updateShownItems
+     *
+     * Update the items shown in the widget based on a given filter string.
+     *
+     * @param aFilterStr the string to filter with. Empty means no filter.
      */
-    void LoadSection( EDA_HOTKEY_CONFIG* aSection );
+    void updateShownItems( const wxString& aFilterStr );
+
+    /**
+     * Attempt to change the given hotkey to the given key code.
+     *
+     * If the hotkey conflicts, the user is prompted to change anyway (and
+     * in doing so, unset the conflicting key), or cancel the attempt.
+     *
+     * @param aHotkey the change-able hotkey to try to change
+     * @param aKey the key code to change it to
+     */
+    void changeHotkey( HOTKEY& aHotkey, long aKey );
+
+protected:
 
     /**
      * Method EditItem
@@ -94,15 +98,9 @@ protected:
 
     /**
      * Method ResetItem
-     * Reset the item to the original from the dialog was created.
+     * Reset the item to either the default, the value when the dialog was opened, or none.
      */
-    void ResetItem( wxTreeListItem aItem );
-
-    /**
-     * Method ResetItemToDefault
-     * Reset the item to the default value.
-     */
-    void ResetItemToDefault( wxTreeListItem aItem );
+    void ResetItem( wxTreeListItem aItem, int aResetId );
 
     /**
      * Method OnActivated
@@ -129,18 +127,6 @@ protected:
     void OnSize( wxSizeEvent& aEvent );
 
     /**
-     * Method CheckKeyConflicts
-     * Check whether the given key conflicts with anything in this WIDGET_HOTKEY_LIST.
-     *
-     * @param aKey - key to check
-     * @param aSectionTag - section tag into which the key is proposed to be installed
-     * @param aConfKey - if not NULL, outparam getting the key this one conflicts with
-     * @param aConfSect - if not NULL, outparam getting the section this one conflicts with
-     */
-    bool CheckKeyConflicts( long aKey, const wxString& aSectionTag,
-            EDA_HOTKEY** aConfKey, EDA_HOTKEY_CONFIG** aConfSect );
-
-    /**
      * Method ResolveKeyConflicts
      * Check if we can set a hotkey, and prompt the user if there is a conflict between
      * keys. The key code should already have been checked that it's not for the same
@@ -151,11 +137,11 @@ protected:
      * section and g_CommonSectionTag section.
      *
      * @param aKey - key to check
-     * @param aSectionTag - section tag into which the key is proposed to be installed
+     * @param aActionName - name of the action into which the key is proposed to be installed
      *
      * @return true iff the user accepted the overwrite or no conflict existed
      */
-    bool ResolveKeyConflicts( long aKey, const wxString& aSectionTag );
+    bool ResolveKeyConflicts( TOOL_ACTION* aAction, long aKey );
 
 public:
     /**
@@ -163,38 +149,30 @@ public:
      * Create a WIDGET_HOTKEY_LIST.
      *
      * @param aParent - parent widget
-     * @param aSections - list of the hotkey sections to display and their names.
-     *  See WIDGET_HOTKEY_LIST::GenSections for a way to generate these easily
-     *  from an EDA_HOTKEY_CONFIG*.
+     * @param aHotkeys - EDA_HOTKEY_CONFIG data - a hotkey store is constructed
+     * from this.
      */
-    WIDGET_HOTKEY_LIST( wxWindow* aParent, const HOTKEY_SECTIONS& aSections );
+    WIDGET_HOTKEY_LIST( wxWindow* aParent, HOTKEY_STORE& aHotkeyStore, bool aReadOnly );
 
     /**
-     * Static method GenSections
-     * Generate a list of sections and names from an EDA_HOTKEY_CONFIG*. Titles
-     * will be looked up from translations.
+     * Method ApplyFilterString
+     * Apply a filter string to the hotkey list, selecting which hotkeys
+     * to show.
+     *
+     * @param aFilterStr the string to filter by
      */
-    static HOTKEY_SECTIONS GenSections( EDA_HOTKEY_CONFIG* aHotkeys );
+    void ApplyFilterString( const wxString& aFilterStr );
 
     /**
-     * Method InstallOnPanel
-     * Install this WIDGET_HOTKEY_LIST onto an empty panel. This is useful
-     * when combining with wxFormBuilder, as an empty panel can be left as a
-     * placeholder in the layout.
+     * Set hotkeys in the control to default or original values.
+     * @param aResetToDefault if true,.reset to the defaults inherent to the
+     * hotkeym, else reset to the value they had when the dialog was invoked.
      */
-    void InstallOnPanel( wxPanel* aPanel );
-
-    /**
-     * Method TransferDefaultsToControl
-     * Set hotkeys in the control to default values.
-     * @return true iff the operation was successful
-     */
-    bool TransferDefaultsToControl();
+    void ResetAllHotkeys( bool aResetToDefault );
 
     /**
      * Method TransferDataToControl
-     * Load the hotkey data into the control. It is safe to call this multiple times,
-     * for example to reset the control.
+     * Load the hotkey data from the store into the control.
      * @return true iff the operation was successful
      */
     bool TransferDataToControl();

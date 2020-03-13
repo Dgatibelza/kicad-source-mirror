@@ -1,9 +1,8 @@
-/* -*- c++ -*-
+/*
  * This program source code file is part of KiCad, a free EDA CAD application.
  *
  * Copyright (C) 2014 Henner Zeller <h.zeller@acm.org>
- * Copyright (C) 2017 Chris Pavlina <pavlina.chris@gmail.com>
- * Copyright (C) 2014-2017 KiCad Developers, see AUTHORS.txt for contributors.
+ * Copyright (C) 2014-2019 KiCad Developers, see AUTHORS.txt for contributors.
  *
  * This program is free software; you can redistribute it and/or
  * modify it under the terms of the GNU General Public License
@@ -26,7 +25,7 @@
 #define DIALOG_CHOOSE_COMPONENT_H
 
 #include "dialog_shim.h"
-#include <cmp_tree_model_adapter.h>
+#include <symbol_tree_model_adapter.h>
 #include <footprint_info.h>
 
 class wxStaticBitmap;
@@ -40,12 +39,14 @@ class wxChoice;
 class wxButton;
 class wxTimer;
 
-class COMPONENT_TREE;
+class LIB_TREE;
+class SYMBOL_PREVIEW_WIDGET;
 class FOOTPRINT_PREVIEW_WIDGET;
 class FOOTPRINT_SELECT_WIDGET;
 class LIB_ALIAS;
 class LIB_PART;
 class SCH_BASE_FRAME;
+class SCH_DRAW_PANEL;
 
 
 /**
@@ -53,21 +54,23 @@ class SCH_BASE_FRAME;
  * View class in a Model-View-Adapter (mediated MVC) architecture. The other
  * pieces are in:
  *
- * - Adapter: CMP_TREE_MODEL_ADAPTER in eeschema/cmp_tree_model_adapter.h
- * - Model: CMP_TREE_NODE and descendants in eeschema/cmp_tree_model.h
+ * - Adapter: CMP_TREE_MODEL_ADAPTER in common/cmp_tree_model_adapter.h
+ * - Model: CMP_TREE_NODE and descendants in common/cmp_tree_model.h
  *
  * Because everything is tied together in the adapter class, see that file
  * for thorough documentation. A simple example usage follows:
  *
  *     // Create the adapter class
- *     auto adapter( CMP_TREE_MODEL_ADAPTER::Create( Prj().SchLibs() ) );
+ *     auto adapter( SYMBOL_TREE_MODEL_ADAPTER::Create( Prj().SchSymbolLibTable() ) );
  *
  *     // Perform any configuration of adapter properties here
- *     adapter->SetPreselectNode( "TL072", 2 );
+ *     adapter->SetPreselectNode( "LIB_NICKNAME", "SYMBO_NAME", 2 );
  *
- *     // Initialize model from PART_LIBs
- *     for( PART_LIB& lib: *libs )
- *         adapter->AddLibrary( lib );
+ *     // Initialize model from #SYMBOL_LIB_TABLE
+ *     libNicknames = libs->GetLogicalLibs();
+ *
+ *     for( auto nickname : libNicknames )
+ *         adapter->AddLibrary( nickname );
  *
  *     // Create and display dialog
  *     DIALOG_CHOOSE_COMPONENT dlg( this, title, adapter, 1 );
@@ -77,8 +80,8 @@ class SCH_BASE_FRAME;
  *     if( selected )
  *     {
  *         int unit;
- *         LIB_ALIAS* alias = dlg.GetSelectedAlias( &unit );
- *         do_something( alias, unit );
+ *         #LIB_ID id = dlg.GetSelectedAlias( &unit );
+ *         do_something( id, unit );
  *     }
  *
  */
@@ -90,15 +93,19 @@ public:
      *
      * @param aParent   a SCH_BASE_FRAME parent window.
      * @param aTitle    Dialog title.
-     * @param aAdapter  CMP_TREE_MODEL_ADAPTER::PTR. See CMP_TREE_MODEL_ADAPTER
+     * @param aAdapter  SYMBOL_TREE_MODEL_ADAPTER::PTR. See CMP_TREE_MODEL_ADAPTER
      *                  for documentation.
      * @param aDeMorganConvert  preferred deMorgan conversion
      *                          (TODO: should happen in dialog)
-     * @param aAllowFieldEdits  if false, all functions that allow the user to edit
-     *      fields (currently just footprint selection) will not be available.
+     * @param aAllowFieldEdits  if false, all functions that allow the user to edit fields
+     *                          (currently just footprint selection) will not be available.
+     * @param aShowFootprints   if false, all footprint preview and selection features are
+     *                          disabled. This forces aAllowFieldEdits false too.
+     * @param aAllowBrowser     show a Select with Browser button
      */
     DIALOG_CHOOSE_COMPONENT( SCH_BASE_FRAME* aParent, const wxString& aTitle,
-            CMP_TREE_MODEL_ADAPTER::PTR& aAdapter, int aDeMorganConvert, bool aAllowFieldEdits );
+                             SYMBOL_TREE_MODEL_ADAPTER::PTR& aAdapter, int aDeMorganConvert,
+                             bool aAllowFieldEdits, bool aShowFootprints, bool aAllowBrowser );
 
     ~DIALOG_CHOOSE_COMPONENT();
 
@@ -111,9 +118,28 @@ public:
      * with whatever default is desired (usually 1).
      *
      * @param aUnit if not NULL, the selected unit is filled in here.
-     * @return the alias that has been selected, or NULL if there is none.
+     * @return the #LIB_ID of the symbol that has been selected.
      */
-    LIB_ALIAS* GetSelectedAlias( int* aUnit = nullptr ) const;
+    LIB_ID GetSelectedLibId( int* aUnit = nullptr ) const;
+
+    /**
+     * To be called after this dialog returns from ShowModal()
+     *
+     * In the case of multi-unit symbols, this preferences asks to iterate through
+     * all units of the symbol, one per click
+     * @return The value of the dialog preference checkbox
+     */
+    bool GetUseAllUnits() const { return m_useUnits->GetValue(); }
+
+    /**
+     * To be called after this dialog returns from ShowModal()
+     *
+     * Keeps a new copy of the symbol on the mouse cursor, allowing the user to rapidly
+     * place multiple copies of the same symbol on their schematic
+     *
+     * @return The value of the keep symbol preference checkbox
+     */
+    bool GetKeepSymbol() const { return m_keepSymbol->GetValue(); }
 
     /**
      * Get a list of fields edited by the user.
@@ -134,20 +160,19 @@ public:
         return m_external_browser_requested;
     }
 
+    static std::mutex g_Mutex;
+
 protected:
     static constexpr int DblClickDelay = 100; // milliseconds
 
     wxPanel* ConstructRightPanel( wxWindow* aParent );
 
     void OnInitDialog( wxInitDialogEvent& aEvent );
+    void OnCharHook( wxKeyEvent& aEvt );
     void OnCloseTimer( wxTimerEvent& aEvent );
-    void OnProgressTimer( wxTimerEvent& aEvent );
-
-    void OnSchViewDClick( wxMouseEvent& aEvent );
-    void OnSchViewPaint( wxPaintEvent& aEvent );
+    void OnUseBrowser( wxCommandEvent& aEvent );
 
     void OnFootprintSelected( wxCommandEvent& aEvent );
-
     void OnComponentPreselected( wxCommandEvent& aEvent );
 
     /**
@@ -159,43 +184,43 @@ protected:
     void OnComponentSelected( wxCommandEvent& aEvent );
 
     /**
-     * Look up the footprint for a given alias and display it.
+     * Look up the footprint for a given symbol specified in the #LIB_ID and display it.
      */
-    void ShowFootprintFor( LIB_ALIAS* aAlias );
+    void ShowFootprintFor( LIB_ID const& aLibId );
 
     /**
      * Display the given footprint by name.
      */
-    void ShowFootprint( wxString const& aName );
+    void ShowFootprint( wxString const& aFootprint );
 
     /**
      * Populate the footprint selector for a given alias.
      *
-     * @param aAlias alias, or null to clear
+     * @param aLibId the #LIB_ID of the selection or invalid to clear
      */
-    void PopulateFootprintSelector( LIB_ALIAS* aAlias );
+    void PopulateFootprintSelector( LIB_ID const& aLibId );
 
-    /**
-     * Display a given component into the schematic symbol preview.
-     */
-    void RenderPreview( LIB_PART* aComponent, int aUnit );
-
-    wxTimer*        m_dbl_click_timer;
-    wxPanel*        m_sch_view_ctrl;
+    wxTimer*                  m_dbl_click_timer;
+    SYMBOL_PREVIEW_WIDGET*    m_symbol_preview;
+    wxButton*                 m_browser_button;
+    wxSplitterWindow*         m_hsplitter;
+    wxSplitterWindow*         m_vsplitter;
 
     FOOTPRINT_SELECT_WIDGET*  m_fp_sel_ctrl;
-    FOOTPRINT_PREVIEW_WIDGET* m_fp_view_ctrl;
-    COMPONENT_TREE*           m_tree;
+    FOOTPRINT_PREVIEW_WIDGET* m_fp_preview;
+    wxCheckBox*               m_keepSymbol;
+    wxCheckBox*               m_useUnits;
+    LIB_TREE*                 m_tree;
+    wxHtmlWindow*             m_details;
 
-    SCH_BASE_FRAME*             m_parent;
-    int                         m_deMorganConvert;
-    bool                        m_allow_field_edits;
-    bool                        m_external_browser_requested;
-    wxString                    m_fp_override;
+    SCH_BASE_FRAME*           m_parent;
+    int                       m_deMorganConvert;
+    bool                      m_allow_field_edits;
+    bool                      m_show_footprints;
+    bool                      m_external_browser_requested;
+    wxString                  m_fp_override;
 
-    static FOOTPRINT_ASYNC_LOADER          m_fp_loader;
-    static std::unique_ptr<FOOTPRINT_LIST> m_fp_list;
-    std::vector<std::pair<int, wxString>> m_field_edits;
+    std::vector<std::pair<int, wxString>>  m_field_edits;
 };
 
 #endif /* DIALOG_CHOOSE_COMPONENT_H */

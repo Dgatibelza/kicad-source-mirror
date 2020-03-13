@@ -30,7 +30,7 @@
 namespace KIGFX {
 namespace PREVIEW {
 /**
- * Class SELECTION_AREA
+ * SELECTION_AREA
  *
  * Represents an assitant draw when interactively drawing an
  * arc on a canvas.
@@ -38,8 +38,7 @@ namespace PREVIEW {
 class ARC_ASSISTANT : public EDA_ITEM
 {
 public:
-
-    ARC_ASSISTANT( const ARC_GEOM_MANAGER& aManager );
+    ARC_ASSISTANT( const ARC_GEOM_MANAGER& aManager, EDA_UNITS aUnits );
 
     const BOX2I ViewBBox() const override;
 
@@ -52,7 +51,6 @@ public:
     void Show( int x, std::ostream& st ) const override
     {
     }
-
 #endif
 
     /**
@@ -67,6 +65,7 @@ public:
 private:
 
     const ARC_GEOM_MANAGER& m_constructMan;
+    EDA_UNITS               m_units;
 };
 }       // PREVIEW
 }       // KIGFX

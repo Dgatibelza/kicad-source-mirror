@@ -6,7 +6,7 @@
 /*
  * This program source code file is part of KiCad, a free EDA CAD application.
  *
- * Copyright (C) 1992-2016 KiCad Developers, see AUTHORS.txt for contributors.
+ * Copyright (C) 1992-2018 KiCad Developers, see AUTHORS.txt for contributors.
  *
  * This program is free software; you can redistribute it and/or
  * modify it under the terms of the GNU General Public License
@@ -32,43 +32,39 @@
 #include <gerbview.h>
 #include <gerbview_frame.h>
 #include <trigo.h>
-#include <class_gerber_file_image.h>
-#include <class_X2_gerber_attributes.h>
+#include <gerber_file_image.h>
+#include <X2_gerber_attributes.h>
 
 #include <cmath>
 
-/* Gerber: NOTES about some important commands found in RS274D and RS274X (G codes):
+/* Gerber: NOTES about some important commands found in RS274D and RS274X (G codes).
+ * Some are now deprecated, but deprecated commands must be known by the Gerber reader
  * Gn =
- * G01 linear interpolation (right trace)
- * G02, G20, G21 Circular interpolation, meaning trig <0 (clockwise)
- * G03, G30, G31 Circular interpolation, meaning trigo> 0 (counterclockwise)
- * G04 = comment. Since Sept 2014, file attributes can be found here
+ * G01 linear interpolation (linear trace)
+ * G02, G20, G21 Circular interpolation, clockwise
+ * G03, G30, G31 Circular interpolation, counterclockwise
+ * G04 = comment. Since Sept 2014, file attributes and other X2 attributes can be found here
  *       if the line starts by G04 #@!
  * G06 parabolic interpolation
  * G07 Cubic Interpolation
  * G10 linear interpolation (scale x10)
  * G11 linear interpolation (0.1x range)
  * G12 linear interpolation (0.01x scale)
- * G36 Start polygon mode
+ * G36 Start polygon mode (called a region, because the "polygon" can include arcs)
  * G37 Stop polygon mode (and close it)
- * G54 Selection Tool
+ * G54 Selection Tool (outdated)
  * G60 linear interpolation (scale x100)
  * G70 Select Units = Inches
  * G71 Select Units = Millimeters
- * G74 disable 360 degrees circular interpolation  (return to 90 deg mode)
- *      and perhaps circular interpolation (return to linear interpolation )
- *      see rs274xrevd_e.pdf pages 47 and 48
- *      Unfortunately page 47 said G74 disable G02 or G03
- *      and page 48 said G01 must be used to disable G02 or G03.
- *      Currently GerbView disable G02 or G03 after a G74 command (tests using 2 gerber files).
- * G75 enable 360 degrees circular interpolation
+ * G74 enable 90 deg mode for arcs (CW or CCW)
+ * G75 enable 360 degrees for arcs (CW or CCW)
  * G90 mode absolute coordinates
  *
  * X, Y
  * X and Y are followed by + or - and m + n digits (not separated)
  * m = integer part
  * n = part after the comma
- * Classic formats: m = 2, n = 3 (size 2.3)
+ *ic formats: m = 2, n = 3 (size 2.3)
  * m = 3, n = 4 (size 3.4)
  * eg
  * GxxX00345Y-06123*
@@ -208,11 +204,11 @@ void fillLineGBRITEM(  GERBER_DRAW_ITEM* aGbrItem,
  *                      false when arc is inside one quadrant
  * @param aLayerNegative = true if the current layer is negative
  */
-static void fillArcGBRITEM(  GERBER_DRAW_ITEM* aGbrItem, int Dcode_index,
-                             const wxPoint& aStart, const wxPoint& aEnd,
-                             const wxPoint& aRelCenter, wxSize aPenSize,
-                             bool aClockwise, bool aMultiquadrant,
-                             bool aLayerNegative  )
+void fillArcGBRITEM(  GERBER_DRAW_ITEM* aGbrItem, int Dcode_index,
+                      const wxPoint& aStart, const wxPoint& aEnd,
+                      const wxPoint& aRelCenter, wxSize aPenSize,
+                      bool aClockwise, bool aMultiquadrant,
+                      bool aLayerNegative  )
 {
     wxPoint center, delta;
 
@@ -478,47 +474,48 @@ bool GERBER_FILE_IMAGE::Execute_G_Command( char*& text, int G_command )
         break;
 
     case GC_COMMENT:
-        // Skip comment, but only if the line does not start by "G04 #@! TF"
-        // which is a metadata
-        if( strncmp( text, " #@! TF", 7 ) == 0 )
+        // Skip comment, but only if the line does not start by "G04 #@! "
+        // which is a metadata, i.e. a X2 command inside the comment.
+        // this comment is called a "structured comment"
+        if( strncmp( text, " #@! ", 5 ) == 0 )
         {
-            text += 7;
-            X2_ATTRIBUTE dummy;
-            dummy.ParseAttribCmd( m_Current_File, NULL, 0, text, m_LineNum );
-            if( dummy.IsFileFunction() )
+            text += 5;
+            // The string starting at text is the same as the X2 attribute,
+            // but a X2 attribute ends by '%'. So we build the X2 attribute string
+            std::string x2buf;
+
+            while( *text && (*text != '*') )
             {
-                delete m_FileFunction;
-                m_FileFunction = new X2_ATTRIBUTE_FILEFUNCTION( dummy );
+                x2buf += *text;
+                text++;
             }
+            // add the end of X2 attribute string
+            x2buf += "*%";
+            x2buf += '\0';
+
+            char* cptr = (char*)x2buf.data();
+            int code_command = ReadXCommandID( cptr );
+            ExecuteRS274XCommand( code_command, NULL, 0, cptr );
         }
 
-        while ( *text && (*text != '*') )
-                    text++;
-        break;
-
-    case GC_LINEAR_INTERPOL_10X:
-        m_Iterpolation = GERB_INTERPOL_LINEAR_10X;
-        break;
-
-    case GC_LINEAR_INTERPOL_0P1X:
-        m_Iterpolation = GERB_INTERPOL_LINEAR_01X;
-        break;
-
-    case GC_LINEAR_INTERPOL_0P01X:
-        m_Iterpolation = GERB_INTERPOL_LINEAR_001X;
+        while( *text && (*text != '*') )
+            text++;
         break;
 
     case GC_SELECT_TOOL:
     {
         int D_commande = DCodeNumber( text );
+
         if( D_commande < FIRST_DCODE )
             return false;
         if( D_commande > (TOOLS_MAX_COUNT - 1) )
             D_commande = TOOLS_MAX_COUNT - 1;
         m_Current_Tool = D_commande;
         D_CODE* pt_Dcode = GetDCODE( D_commande );
+
         if( pt_Dcode )
             pt_Dcode->m_InUse = true;
+
         break;
     }
 
@@ -555,15 +552,16 @@ bool GERBER_FILE_IMAGE::Execute_G_Command( char*& text, int G_command )
         break;
 
     case GC_TURN_OFF_POLY_FILL:
-        if( m_Exposure && GetItemsList() )    // End of polygon
+        if( m_Exposure && GetLastItemInList() )    // End of polygon
         {
-            GERBER_DRAW_ITEM * gbritem = m_Drawings.GetLast();
-            gbritem->m_Polygon.Append( gbritem->m_Polygon.Vertex( 0 ) );
+            GERBER_DRAW_ITEM * gbritem = GetLastItemInList();
+            gbritem->m_Polygon.Append( gbritem->m_Polygon.CVertex( 0 ) );
             StepAndRepeatItem( *gbritem );
         }
         m_Exposure = false;
         m_PolygonFillMode = false;
         m_PolygonFillModeState = 0;
+        m_Iterpolation = GERB_INTERPOL_LINEAR_1X;   // not sure it should be done
         break;
 
     case GC_MOVE:       // Non existent
@@ -602,8 +600,11 @@ bool GERBER_FILE_IMAGE::Execute_DCODE_Command( char*& text, int D_commande )
         m_Current_Tool = D_commande;
 
         D_CODE* pt_Dcode = GetDCODE( D_commande );
+
         if( pt_Dcode )
             pt_Dcode->m_InUse = true;
+        else
+            m_Has_MissingDCode = true;
 
         return true;
     }
@@ -621,16 +622,24 @@ bool GERBER_FILE_IMAGE::Execute_DCODE_Command( char*& text, int D_commande )
             {
                 m_Exposure = true;
                 gbritem    = new GERBER_DRAW_ITEM( this );
-                m_Drawings.Append( gbritem );
+                AddItemToList( gbritem );
                 gbritem->m_Shape = GBR_POLYGON;
                 gbritem->m_Flashed = false;
+                gbritem->m_DCode = 0;   // No DCode for a Polygon (Region in Gerber dialect)
+
+
+                if( gbritem->m_GerberImageFile )
+                {
+                    gbritem->SetNetAttributes( gbritem->m_GerberImageFile->m_NetAttributeDict );
+                    gbritem->m_AperFunction = gbritem->m_GerberImageFile->m_AperFunction;
+                }
             }
 
             switch( m_Iterpolation )
             {
             case GERB_INTERPOL_ARC_NEG:
             case GERB_INTERPOL_ARC_POS:
-                gbritem = m_Drawings.GetLast();
+                gbritem = GetLastItemInList();
 
                 fillArcPOLY( gbritem, m_PreviousPos,
                              m_CurrentPos, m_IJPos,
@@ -639,7 +648,7 @@ bool GERBER_FILE_IMAGE::Execute_DCODE_Command( char*& text, int D_commande )
                 break;
 
             default:
-                gbritem = m_Drawings.GetLast();
+                gbritem = GetLastItemInList();
 
                 gbritem->m_Start = m_PreviousPos;       // m_Start is used as temporary storage
                 if( gbritem->m_Polygon.OutlineCount() == 0 )
@@ -658,10 +667,10 @@ bool GERBER_FILE_IMAGE::Execute_DCODE_Command( char*& text, int D_commande )
             break;
 
         case 2:     // code D2: exposure OFF (i.e. "move to")
-            if( m_Exposure && GetItemsList() )    // End of polygon
+            if( m_Exposure && GetLastItemInList() )    // End of polygon
             {
-                gbritem = m_Drawings.GetLast();
-                gbritem->m_Polygon.Append( gbritem->m_Polygon.Vertex( 0 ) );
+                gbritem = GetLastItemInList();
+                gbritem->m_Polygon.Append( gbritem->m_Polygon.CVertex( 0 ) );
                 StepAndRepeatItem( *gbritem );
             }
             m_Exposure    = false;
@@ -681,6 +690,7 @@ bool GERBER_FILE_IMAGE::Execute_DCODE_Command( char*& text, int D_commande )
             m_Exposure = true;
 
             tool = GetDCODE( m_Current_Tool );
+
             if( tool )
             {
                 size     = tool->m_Size;
@@ -692,29 +702,34 @@ bool GERBER_FILE_IMAGE::Execute_DCODE_Command( char*& text, int D_commande )
             {
             case GERB_INTERPOL_LINEAR_1X:
                 gbritem = new GERBER_DRAW_ITEM( this );
-                m_Drawings.Append( gbritem );
+                AddItemToList( gbritem );
 
                 fillLineGBRITEM( gbritem, dcode, m_PreviousPos,
                                  m_CurrentPos, size, GetLayerParams().m_LayerNegative );
                 StepAndRepeatItem( *gbritem );
                 break;
 
-            case GERB_INTERPOL_LINEAR_01X:
-            case GERB_INTERPOL_LINEAR_001X:
-            case GERB_INTERPOL_LINEAR_10X:
-                wxBell();
-                break;
-
             case GERB_INTERPOL_ARC_NEG:
             case GERB_INTERPOL_ARC_POS:
                 gbritem = new GERBER_DRAW_ITEM( this );
-                m_Drawings.Append( gbritem );
+                AddItemToList( gbritem );
 
-                fillArcGBRITEM( gbritem, dcode, m_PreviousPos,
-                                m_CurrentPos, m_IJPos, size,
-                                ( m_Iterpolation == GERB_INTERPOL_ARC_NEG ) ?
-                                false : true, m_360Arc_enbl, GetLayerParams().m_LayerNegative );
+                if( m_LastCoordIsIJPos )
+                {
+                    fillArcGBRITEM( gbritem, dcode, m_PreviousPos,
+                                    m_CurrentPos, m_IJPos, size,
+                                    ( m_Iterpolation == GERB_INTERPOL_ARC_NEG ) ?
+                                    false : true, m_360Arc_enbl, GetLayerParams().m_LayerNegative );
+                    m_LastCoordIsIJPos = false;
+                }
+                else
+                {
+                    fillLineGBRITEM( gbritem, dcode, m_PreviousPos,
+                                     m_CurrentPos, size, GetLayerParams().m_LayerNegative );
+                }
+
                 StepAndRepeatItem( *gbritem );
+
                 break;
 
             default:
@@ -742,7 +757,7 @@ bool GERBER_FILE_IMAGE::Execute_DCODE_Command( char*& text, int D_commande )
             }
 
             gbritem = new GERBER_DRAW_ITEM( this );
-            m_Drawings.Append( gbritem );
+            AddItemToList( gbritem );
             fillFlashedGBRITEM( gbritem, aperture, dcode, m_CurrentPos,
                                 size, GetLayerParams().m_LayerNegative );
             StepAndRepeatItem( *gbritem );

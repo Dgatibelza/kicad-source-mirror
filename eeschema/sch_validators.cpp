@@ -27,15 +27,17 @@
  * @brief Implementation of control validators for schematic dialogs.
  */
 
+#include <wx/combo.h>
+#include <sch_connection.h>
 #include <sch_validators.h>
 #include <template_fieldnames.h>
 
-SCH_FIELD_VALIDATOR::SCH_FIELD_VALIDATOR(  bool aIsCmplibEditor,
-                                           int aFieldId, wxString* aValue ) :
+
+SCH_FIELD_VALIDATOR::SCH_FIELD_VALIDATOR(  bool aIsLibEditor, int aFieldId, wxString* aValue ) :
     wxTextValidator( wxFILTER_EXCLUDE_CHAR_LIST, aValue )
 {
     m_fieldId = aFieldId;
-    m_isLibEditor = aIsCmplibEditor;
+    m_isLibEditor = aIsLibEditor;
 
     // Fields cannot contain carriage returns, line feeds, or tabs.
     wxString excludes( "\r\n\t" );
@@ -44,12 +46,12 @@ SCH_FIELD_VALIDATOR::SCH_FIELD_VALIDATOR(  bool aIsCmplibEditor,
     if( aFieldId == REFERENCE )
         excludes += " ";
     else if( aFieldId == VALUE && m_isLibEditor )
-        excludes += " ";
+        excludes += " :/\\";
 
     long style = GetStyle();
 
     // The reference and value fields cannot be empty.
-    if( aFieldId == REFERENCE || aFieldId == VALUE )
+    if( aFieldId == REFERENCE || aFieldId == VALUE || aFieldId == FIELD_NAME )
         style |= wxFILTER_EMPTY;
 
     SetStyle( style );
@@ -77,24 +79,45 @@ bool SCH_FIELD_VALIDATOR::Validate( wxWindow *aParent )
         return false;
 
     wxString val( text->GetValue() );
-    wxString tmp = val.Clone();           // For trailing and leading white space tests.
-    wxString fieldName;
+
+    // The format of the error message for not allowed chars
+    wxString fieldCharError;
 
     switch( m_fieldId )
     {
-    case REFERENCE: fieldName = _( "reference designator" ); break;
-    case VALUE:     fieldName = _( "value" );                break;
-    case FOOTPRINT: fieldName = _( "footprint" );            break;
-    case DATASHEET: fieldName = _( "data sheet" );           break;
-    default:        fieldName = _( "user defined" );         break;
+    case REFERENCE:
+        fieldCharError = _( "The reference field cannot contain %s character(s)." );
+        break;
+
+    case VALUE:
+        fieldCharError = _( "The value field cannot contain %s character(s)." );
+        break;
+
+    case FOOTPRINT:
+        fieldCharError = _( "The footprint field cannot contain %s character(s)." );
+        break;
+
+    case DATASHEET:
+        fieldCharError = _( "The datasheet field cannot contain %s character(s)." );
+        break;
+
+    default:
+        fieldCharError = _( "The field cannot contain %s character(s)." );
+        break;
     };
 
-    wxString errorMsg;
+    wxString msg;
 
     // We can only do some kinds of validation once the input is complete, so
     // check for them here:
     if( HasFlag( wxFILTER_EMPTY ) && val.empty() )
-        errorMsg.Printf( _( "The %s field cannot be empty." ), fieldName );
+    {
+        // Some fields cannot have an empty value, and user fields require a name:
+        if( m_fieldId == FIELD_NAME )
+            msg.Printf( _( "The name of the field cannot be empty." ) );
+        else    // the FIELD_VALUE id or REFERENCE or VALUE
+            msg.Printf( _( "The value of the field cannot be empty." ) );
+    }
     else if( HasFlag( wxFILTER_EXCLUDE_CHAR_LIST ) && ContainsExcludedCharacters( val ) )
     {
         wxArrayString whiteSpace;
@@ -122,20 +145,108 @@ bool SCH_FIELD_VALIDATOR::Validate( wxWindow *aParent )
             badChars.Printf( _( "%s, %s, %s, or %s" ),
                              whiteSpace[0], whiteSpace[1], whiteSpace[2], whiteSpace[3] );
         else
-            wxCHECK_MSG( false, true, wxT( "Invalid illegal character in field validator." ) );
+            wxCHECK_MSG( false, true, "Invalid illegal character in field validator." );
 
-        errorMsg.Printf( _( "The %s field cannot contain %s characters." ), fieldName, badChars );
+        msg.Printf( fieldCharError, badChars );
     }
 
-    if ( !errorMsg.empty() )
+    if ( !msg.empty() )
     {
         m_validatorWindow->SetFocus();
 
-        wxMessageBox( errorMsg, _( "Field Validation Error" ),
-                      wxOK | wxICON_EXCLAMATION, aParent );
+        wxMessageBox( msg, _( "Field Validation Error" ), wxOK | wxICON_EXCLAMATION, aParent );
 
         return false;
     }
 
     return true;
+}
+
+
+SCH_NETNAME_VALIDATOR::SCH_NETNAME_VALIDATOR( wxString *aVal )
+    : wxValidator(),
+      m_allowSpaces( false )
+{
+}
+
+
+SCH_NETNAME_VALIDATOR::SCH_NETNAME_VALIDATOR( const SCH_NETNAME_VALIDATOR& aValidator )
+    : wxValidator(),
+      m_allowSpaces( aValidator.m_allowSpaces )
+{
+}
+
+
+SCH_NETNAME_VALIDATOR::SCH_NETNAME_VALIDATOR( bool aAllowSpaces )
+    : wxValidator(),
+      m_allowSpaces( aAllowSpaces )
+{
+}
+
+
+wxTextEntry *SCH_NETNAME_VALIDATOR::GetTextEntry()
+{
+#if wxUSE_TEXTCTRL
+    if( wxDynamicCast( m_validatorWindow, wxTextCtrl ) )
+        return static_cast<wxTextCtrl*>( m_validatorWindow );
+#endif
+
+#if wxUSE_COMBOBOX
+    if( wxDynamicCast( m_validatorWindow, wxComboBox ) )
+        return static_cast<wxComboBox*>( m_validatorWindow );
+#endif
+
+#if wxUSE_COMBOCTRL
+    if( wxDynamicCast( m_validatorWindow, wxComboCtrl ) )
+        return static_cast<wxComboCtrl*>( m_validatorWindow );
+#endif
+
+    wxFAIL_MSG( "SCH_NETNAME_VALIDATOR can only be used with wxTextCtrl, wxComboBox, or wxComboCtrl" );
+    return nullptr;
+}
+
+
+bool SCH_NETNAME_VALIDATOR::Validate( wxWindow *aParent )
+{
+    // If window is disabled, simply return
+    if ( !m_validatorWindow->IsEnabled() )
+        return true;
+
+    wxTextEntry * const text = GetTextEntry();
+
+    if ( !text )
+        return false;
+
+    const wxString& errormsg = IsValid( text->GetValue() );
+
+    if( !errormsg.empty() )
+    {
+        m_validatorWindow->SetFocus();
+        wxMessageBox( errormsg, _( "Invalid signal name" ), wxOK | wxICON_EXCLAMATION, aParent );
+        return false;
+    }
+
+    return true;
+}
+
+
+wxString SCH_NETNAME_VALIDATOR::IsValid( const wxString& str ) const
+{
+    if( SCH_CONNECTION::IsBusGroupLabel( str ) )
+        return wxString();
+
+    if( str.Contains( '{' ) || str.Contains( '}' ) )
+        return _( "Signal name contains '{' or '}' but is not a valid group bus name" );
+
+    if( ( str.Contains( '[' ) || str.Contains( ']' ) ) &&
+        !SCH_CONNECTION::IsBusVectorLabel( str ) )
+        return _( "Signal name contains '[' or ']' but is not a valid vector bus name" );
+
+    if( str.Contains( '\r' ) || str.Contains( '\n' ) )
+        return _( "Signal names cannot contain CR or LF characters" );
+
+    if( !m_allowSpaces && ( str.Contains( ' ' ) || str.Contains( '\t' ) ) )
+        return _( "Signal names cannot contain spaces" );
+
+    return wxString();
 }

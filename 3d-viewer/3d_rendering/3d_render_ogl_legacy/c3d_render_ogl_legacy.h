@@ -65,13 +65,14 @@ public:
 
     // Imported from C3D_RENDER_BASE
     void SetCurWindowSize( const wxSize &aSize ) override;
-    bool Redraw( bool aIsMoving, REPORTER *aStatusTextReporter ) override;
+    bool Redraw( bool aIsMoving, REPORTER* aStatusTextReporter,
+            REPORTER* aWarningTextReporter ) override;
 
     int GetWaitForEditingTimeOut() override;
 
 private:
     bool initializeOpenGL();
-    void reload( REPORTER *aStatusTextReporter );
+    void reload( REPORTER* aStatusTextReporter, REPORTER* aWarningTextReporter );
 
     void ogl_set_arrow_material();
 
@@ -174,7 +175,7 @@ private:
 
     void generate_3D_Vias_and_Pads();
 
-    void load_3D_models();
+    void load_3D_models( REPORTER *aStatusTextReporter );
 
     /**
      * @brief render_3D_models
@@ -200,8 +201,10 @@ private:
     struct
     {
         SMATERIAL m_Paste;
-        SMATERIAL m_SilkS;
-        SMATERIAL m_SolderMask;
+        SMATERIAL m_SilkSBot;
+        SMATERIAL m_SilkSTop;
+        SMATERIAL m_SolderMaskBot;
+        SMATERIAL m_SolderMaskTop;
         SMATERIAL m_EpoxyBoard;
         SMATERIAL m_Copper;
         SMATERIAL m_Plastic;

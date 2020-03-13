@@ -27,16 +27,18 @@
 #include <tool/tool_event.h>
 #include <tool/tool_manager.h>
 #include <tool/tool_interactive.h>
-#include <tool/context_menu.h>
+#include <tool/action_menu.h>
 
 TOOL_INTERACTIVE::TOOL_INTERACTIVE( TOOL_ID aId, const std::string& aName ) :
-    TOOL_BASE( INTERACTIVE, aId, aName )
+    TOOL_BASE( INTERACTIVE, aId, aName ),
+    m_menu( *this )
 {
 }
 
 
 TOOL_INTERACTIVE::TOOL_INTERACTIVE( const std::string& aName ) :
-    TOOL_BASE( INTERACTIVE, TOOL_MANAGER::MakeToolId( aName ), aName )
+    TOOL_BASE( INTERACTIVE, TOOL_MANAGER::MakeToolId( aName ), aName ),
+    m_menu( *this )
 {
 }
 
@@ -52,7 +54,7 @@ void TOOL_INTERACTIVE::Activate()
 }
 
 
-OPT_TOOL_EVENT TOOL_INTERACTIVE::Wait( const TOOL_EVENT_LIST& aEventList )
+TOOL_EVENT* TOOL_INTERACTIVE::Wait( const TOOL_EVENT_LIST& aEventList )
 {
     return m_toolMgr->ScheduleWait( this, aEventList );
 }
@@ -71,7 +73,7 @@ void TOOL_INTERACTIVE::goInternal( TOOL_STATE_FUNC& aState, const TOOL_EVENT_LIS
 }
 
 
-void TOOL_INTERACTIVE::SetContextMenu( CONTEXT_MENU* aMenu, CONTEXT_MENU_TRIGGER aTrigger )
+void TOOL_INTERACTIVE::SetContextMenu( ACTION_MENU* aMenu, CONTEXT_MENU_TRIGGER aTrigger )
 {
     if( aMenu )
         aMenu->SetTool( this );

@@ -29,25 +29,23 @@
  * @brief Export GenCAD 1.4 format.
  */
 
-#include <fctsys.h>
-#include <class_drawpanel.h>
-#include <confirm.h>
-#include <gestfich.h>
-#include <pgm_base.h>
-#include <wxPcbStruct.h>
-#include <trigo.h>
 #include <build_version.h>
-#include <macros.h>
-
-#include <pcbnew.h>
-#include <dialogs/dialog_gencad_export_options.h>
-
 #include <class_board.h>
+#include <class_edge_mod.h>
 #include <class_module.h>
 #include <class_track.h>
-#include <class_edge_mod.h>
-
+#include <confirm.h>
+#include <dialogs/dialog_gencad_export_options.h>
+#include <fctsys.h>
+#include <gestfich.h>
 #include <hash_eda.h>
+#include <macros.h>
+#include <math/util.h> // for KiROUND
+#include <pcb_edit_frame.h>
+#include <pcbnew.h>
+#include <pcbnew_settings.h>
+#include <pgm_base.h>
+#include <trigo.h>
 
 static bool CreateHeaderInfoData( FILE* aFile, PCB_EDIT_FRAME* frame );
 static void CreateArtworksSection( FILE* aFile );
@@ -156,7 +154,7 @@ static std::string GenCADLayerName( int aCuCount, PCB_LAYER_ID aId )
 
         return txt;
     }
-};
+}
 
 
 static const PCB_LAYER_ID gc_seq[] = {
@@ -204,7 +202,7 @@ static std::string GenCADLayerNameFlipped( int aCuCount, PCB_LAYER_ID aId )
     }
 
     return GenCADLayerName( aCuCount, aId );
-};
+}
 
 
 static wxString escapeString( const wxString& aString )
@@ -229,6 +227,7 @@ static std::string fmt_mask( LSET aSet )
 static bool flipBottomPads;
 static bool uniquePins;
 static bool individualShapes;
+static bool storeOriginCoords;
 
 // These are the export origin (the auxiliary axis)
 static int GencadOffsetX, GencadOffsetY;
@@ -237,7 +236,7 @@ static int GencadOffsetX, GencadOffsetY;
 static std::map<MODULE*, int> componentShapes;
 static std::map<int, wxString> shapeNames;
 
-static const wxString& getShapeName( MODULE* aModule )
+static const wxString getShapeName( MODULE* aModule )
 {
     static const wxString invalid( "invalid" );
 
@@ -274,17 +273,29 @@ static double MapYTo( int aY )
 /* Driver function: processing starts here */
 void PCB_EDIT_FRAME::ExportToGenCAD( wxCommandEvent& aEvent )
 {
-    DIALOG_GENCAD_EXPORT_OPTIONS optionsDialog( this );
+    // Build default output file name
+    wxString path = GetLastPath( LAST_PATH_GENCAD );
+
+    if( path.IsEmpty() )
+    {
+        wxFileName brdFile = GetBoard()->GetFileName();
+        brdFile.SetExt( "cad" );
+        path = brdFile.GetFullPath();
+    }
+
+    DIALOG_GENCAD_EXPORT_OPTIONS optionsDialog( this, path );
 
     if( optionsDialog.ShowModal() == wxID_CANCEL )
         return;
 
-    FILE* file = wxFopen( optionsDialog.GetFileName(), "wt" );
+    path = optionsDialog.GetFileName();
+    SetLastPath( LAST_PATH_GENCAD, path );
+    FILE* file = wxFopen( path, "wt" );
 
     if( !file )
     {
-        DisplayError( this, wxString::Format( _( "Unable to create <%s>" ),
-                    GetChars( optionsDialog.GetFileName() ) ) );
+        DisplayError( this, wxString::Format( _( "Unable to create \"%s\"" ),
+                                              optionsDialog.GetFileName() ) );
         return;
     }
 
@@ -292,6 +303,7 @@ void PCB_EDIT_FRAME::ExportToGenCAD( wxCommandEvent& aEvent )
     flipBottomPads = optionsDialog.GetOption( FLIP_BOTTOM_PADS );
     uniquePins = optionsDialog.GetOption( UNIQUE_PIN_NAMES );
     individualShapes = optionsDialog.GetOption( INDIVIDUAL_SHAPES );
+    storeOriginCoords = optionsDialog.GetOption( STORE_ORIGIN_COORDS );
 
     // Switch the locale to standard C (needed to print floating point numbers)
     LOCALE_IO toggle;
@@ -300,11 +312,11 @@ void PCB_EDIT_FRAME::ExportToGenCAD( wxCommandEvent& aEvent )
     GetBoard()->ComputeBoundingBox();
 
     // Save the auxiliary origin for the rest of the module
-    GencadOffsetX = GetAuxOrigin().x;
-    GencadOffsetY = GetAuxOrigin().y;
+    GencadOffsetX = optionsDialog.GetOption( USE_AUX_ORIGIN ) ? GetAuxOrigin().x : 0;
+    GencadOffsetY = optionsDialog.GetOption( USE_AUX_ORIGIN ) ? GetAuxOrigin().y : 0;
 
     // No idea on *why* this should be needed... maybe to fix net names?
-    Compile_Ratsnest( NULL, true );
+    Compile_Ratsnest( true );
 
     /* Temporary modification of footprints that are flipped (i.e. on bottom
      * layer) to convert them to non flipped footprints.
@@ -313,15 +325,14 @@ void PCB_EDIT_FRAME::ExportToGenCAD( wxCommandEvent& aEvent )
      * these changes will be undone later
      */
     BOARD*  pcb = GetBoard();
-    MODULE* module;
 
-    for( module = pcb->m_Modules; module; module = module->Next() )
+    for( auto module : pcb->Modules() )
     {
         module->SetFlag( 0 );
 
         if( module->GetLayer() == B_Cu )
         {
-            module->Flip( module->GetPosition() );
+            module->Flip( module->GetPosition(), Settings().m_FlipLeftRight );
             module->SetFlag( 1 );
         }
     }
@@ -351,11 +362,11 @@ void PCB_EDIT_FRAME::ExportToGenCAD( wxCommandEvent& aEvent )
     fclose( file );
 
     // Undo the footprints modifications (flipped footprints)
-    for( module = pcb->m_Modules; module; module = module->Next() )
+    for( auto module : pcb->Modules() )
     {
         if( module->GetFlag() )
         {
-            module->Flip( module->GetPosition() );
+            module->Flip( module->GetPosition(), Settings().m_FlipLeftRight );
             module->SetFlag( 0 );
         }
     }
@@ -365,32 +376,19 @@ void PCB_EDIT_FRAME::ExportToGenCAD( wxCommandEvent& aEvent )
 }
 
 
-// Comparator for sorting pads with qsort
-static int PadListSortByShape( const void* aRefptr, const void* aObjptr )
-{
-    const D_PAD* padref = *(D_PAD**) aRefptr;
-    const D_PAD* padcmp = *(D_PAD**) aObjptr;
-
-    return D_PAD::Compare( padref, padcmp );
-}
-
-
 // Sort vias for uniqueness
-static int ViaSort( const void* aRefptr, const void* aObjptr )
+static bool ViaSort( const VIA* aPadref, const VIA* aPadcmp )
 {
-    VIA* padref = *(VIA**) aRefptr;
-    VIA* padcmp = *(VIA**) aObjptr;
+    if( aPadref->GetWidth() != aPadcmp->GetWidth() )
+        return aPadref->GetWidth() < aPadcmp->GetWidth();
 
-    if( padref->GetWidth() != padcmp->GetWidth() )
-        return padref->GetWidth() - padcmp->GetWidth();
+    if( aPadref->GetDrillValue() != aPadcmp->GetDrillValue() )
+        return aPadref->GetDrillValue() < aPadcmp->GetDrillValue();
 
-    if( padref->GetDrillValue() != padcmp->GetDrillValue() )
-        return padref->GetDrillValue() - padcmp->GetDrillValue();
+    if( aPadref->GetLayerSet() != aPadcmp->GetLayerSet() )
+        return aPadref->GetLayerSet().FmtBin().compare( aPadcmp->GetLayerSet().FmtBin() ) < 0;
 
-    if( padref->GetLayerSet() != padcmp->GetLayerSet() )
-        return padref->GetLayerSet().FmtBin().compare( padcmp->GetLayerSet().FmtBin() );
-
-    return 0;
+    return false;
 }
 
 
@@ -407,7 +405,6 @@ static void CreateArtworksSection( FILE* aFile )
 // Via name is synthesized from their attributes, pads are numbered
 static void CreatePadsShapesSection( FILE* aFile, BOARD* aPcb )
 {
-    std::vector<D_PAD*> pads;
     std::vector<D_PAD*> padstacks;
     std::vector<VIA*>   vias;
     std::vector<VIA*>   viastacks;
@@ -421,33 +418,30 @@ static void CreatePadsShapesSection( FILE* aFile, BOARD* aPcb )
     fputs( "$PADS\n", aFile );
 
     // Enumerate and sort the pads
-    if( aPcb->GetPadCount() > 0 )
-    {
-        pads = aPcb->GetPads();
-        qsort( &pads[0], aPcb->GetPadCount(), sizeof( D_PAD* ),
-               PadListSortByShape );
-    }
+
+    auto pads( aPcb->GetPads() );
+    std::sort( pads.begin(), pads.end(),
+            []( const D_PAD* a, const D_PAD* b ) { return D_PAD::Compare( a, b ) < 0; } );
+
 
     // The same for vias
-    for( VIA* via = GetFirstVia( aPcb->m_Track ); via;
-            via = GetFirstVia( via->Next() ) )
+    for( auto track : aPcb->Tracks() )
     {
-        vias.push_back( via );
+        if( auto via = dyn_cast<VIA*>( track ) )
+            vias.push_back( via );
     }
 
-    qsort( &vias[0], vias.size(), sizeof(VIA*), ViaSort );
+    std::sort( vias.begin(), vias.end(), ViaSort );
+    vias.erase( std::unique( vias.begin(), vias.end(),
+                        []( const VIA* a, const VIA* b ) { return ViaSort( a, b ) == false; } ),
+            vias.end() );
 
     // Emit vias pads
-    TRACK* old_via = 0;
 
-    for( unsigned i = 0; i < vias.size(); i++ )
+    for( auto item : vias )
     {
-        VIA* via = vias[i];
+        VIA* via = static_cast<VIA*>( item );
 
-        if( old_via && 0 == ViaSort( &old_via, &via ) )
-            continue;
-
-        old_via = via;
         viastacks.push_back( via );
         fprintf( aFile, "PAD V%d.%d.%s ROUND %g\nCIRCLE 0 0 %g\n",
                 via->GetWidth(), via->GetDrillValue(),
@@ -658,7 +652,7 @@ static void CreatePadsShapesSection( FILE* aFile, BOARD* aPcb )
                  fmt_mask( mask ).c_str(),
                  via->GetDrillValue() / SCALE_FACTOR );
 
-        for( LSEQ seq = mask.Seq( gc_seq, DIM( gc_seq ) );  seq;  ++seq )
+        for( LSEQ seq = mask.Seq( gc_seq, arrayDim( gc_seq ) );  seq;  ++seq )
         {
             PCB_LAYER_ID layer = *seq;
 
@@ -685,7 +679,7 @@ static void CreatePadsShapesSection( FILE* aFile, BOARD* aPcb )
         LSET pad_set = pad->GetLayerSet() & master_layermask;
 
         // the special gc_seq
-        for( LSEQ seq = pad_set.Seq( gc_seq, DIM( gc_seq ) );  seq;  ++seq )
+        for( LSEQ seq = pad_set.Seq( gc_seq, arrayDim( gc_seq ) );  seq;  ++seq )
         {
             PCB_LAYER_ID layer = *seq;
 
@@ -718,11 +712,12 @@ static size_t hashModule( const MODULE* aModule )
     constexpr int flags = HASH_FLAGS::POSITION | HASH_FLAGS::REL_COORD
                 | HASH_FLAGS::ROTATION | HASH_FLAGS::LAYER;
 
-    for( const BOARD_ITEM* i = aModule->GraphicalItemsList(); i; i = i->Next() )
-        ret ^= hash_eda( i, flags );
 
-    for( const D_PAD* i = aModule->PadsList(); i; i = i->Next() )
-        ret ^= hash_eda( i, flags );
+    for( auto i : aModule->GraphicalItems() )
+        ret += hash_eda( i, flags );
+
+    for( auto i : aModule->Pads() )
+        ret += hash_eda( i, flags );
 
     return ret;
 }
@@ -734,8 +729,6 @@ static size_t hashModule( const MODULE* aModule )
  */
 static void CreateShapesSection( FILE* aFile, BOARD* aPcb )
 {
-    MODULE*     module;
-    D_PAD*      pad;
     const char* layer;
     wxString    pinname;
     const char* mirror = "0";
@@ -743,7 +736,7 @@ static void CreateShapesSection( FILE* aFile, BOARD* aPcb )
 
     fputs( "$SHAPES\n", aFile );
 
-    for( module = aPcb->m_Modules; module; module = module->Next() )
+    for( auto module : aPcb->Modules() )
     {
         if( !individualShapes )
         {
@@ -799,7 +792,7 @@ static void CreateShapesSection( FILE* aFile, BOARD* aPcb )
         // set of already emitted pins to check for duplicates
         std::set<wxString> pins;
 
-        for( pad = module->PadsList(); pad; pad = pad->Next() )
+        for( auto pad : module->Pads() )
         {
             /* Padstacks are defined using the correct layers for the pads, therefore to
              * all pads need to be marked as TOP to use the padstack information correctly.
@@ -856,7 +849,7 @@ static void CreateComponentsSection( FILE* aFile, BOARD* aPcb )
 
     int cu_count = aPcb->GetCopperLayerCount();
 
-    for( MODULE* module = aPcb->m_Modules; module; module = module->Next() )
+    for( auto module : aPcb->Modules() )
     {
         const char*   mirror;
         const char*   flip;
@@ -930,8 +923,6 @@ static void CreateSignalsSection( FILE* aFile, BOARD* aPcb )
 {
     wxString      msg;
     NETINFO_ITEM* net;
-    D_PAD*        pad;
-    MODULE*       module;
     int           NbNoConn = 1;
 
     fputs( "$SIGNALS\n", aFile );
@@ -953,9 +944,9 @@ static void CreateSignalsSection( FILE* aFile, BOARD* aPcb )
         fputs( TO_UTF8( msg ), aFile );
         fputs( "\n", aFile );
 
-        for( module = aPcb->m_Modules; module; module = module->Next() )
+        for( auto module : aPcb->Modules() )
         {
-            for( pad = module->PadsList(); pad; pad = pad->Next() )
+            for( auto pad : module->Pads() )
             {
                 if( pad->GetNetCode() != net->GetNet() )
                     continue;
@@ -999,40 +990,16 @@ static bool CreateHeaderInfoData( FILE* aFile, PCB_EDIT_FRAME* aFrame )
     fputs( TO_UTF8( msg ), aFile );
     fputs( "UNITS INCH\n", aFile );
 
+    // giving 0 as the argument to Map{X,Y}To returns the scaled origin point
     msg.Printf( wxT( "ORIGIN %g %g\n" ),
-                MapXTo( aFrame->GetAuxOrigin().x ),
-                MapYTo( aFrame->GetAuxOrigin().y ) );
+            storeOriginCoords ? MapXTo( 0 ) : 0,
+            storeOriginCoords ? MapYTo( 0 ) : 0 );
     fputs( TO_UTF8( msg ), aFile );
 
     fputs( "INTERTRACK 0\n", aFile );
     fputs( "$ENDHEADER\n\n", aFile );
 
     return true;
-}
-
-
-/*
- *  Sort function used to sort tracks segments:
- *   items are sorted by netcode, then by width then by layer
- */
-static int TrackListSortByNetcode( const void* refptr, const void* objptr )
-{
-    const TRACK* ref, * cmp;
-    int          diff;
-
-    ref = *( (TRACK**) refptr );
-    cmp = *( (TRACK**) objptr );
-
-    if( ( diff = ref->GetNetCode() - cmp->GetNetCode() ) )
-        return diff;
-
-    if( ( diff = ref->GetWidth() - cmp->GetWidth() ) )
-        return diff;
-
-    if( ( diff = ref->GetLayer() - cmp->GetLayer() ) )
-        return diff;
-
-    return 0;
 }
 
 
@@ -1047,51 +1014,31 @@ static int TrackListSortByNetcode( const void* refptr, const void* objptr )
  */
 static void CreateRoutesSection( FILE* aFile, BOARD* aPcb )
 {
-    TRACK*  track, ** tracklist;
     int     vianum = 1;
     int     old_netcode, old_width, old_layer;
-    int     nbitems, ii;
     LSET    master_layermask = aPcb->GetDesignSettings().GetEnabledLayers();
 
     int     cu_count = aPcb->GetCopperLayerCount();
 
-    // Count items
-    nbitems = 0;
+    TRACKS tracks( aPcb->Tracks() );
+    std::sort( tracks.begin(), tracks.end(), []( const TRACK* a, const TRACK* b ) {
+        if( a->GetNetCode() == b->GetNetCode() )
+        {
+            if( a->GetWidth() == b->GetWidth() )
+                return ( a->GetLayer() < b->GetLayer() );
 
-    for( track = aPcb->m_Track; track; track = track->Next() )
-        nbitems++;
+            return ( a->GetWidth() < b->GetWidth() );
+        }
 
-    for( track = aPcb->m_Zone; track; track = track->Next() )
-    {
-        if( track->Type() == PCB_ZONE_T )
-            nbitems++;
-    }
-
-    tracklist = (TRACK**) operator new( (nbitems + 1)* sizeof( TRACK* ) );
-
-    nbitems = 0;
-
-    for( track = aPcb->m_Track; track; track = track->Next() )
-        tracklist[nbitems++] = track;
-
-    for( track = aPcb->m_Zone; track; track = track->Next() )
-    {
-        if( track->Type() == PCB_ZONE_T )
-            tracklist[nbitems++] = track;
-    }
-
-    tracklist[nbitems] = NULL;
-
-    qsort( tracklist, nbitems, sizeof(TRACK*), TrackListSortByNetcode );
+        return ( a->GetNetCode() < b->GetNetCode() );
+    } );
 
     fputs( "$ROUTES\n", aFile );
 
     old_netcode = -1; old_width = -1; old_layer = -1;
 
-    for( ii = 0; ii < nbitems; ii++ )
+    for( auto track : tracks )
     {
-        track = tracklist[ii];
-
         if( old_netcode != track->GetNetCode() )
         {
             old_netcode = track->GetNetCode();
@@ -1112,14 +1059,13 @@ static void CreateRoutesSection( FILE* aFile, BOARD* aPcb )
             fprintf( aFile, "TRACK TRACK%d\n", track->GetWidth() );
         }
 
-        if( (track->Type() == PCB_TRACE_T) || (track->Type() == PCB_ZONE_T) )
+        if( track->Type() == PCB_TRACE_T )
         {
             if( old_layer != track->GetLayer() )
             {
                 old_layer = track->GetLayer();
                 fprintf( aFile, "LAYER %s\n",
-                        GenCADLayerName( cu_count, track->GetLayer() ).c_str()
-                        );
+                        GenCADLayerName( cu_count, track->GetLayer() ).c_str() );
             }
 
             fprintf( aFile, "LINE %g %g %g %g\n",
@@ -1142,8 +1088,6 @@ static void CreateRoutesSection( FILE* aFile, BOARD* aPcb )
     }
 
     fputs( "$ENDROUTES\n\n", aFile );
-
-    delete tracklist;
 }
 
 
@@ -1225,58 +1169,18 @@ static void CreateBoardSection( FILE* aFile, BOARD* aPcb )
  */
 static void CreateTracksInfoData( FILE* aFile, BOARD* aPcb )
 {
-    TRACK* track;
-    int    last_width = -1;
-
     // Find thickness used for traces
-    // XXX could use the same sorting approach used for pads
 
-    std::vector <int> trackinfo;
+    std::set<int> trackinfo;
 
-    unsigned          ii;
-
-    for( track = aPcb->m_Track; track; track = track->Next() )
-    {
-        if( last_width != track->GetWidth() ) // Find a thickness already used.
-        {
-            for( ii = 0; ii < trackinfo.size(); ii++ )
-            {
-                if( trackinfo[ii] == track->GetWidth() )
-                    break;
-            }
-
-            if( ii == trackinfo.size() )    // not found
-                trackinfo.push_back( track->GetWidth() );
-
-            last_width = track->GetWidth();
-        }
-    }
-
-    for( track = aPcb->m_Zone; track; track = track->Next() )
-    {
-        if( last_width != track->GetWidth() ) // Find a thickness already used.
-        {
-            for( ii = 0; ii < trackinfo.size(); ii++ )
-            {
-                if( trackinfo[ii] == track->GetWidth() )
-                    break;
-            }
-
-            if( ii == trackinfo.size() )    // not found
-                trackinfo.push_back( track->GetWidth() );
-
-            last_width = track->GetWidth();
-        }
-    }
+    for( auto track : aPcb->Tracks() )
+        trackinfo.insert( track->GetWidth() );
 
     // Write data
     fputs( "$TRACKS\n", aFile );
 
-    for( ii = 0; ii < trackinfo.size(); ii++ )
-    {
-        fprintf( aFile, "TRACK TRACK%d %g\n", trackinfo[ii],
-                 trackinfo[ii] / SCALE_FACTOR );
-    }
+    for( auto size : trackinfo )
+        fprintf( aFile, "TRACK TRACK%d %g\n", size, size / SCALE_FACTOR );
 
     fputs( "$ENDTRACKS\n\n", aFile );
 }
@@ -1290,7 +1194,6 @@ static void CreateTracksInfoData( FILE* aFile, BOARD* aPcb )
 static void FootprintWriteShape( FILE* aFile, MODULE* module, const wxString& aShapeName )
 {
     EDGE_MODULE* PtEdge;
-    EDA_ITEM*    PtStruct;
 
     /* creates header: */
     fprintf( aFile, "\nSHAPE \"%s\"\n", TO_UTF8( escapeString( aShapeName ) ) );
@@ -1332,7 +1235,7 @@ static void FootprintWriteShape( FILE* aFile, MODULE* module, const wxString& aS
     // CAM350 read it right but only closed shapes
     // ProntoPlace double-flip it (at least the pads are correct)
     // GerberTool usually get it right...
-    for( PtStruct = module->GraphicalItemsList(); PtStruct; PtStruct = PtStruct->Next() )
+    for( auto PtStruct : module->GraphicalItems() )
     {
         switch( PtStruct->Type() )
         {

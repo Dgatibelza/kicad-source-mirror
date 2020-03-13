@@ -32,8 +32,9 @@
 #include <wx/debug.h>
 
 
-CRING2D::CRING2D( const SFVEC2F &aCenter, float aInnerRadius, float aOuterRadius,
-                  const BOARD_ITEM &aBoardItem ) : COBJECT2D( OBJ2D_RING, aBoardItem )
+CRING2D::CRING2D( const SFVEC2F& aCenter, float aInnerRadius, float aOuterRadius,
+        const BOARD_ITEM& aBoardItem )
+        : COBJECT2D( OBJECT2D_TYPE::RING, aBoardItem )
 {
     wxASSERT( aInnerRadius < aOuterRadius );
 
@@ -87,15 +88,15 @@ bool CRING2D::Intersect( const RAYSEG2D &aSegRay,
     // dd*t^2 + (2*qd)*t + (qq-r^2) = 0
 
     const float discriminantsqr = qd * qd - qq;
-    const float discriminantsqr_outter = discriminantsqr + m_outer_radius_squared;
+    const float discriminantsqr_outer = discriminantsqr + m_outer_radius_squared;
 
     // If the discriminant is less than zero, there is no intersection
-    if( discriminantsqr_outter < FLT_EPSILON )
+    if( discriminantsqr_outer < FLT_EPSILON )
         return false;
 
     // Otherwise check and make sure that the intersections occur on the ray (t
     // > 0) and return the closer one
-    const float discriminant = sqrt( discriminantsqr_outter );
+    const float discriminant = sqrt( discriminantsqr_outer );
     float t = (-qd - discriminant);
 
     if( (t > FLT_EPSILON) && (t < aSegRay.m_Length) )
@@ -141,7 +142,7 @@ INTERSECTION_RESULT CRING2D::IsBBoxInside( const CBBOX2D &aBBox ) const
 {
     /*
     if( !m_bbox.Overlaps( aBBox ) )
-        return INTR_MISSES;
+        return INTERSECTION_RESULT::MISSES;
 
     SFVEC2F v[4];
 
@@ -169,16 +170,16 @@ INTERSECTION_RESULT CRING2D::IsBBoxInside( const CBBOX2D &aBBox ) const
         isInside[1] &&
         isInside[2] &&
         isInside[3] )
-        return INTR_FULL_INSIDE;
+        return INTERSECTION_RESULT::FULL_INSIDE;
 
     // Check if any point is inside the circle
     if( isInside[0] ||
         isInside[1] ||
         isInside[2] ||
         isInside[3] )
-        return INTR_INTERSECTS;
+        return INTERSECTION_RESULT::INTERSECTS;
 */
-    return INTR_MISSES;
+    return INTERSECTION_RESULT::MISSES;
 }
 
 

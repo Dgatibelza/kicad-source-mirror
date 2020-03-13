@@ -28,17 +28,18 @@
  */
 
 #include <Python.h>
+#undef HAVE_CLOCK_GETTIME  // macro is defined in Python.h and causes redefine warning
 
-#include <pcbnew_scripting_helpers.h>
-#include <pcbnew.h>
-#include <pcbnew_id.h>
+#include <action_plugin.h>
 #include <build_version.h>
 #include <class_board.h>
-#include <class_drawpanel.h>
-#include <kicad_string.h>
+#include <cstdlib>
 #include <io_mgr.h>
+#include <kicad_string.h>
 #include <macros.h>
-#include <stdlib.h>
+#include <pcb_draw_panel_gal.h>
+#include <pcbnew.h>
+#include <pcbnew_scripting_helpers.h>
 
 static PCB_EDIT_FRAME* s_PcbEditFrame = NULL;
 
@@ -75,7 +76,12 @@ BOARD* LoadBoard( wxString& aFileName, IO_MGR::PCB_FILE_T aFormat )
     BOARD* brd = IO_MGR::Load( aFormat, aFileName );
 
     if( brd )
+    {
         brd->BuildConnectivity();
+        brd->BuildListOfNets();
+        brd->SynchronizeNetsAndNetClasses();
+    }
+
 
     return brd;
 }
@@ -99,26 +105,58 @@ bool SaveBoard( wxString& aFileName, BOARD* aBoard )
 }
 
 
-void Refresh()
+bool ExportSpecctraDSN( wxString& aFullFilename )
 {
     if( s_PcbEditFrame )
     {
-        if( s_PcbEditFrame->IsGalCanvasActive() )
-            s_PcbEditFrame->GetGalCanvas()->Refresh();
-        else
-            // first argument is erase background, second is a wxRect that
-            // defines a reftresh area (all canvas if null)
-            s_PcbEditFrame->GetCanvas()->Refresh( true, NULL );
+        bool ok = s_PcbEditFrame->ExportSpecctraFile( aFullFilename );
+        return ok;
+    }
+    else
+    {
+        return false;
     }
 }
 
 
-void WindowZoom( int xl, int yl, int width, int height )
+bool ImportSpecctraSES( wxString& aFullFilename )
 {
-    EDA_RECT Rect( wxPoint( xl, yl ), wxSize( width, height )) ;
-
     if( s_PcbEditFrame )
-        s_PcbEditFrame->Window_Zoom( Rect );
+    {
+        bool ok = s_PcbEditFrame->ImportSpecctraSession( aFullFilename );
+        return ok;
+    }
+    else
+    {
+        return false;
+    }
+}
+
+
+bool ArchiveModulesOnBoard( bool aStoreInNewLib, const wxString& aLibName, wxString* aLibPath )
+{
+    if( s_PcbEditFrame )
+    {
+        s_PcbEditFrame->ArchiveModulesOnBoard( aStoreInNewLib, aLibName, aLibPath );
+        return true;
+    }
+    else
+    {
+        return false;
+    }
+}
+
+void Refresh()
+{
+    if( s_PcbEditFrame )
+    {
+        auto board = s_PcbEditFrame->GetBoard();
+        board->BuildConnectivity();
+
+        // Re-init everything: this is the easy way to do that
+        s_PcbEditFrame->ActivateGalCanvas();
+        s_PcbEditFrame->GetCanvas()->Refresh();
+    }
 }
 
 
@@ -126,4 +164,19 @@ void UpdateUserInterface()
 {
     if( s_PcbEditFrame )
         s_PcbEditFrame->UpdateUserInterface();
+}
+
+
+int GetUserUnits()
+{
+    if( s_PcbEditFrame )
+        return static_cast<int>( s_PcbEditFrame->GetUserUnits() );
+
+    return -1;
+}
+
+
+bool IsActionRunning()
+{
+    return ACTION_PLUGINS::IsActionRunning();
 }

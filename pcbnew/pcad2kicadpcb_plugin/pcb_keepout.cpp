@@ -27,7 +27,6 @@
  */
 
 #include <wx/wx.h>
-#include <wx/config.h>
 
 #include <common.h>
 
@@ -49,9 +48,9 @@ PCB_KEEPOUT::~PCB_KEEPOUT()
 }
 
 
-bool PCB_KEEPOUT::Parse( XNODE*         aNode,
-                         wxString       aDefaultMeasurementUnit,
-                         wxString       aActualConversion )
+bool PCB_KEEPOUT::Parse( XNODE*          aNode,
+                         const wxString& aDefaultMeasurementUnit,
+                         const wxString& aActualConversion )
 {
     XNODE*          lNode;
 

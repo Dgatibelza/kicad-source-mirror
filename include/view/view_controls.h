@@ -3,7 +3,7 @@
  *
  * Copyright (C) 2012 Torsten Hueter, torstenhtr <at> gmx.de
  * Copyright (C) 2013 CERN
- * Copyright (C) 2013-2016 KiCad Developers, see AUTHORS.txt for contributors.
+ * Copyright (C) 2013-2019 KiCad Developers, see AUTHORS.txt for contributors.
  *
  * @author Tomasz Wlostowski <tomasz.wlostowski@cern.ch>
  *
@@ -72,11 +72,17 @@ struct VC_SETTINGS
     ///> Flag for turning on autopanning
     bool m_autoPanEnabled;
 
+    ///> Flag for turning on autopanning
+    bool m_autoPanSettingEnabled;
+
     ///> Distance from cursor to VIEW edge when panning is active
     float m_autoPanMargin;
 
     ///> How fast is panning when in auto mode
     float m_autoPanSpeed;
+
+    ///> How fast does panning accelerate when approaching the window boundary
+    float m_autoPanAcceleration;
 
     ///> If the cursor is allowed to be warped
     bool m_warpCursor;
@@ -89,18 +95,28 @@ struct VC_SETTINGS
 
     ///> Allow panning with the left button in addition to middle
     bool m_panWithLeftButton;
+
+    ///> Is last cursor motion event coming from keyboard arrow cursor motion action
+    bool m_lastKeyboardCursorPositionValid;
+
+    ///> ACTIONS::CURSOR_UP, ACTIONS::CURSOR_DOWN, etc.
+    long m_lastKeyboardCursorCommand;
+
+    ///> Position of the above event
+    VECTOR2D m_lastKeyboardCursorPosition;
 };
 
 
 /**
- * Class VIEW_CONTROLS
+ * VIEW_CONTROLS
  * is an interface for classes handling user events controlling the view behaviour
  * (such as zooming, panning, mouse grab, etc.)
  */
 class VIEW_CONTROLS
 {
 public:
-    VIEW_CONTROLS( VIEW* aView ) : m_view( aView )
+    VIEW_CONTROLS( VIEW* aView ) :
+        m_view( aView ), m_cursorWarped( false )
     {
     }
 
@@ -117,6 +133,14 @@ public:
     virtual void SetSnapping( bool aEnabled )
     {
         m_settings.m_snappingEnabled = aEnabled;
+    }
+
+    /**
+     * @return the current state of the snapping cursor to grid.
+     */
+    virtual bool GetSnappingState()
+    {
+        return m_settings.m_snappingEnabled;
     }
 
     /**
@@ -141,6 +165,16 @@ public:
     }
 
     /**
+     * Function EnableAutoPan
+     * Turns on/off auto panning (user setting to disable it entirely).
+     * @param aEnabled tells if the autopanning should be enabled.
+     */
+    virtual void EnableAutoPan( bool aEnabled )
+    {
+        m_settings.m_autoPanSettingEnabled = aEnabled;
+    }
+
+    /**
      * Function SetAutoPanSpeed()
      * Sets speed of autopanning.
      * @param aSpeed is a new speed for autopanning.
@@ -148,6 +182,16 @@ public:
     virtual void SetAutoPanSpeed( float aSpeed )
     {
         m_settings.m_autoPanSpeed = aSpeed;
+    }
+
+    /**
+     * Function SetAutoPanSpeed()
+     * Sets speed of autopanning.
+     * @param aSpeed is a new speed for autopanning.
+     */
+    virtual void SetAutoPanAcceleration( float aAcceleration )
+    {
+        m_settings.m_autoPanAcceleration = aAcceleration;
     }
 
     /**
@@ -184,6 +228,14 @@ public:
     }
 
     /**
+     * Returns the current cursor position in world coordinates - ingoring the cursorUp
+     * position force mode.
+     *
+     * @return The current cursor position in world coordinates.
+     */
+    virtual VECTOR2D GetRawCursorPosition( bool aSnappingEnabled = true ) const = 0;
+
+    /**
      * Returns the current cursor position in world coordinates. Note, that it may be
      * different from the mouse pointer position if snapping is enabled or cursor position
      * is forced to a specific point.
@@ -212,7 +264,17 @@ public:
      * @param aPosition is the requested cursor position in the world coordinates.
      * @param aWarpView enables/disables view warp if the cursor is outside the current viewport.
      */
-    virtual void SetCursorPosition( const VECTOR2D& aPosition, bool aWarpView = true ) = 0;
+    virtual void SetCursorPosition( const VECTOR2D& aPosition, bool aWarpView = true,
+                                    bool aTriggeredByArrows = false, long aArrowCommand = 0 ) = 0;
+
+
+    /**
+     * Moves the graphic crosshair cursor to the requested position expressed in world coordinates.
+     * @param aPosition is the requested cursor position in the world coordinates.
+     * @param aWarpView enables/disables view warp if the cursor is outside the current viewport.
+     */
+    virtual void SetCrossHairCursorPosition( const VECTOR2D& aPosition, bool aWarpView = true ) = 0;
+
 
     /**
      * Function ForcedCursorPosition()
@@ -269,7 +331,7 @@ public:
      * specified in the world coordinates and its not visible in the current viewport).
      */
     virtual void WarpCursor( const VECTOR2D& aPosition, bool aWorldCoordinates = false,
-            bool aWarpView = false ) const = 0;
+            bool aWarpView = false ) = 0;
 
     /**
      * Function EnableCursorWarping()
@@ -340,6 +402,9 @@ public:
 protected:
     ///> Pointer to controlled VIEW.
     VIEW* m_view;
+
+    ///> Application warped the cursor, not the user (keyboard)
+    bool m_cursorWarped;
 
     ///> Current VIEW_CONTROLS settings
     VC_SETTINGS m_settings;

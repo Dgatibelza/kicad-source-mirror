@@ -2,7 +2,7 @@
 #  This program source code file is part of KICAD, a free EDA CAD application.
 #
 # Copyright (C) 2011 SoftPLC Corporation, Dick Hollenbeck <dick@softplc.com>
-# Copyright (C) 2011-2016 Kicad Developers, see change_log.txt for contributors#.
+# Copyright (C) 2011-2018 Kicad Developers, see AUTHORS.txt for contributors.
 #
 #  This program is free software; you can redistribute it and/or
 #  modify it under the terms of the GNU General Public License
@@ -55,14 +55,6 @@ option( MAINTAIN_PNGS
 # Used Only to maintain PNG files (and therefore to recreate .cpp files)
 # The png2cpp creates files with native End of Line format.
 
-include_directories(BEFORE ${INC_BEFORE})
-include_directories(
-    ${INC_AFTER}
-    )
-
-
-
-
 # Plan for three sizes of bitmaps:
 # SMALL - for menus         - 16 x 16
 # MID   - for toolbars      - 26 x 26
@@ -72,8 +64,9 @@ include_directories(
 # A corresponding ${basename}.svg file must exist in 'sources' dir below here.
 
 
-# small icons (16x16) needed in listboxes
+# small icons (16x16) needed in listboxes and dialog buttons
 set( BMAPS_SMALL
+    folder
     pinorient_right
     pinorient_left
     pinorient_up
@@ -98,8 +91,17 @@ set( BMAPS_SMALL
     pintype_opencoll
     pintype_openemit
     pintype_noconnect
+    question_mark
+    refresh
+    small_down
+    small_edit
+    small_library
+    small_plus
+    small_up
+    trash
     tree_nosel
     tree_sel
+    www
     )
 
 
@@ -107,6 +109,7 @@ set( BMAPS_SMALL
 set( BMAPS_MID
     about
     add_arc
+    add_board
     add_bus2bus
     add_bus
     add_circle
@@ -114,7 +117,8 @@ set( BMAPS_MID
     add_corner
     add_dashed_line
     add_dimension
-    add_entry
+    add_document
+    add_gerber
     add_glabel
     add_graphical_segments
     add_graphical_polygon
@@ -123,11 +127,11 @@ set( BMAPS_MID
     add_hierarchical_subsheet
     add_junction
     add_keepout_area
+    add_library
     add_line2bus
     add_line_label
     add_line
-    add_mires
-    add_polygon
+    add_pcb_target
     add_power
     add_rectangle
     add_tracks
@@ -135,6 +139,12 @@ set( BMAPS_MID
     add_zone_cutout
     add_zone
     align_items
+    align_items_left
+    align_items_right
+    align_items_top
+    align_items_bottom
+    align_items_center
+    align_items_middle
     anchor
     annotate_down_right
     annotate_right_down
@@ -152,23 +162,24 @@ set( BMAPS_MID
     axis3d_right
     axis3d_top
     axis3d
+    bitmap2component
     bom
-    book
     break_bus
     break_line
     browse_files
+    bus_definition_tool
+    calculator
     cancel
     change_entry_orient
     contrast_mode
+    curved_ratsnest
     create_cmp_file
     checked_ok
     color_materials
     component_select_unit
     component_select_alternate_shape
     config
-    copycomponent
     copy
-    copy_library
     copy_pad_settings
     copper_layers_setup
     cursor_shape
@@ -176,43 +187,28 @@ set( BMAPS_MID
     custom_pad_to_primitives
     cut
     cvpcb
-    dashline
     datasheet
     delete_association
-    delete_bus
-    delete_circle
-    delete_connection
-    delete_dimension
-    delete_field
-    delete_glabel
-    delete_line
-    delete_module
-    delete_net
-    delete_node
-    delete_pad
-    delete_polygon
-    delete_rectangle
+    delete_gerber
     delete_sheet
-    delete_track
     delete
     directory
+    directory_browser
     display_options
     distribute_horizontal
     distribute_vertical
     down
     drag
-    drag_outline_segment
-    drag_pad
     drag_segment_withslope
     drc_off
     drc
     duplicate
-    edges_sketch
     edit_comp_footprint
     edit_comp_ref
     edit_comp_value
     edit_module
     editor
+    edit_cmp_symb_links
     edit_text
     edit
     eeschema
@@ -223,10 +219,13 @@ set( BMAPS_MID
     erc
     exit
     exchange
+    export3d
     export_dsn
     export_idf
     export_footprint_names
     export_module
+    export_part
+    export_step
     export
     fabrication
     file_footprint
@@ -247,9 +246,6 @@ set( BMAPS_MID
     gerbview_clear_layers
     general_deletions
     general_ratsnest
-    glabel2label
-    glabel2text
-    gl_change
     go_down
     go_up
     green
@@ -262,8 +258,6 @@ set( BMAPS_MID
     hierarchy_nav
     highlight_remove
     hotkeys
-    hotkeys_import
-    hotkeys_export
     html
     icon
     icon_cvpcb_small
@@ -271,21 +265,20 @@ set( BMAPS_MID
     import3d
     image
     import_brd_file
-    import_cmp_from_lib
+    import_document
     import_footprint_names
     import_hierarchical_label
     import_module
-    import_setup
+    import_part
+    import_project
+    import_vector
     import
     info
     insert_module_board
     invisible_text
     kicad_icon_small
-    label2glabel
-    label2text
     label
-    lang_catalan
-    lang_chinese
+    lang_ca
     lang_bg
     lang_cs
     lang_def
@@ -306,6 +299,7 @@ set( BMAPS_MID
     lang_sk
     lang_sl
     lang_lt
+    lang_zh
     language
     layers_manager
     leave_sheet
@@ -320,18 +314,18 @@ set( BMAPS_MID
     library_table
     lines90
     list_nets
+    load_gerber
     load_module_board
-    load_module_lib
     local_ratsnest
+    lock_unlock
     locked
     measurement
     minus
-    mirepcb
+    pcb_target
     mirror_h
     mirror_v
     mode_module
     mode_track
-    modratsnest
     module_check
     module_editor
     module_wizard
@@ -341,18 +335,11 @@ set( BMAPS_MID
     module_pin_filtered_list
     module_library_list
     module_name_filtered_list
-    module_ratsnest
     module
     modview_icon
     morgan1
     morgan2
-    move_glabel
     move_exactly
-    move_pad
-    move_polygon
-    move_rectangle
-    move_sheet
-    move_target
     move
     move_relative
     mw_add_gap
@@ -366,41 +353,28 @@ set( BMAPS_MID
     netlist
     net_locked
     net_unlocked
+    new_board
     new_component
     new_cvpcb
+    new_document
     new_footprint
     new_library
     new_generic
+    new_page_layout
     new_project
     new_project_with_template
     noconn
     normal
     online_help
-    open_brd_file
-    open_library
     open_project
-    open_document
     options_3drender
-    options_all_tracks_and_vias
-    options_all_tracks
-    options_all_vias
-    options_arc
-    options_circle
-    options_module
+    options_board
+    options_generic
     options_pad
-    options_pinsheet
-    options_pin
-    options_rectangle
-    options_segment
-    options_tracks
-    options_track
-    options_vias
     opt_show_polygon
-    orient
     ortho
     pad_sketch
     pad
-    pad_dimensions
     pad_enumerate
     pads_mask_layers
     path
@@ -414,18 +388,11 @@ set( BMAPS_MID
     pcbcalculator
     pcb_offset
     pin2pin
-    pin_name_to
-    pin_number_to
     pin_size_to
     pin_show_etype
     pin_table
-    pin_to
     pin
     plot
-    plot_dxf
-    plot_hpg
-    plot_pdf
-    plot_ps
     plot_svg
     plus
     polar_coord
@@ -456,6 +423,12 @@ set( BMAPS_MID
     resize_sheet
     rescue
     right
+    router_len_tuner
+    router_len_tuner_setup
+    router_len_tuner_amplitude_decr
+    router_len_tuner_amplitude_incr
+    router_len_tuner_dist_decr
+    router_len_tuner_dist_incr
     rotate_ccw
     rotate_cw
     rotate_neg_x
@@ -465,10 +438,7 @@ set( BMAPS_MID
     rotate_neg_z
     rotate_pos_z
     save_as
-    save_library
-    save_part_in_mem
-    save_project
-    save_setup
+    save_fp_to_board
     save
     select_grid
     select_layer_pair
@@ -483,6 +453,7 @@ set( BMAPS_MID
     sim_probe
     sim_add_signal
     sim_settings
+    search_tree
     setcolor_3d_bg
     setcolor_silkscreen
     setcolor_soldermask
@@ -492,6 +463,7 @@ set( BMAPS_MID
     show_dcodenumber
     show_footprint
     show_mod_edge
+    show_graphics_mode
     showtrack
     show_zone
     show_zone_disable
@@ -511,7 +483,6 @@ set( BMAPS_MID
     track_locked
     track_sketch
     track_unlocked
-    transistor
     undelete
     undo
     unit_inch
@@ -521,21 +492,16 @@ set( BMAPS_MID
     unzip
     up
     update_fields
-    update_module_board
+    update_pcb_from_sch
     use_3D_copper_thickness
     via
     via_buried
     via_microvia
     via_sketch
     warning
-    web_support
-    width_net
-    width_segment
     width_track_via
     width_track
-    width_vias
     wizard_add_fplib_small
-    zip_tool
     zip
     zone_duplicate
     zone_unfill
@@ -569,6 +535,10 @@ set( BMAPS_BIG
     )
 
 set( BMAPS_OTHER
+    stroke_dash
+    stroke_dashdot
+    stroke_dot
+    stroke_solid
     tune_diff_pair_length_legend
     tune_diff_pair_skew_legend
     tune_single_track_length_legend
@@ -596,7 +566,7 @@ function( svg2png inputFile outFile pngWidth pngHeight )
 
     add_custom_command(
         OUTPUT ${outFile}
-        COMMAND ${Inkscape_EXECUTABLE} --export-area-snap -f ${inputFile} -e ${outFile}
+        COMMAND ${Inkscape_EXECUTABLE} --without-gui --export-area-snap -f ${inputFile} -e ${outFile}
             -w ${pngWidth} -h ${pngHeight} > ${logfile}
         DEPENDS ${inputFile}
         COMMENT "Creating ${pngHeight} pixel tall ${outFile}"
@@ -751,3 +721,7 @@ endforeach()
 
 #add_library( bitmaps SHARED ${CPP_LIST} )
 add_library( bitmaps STATIC ${CPP_LIST} )
+
+target_include_directories( bitmaps PUBLIC
+    include
+)

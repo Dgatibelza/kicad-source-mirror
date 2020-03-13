@@ -24,17 +24,17 @@
 #ifndef TOOLS_MICROWAVE_TOOL_H
 #define TOOLS_MICROWAVE_TOOL_H
 
-#include <tools/pcb_tool.h>
+#include <tools/pcb_tool_base.h>
 
 #include <tool/tool_menu.h>
 
 
 /**
- * Class MICROWAVE_TOOL
+ * MICROWAVE_TOOL
  *
  * Tool responsible for adding microwave features to PCBs
  */
-class MICROWAVE_TOOL : public PCB_TOOL
+class MICROWAVE_TOOL : public PCB_TOOL_BASE
 {
 public:
     MICROWAVE_TOOL();
@@ -42,9 +42,6 @@ public:
 
     ///> React to model/view changes
     void Reset( RESET_REASON aReason ) override;
-
-    ///> Basic initalization
-    bool Init() override;
 
     ///> Bind handlers to corresponding TOOL_ACTIONs
     void setTransitions() override;
@@ -59,9 +56,6 @@ private:
 
     ///> Draw a microwave inductor interactively
     int drawMicrowaveInductor( const TOOL_EVENT& aEvent );
-
-    /// Menu model displayed by the tool.
-    TOOL_MENU m_menu;
 };
 
 

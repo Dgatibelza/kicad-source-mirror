@@ -2,7 +2,7 @@
  * This program source code file is part of KICAD, a free EDA CAD application.
  *
  * Copyright (C) 2012 Torsten Hueter, torstenhtr <at> gmx.de
- * Copyright (C) 2017 Kicad Developers, see AUTHORS.txt for contributors.
+ * Copyright (C) 2017-2019 Kicad Developers, see AUTHORS.txt for contributors.
  *
  * Color class
  *
@@ -29,11 +29,12 @@
 
 #include <colors.h>
 #include <cassert>
+#include <nlohmann/json_fwd.hpp>
 
 namespace KIGFX
 {
 /**
- * Class COLOR4D
+ * COLOR4D
  * is the color representation with 4 components: red, green, blue, alpha.
  */
 class COLOR4D
@@ -53,7 +54,7 @@ public:
      * @param aBlue  is the blue component  [0.0 .. 1.0].
      * @param aAlpha is the alpha value     [0.0 .. 1.0].
      */
-    COLOR4D( double aRed, double aGreen, double aBlue, double aAlpha ) :
+    constexpr COLOR4D( double aRed, double aGreen, double aBlue, double aAlpha ) :
         r( aRed ), g( aGreen ), b( aBlue ), a( aAlpha )
     {
         assert( r >= 0.0 && r <= 1.0 );
@@ -89,11 +90,7 @@ public:
 
     wxString ToWxString( long flags ) const;
 
-    wxColour ToColour() const
-    {
-        wxColour colour( r * 255, g * 255, b * 255, a * 255 );
-        return colour;
-    }
+    wxColour ToColour() const;
 
     /**
      * Function LegacyMix()
@@ -108,20 +105,6 @@ public:
     COLOR4D LegacyMix( COLOR4D aColor ) const;
 
     /**
-     * Function SetToLegacyHighlightColor()
-     * Sets the color to the "light" version of the nearest matching
-     * legacy color (see g_ColorRefs in colors.cpp).
-     */
-    COLOR4D& SetToLegacyHighlightColor();
-
-    /**
-     * Function SetToNearestLegacyColor()
-     * Sets the color to the nearest matching
-     * legacy color (see g_ColorRefs in colors.cpp).
-     */
-    COLOR4D& SetToNearestLegacyColor();
-
-    /**
      * Packs the color into an unsigned int for compatibility with legacy canvas.
      * Note that this is a lossy downsampling and also that the alpha channel is lost.
      */
@@ -131,12 +114,29 @@ public:
      * Unpacks from a unsigned int in the legacy EDA_COLOR_T format.
      */
     void FromU32( unsigned int aPackedColor );
+#endif /* WX_COMPATIBLITY */
+
 
     /**
-     * Determines the "nearest" EDA_COLOR_T according to ColorFindNearest
+     * Function ToHSL()
+     * Converts current color (stored in RGB) to HSL format.
+     *
+     * @param aOutHue is the conversion result for hue component, in degrees 0 ... 360.0
+     * @param aOutSaturation is the conversion result for saturation component (0 ... 1.0).
+     * @param aOutLightness is conversion result for value component (0 ... 1.0).
+     * @note saturation is set to 0.0 for black color if r = g = b,
      */
-    static EDA_COLOR_T GetNearestLegacyColor( COLOR4D &aColor );
-#endif /* WX_COMPATIBLITY */
+    void ToHSL( double& aOutHue, double& aOutSaturation, double& aOutValue ) const;
+
+    /**
+     * Function FromHSL()
+     * Changes currently used color to the one given by hue, saturation and lightness parameters.
+     *
+     * @param aInHue is hue component, in degrees (0.0 - 360.0)
+     * @param aInSaturation is saturation component (0.0 - 1.0)
+     * @param aInLightness is lightness component (0.0 - 1.0)
+     */
+    void FromHSL( double aInHue, double aInSaturation, double aInLightness );
 
     /**
      * Function Brighten
@@ -224,6 +224,22 @@ public:
     }
 
     /**
+     * Function Mix
+     * Returns a color that is mixed with the input by a factor
+     * @param aFactor Specifies how much of the original color to keep (valid values: 0.0 .. 1.0).
+     * @return COLOR4D Mixed color.
+     */
+    COLOR4D Mix( const COLOR4D& aColor, double aFactor ) const
+    {
+        assert( aFactor >= 0.0 && aFactor <= 1.0 );
+
+        return COLOR4D( aColor.r * ( 1.0 - aFactor ) + r * aFactor,
+                        aColor.g * ( 1.0 - aFactor ) + g * aFactor,
+                        aColor.b * ( 1.0 - aFactor ) + b * aFactor,
+                        a );
+    }
+
+    /**
      * Function WithAlpha
      * Returns a colour with the same colour, but the given alpha
      * @param aAlpha specifies the alpha of the new color
@@ -304,6 +320,12 @@ const bool operator!=( const COLOR4D& lhs, const COLOR4D& rhs );
 
 /// Syntactic sugar for outputting colors to strings
 std::ostream &operator<<( std::ostream &aStream, COLOR4D const &aColor );
+
+// to allow json( COLOR4D )
+void to_json( nlohmann::json& aJson, const COLOR4D& aColor );
+
+// To allow json::get<COLOR4D>()
+void from_json( const nlohmann::json& aJson, COLOR4D& aColor );
 
 } // namespace KIGFX
 

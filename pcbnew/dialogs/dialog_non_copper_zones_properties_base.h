@@ -1,19 +1,15 @@
 ///////////////////////////////////////////////////////////////////////////
-// C++ code generated with wxFormBuilder (version Dec 21 2016)
+// C++ code generated with wxFormBuilder (version Dec  1 2018)
 // http://www.wxformbuilder.org/
 //
-// PLEASE DO "NOT" EDIT THIS FILE!
+// PLEASE DO *NOT* EDIT THIS FILE!
 ///////////////////////////////////////////////////////////////////////////
 
-#ifndef __DIALOG_NON_COPPER_ZONES_PROPERTIES_BASE_H__
-#define __DIALOG_NON_COPPER_ZONES_PROPERTIES_BASE_H__
+#pragma once
 
 #include <wx/artprov.h>
 #include <wx/xrc/xmlres.h>
 #include <wx/intl.h>
-class DIALOG_SHIM;
-class wxListView;
-
 #include "dialog_shim.h"
 #include <wx/string.h>
 #include <wx/stattext.h>
@@ -21,12 +17,14 @@ class wxListView;
 #include <wx/font.h>
 #include <wx/colour.h>
 #include <wx/settings.h>
-#include <wx/listctrl.h>
+#include <wx/dataview.h>
 #include <wx/sizer.h>
-#include <wx/radiobox.h>
-#include <wx/statbox.h>
+#include <wx/checkbox.h>
+#include <wx/choice.h>
 #include <wx/textctrl.h>
+#include <wx/gbsizer.h>
 #include <wx/statline.h>
+#include <wx/spinctrl.h>
 #include <wx/button.h>
 #include <wx/dialog.h>
 
@@ -37,36 +35,56 @@ class wxListView;
 ///////////////////////////////////////////////////////////////////////////////
 class DIALOG_NONCOPPER_ZONES_PROPERTIES_BASE : public DIALOG_SHIM
 {
-	DECLARE_EVENT_TABLE()
 	private:
-		
-		// Private event handlers
-		void _wxFB_OnCancelClick( wxCommandEvent& event ){ OnCancelClick( event ); }
-		void _wxFB_OnOkClick( wxCommandEvent& event ){ OnOkClick( event ); }
-		
-	
+
 	protected:
 		wxStaticText* m_staticTextLayerSelection;
-		wxListView* m_LayerSelectionCtrl;
-		wxRadioBox* m_OrientEdgesOpt;
-		wxRadioBox* m_OutlineAppearanceCtrl;
-		wxStaticText* m_MinThicknessValueTitle;
-		wxTextCtrl* m_ZoneMinThicknessCtrl;
+		wxDataViewListCtrl* m_layers;
+		wxCheckBox* m_ConstrainOpt;
+		wxStaticText* m_staticTextStyle;
+		wxChoice* m_OutlineAppearanceCtrl;
+		wxStaticText* m_MinWidthLabel;
+		wxTextCtrl* m_MinWidthCtrl;
+		wxStaticText* m_MinWidthUnits;
+		wxStaticLine* m_staticline2;
+		wxStaticText* m_staticTextGridStyle;
+		wxStaticText* m_staticTextGridFillType;
+		wxChoice* m_GridStyleCtrl;
+		wxStaticText* m_staticTextGrindOrient;
+		wxTextCtrl* m_tcGridStyleOrientation;
+		wxStaticText* m_staticTextRotUnits;
+		wxStaticText* m_staticTextStyleThickness;
+		wxTextCtrl* m_tcGridStyleThickness;
+		wxStaticText* m_GridStyleThicknessUnits;
+		wxStaticText* m_staticTextGridGap;
+		wxTextCtrl* m_tcGridStyleGap;
+		wxStaticText* m_GridStyleGapUnits;
+		wxStaticText* m_staticTextGridSmoothingLevel;
+		wxSpinCtrl* m_spinCtrlSmoothLevel;
+		wxStaticText* m_staticTextGridSmootingVal;
+		wxSpinCtrlDouble* m_spinCtrlSmoothValue;
+		wxStaticLine* m_staticline3;
+		wxStaticText* m_staticTextOutlineSmooth;
+		wxStaticText* m_staticTextSmoothing;
+		wxChoice* m_cornerSmoothingChoice;
+		wxStaticText* m_cornerRadiusLabel;
+		wxTextCtrl* m_cornerRadiusCtrl;
+		wxStaticText* m_cornerRadiusUnits;
 		wxStaticLine* m_staticline1;
 		wxStdDialogButtonSizer* m_sdbSizerButtons;
 		wxButton* m_sdbSizerButtonsOK;
 		wxButton* m_sdbSizerButtonsCancel;
-		
+
 		// Virtual event handlers, overide them in your derived class
-		virtual void OnCancelClick( wxCommandEvent& event ) { event.Skip(); }
-		virtual void OnOkClick( wxCommandEvent& event ) { event.Skip(); }
-		
-	
+		virtual void OnUpdateUI( wxUpdateUIEvent& event ) { event.Skip(); }
+		virtual void OnLayerSelection( wxDataViewEvent& event ) { event.Skip(); }
+		virtual void OnStyleSelection( wxCommandEvent& event ) { event.Skip(); }
+
+
 	public:
-		
-		DIALOG_NONCOPPER_ZONES_PROPERTIES_BASE( wxWindow* parent, wxWindowID id = wxID_ANY, const wxString& title = _("Non Copper Zones Properties"), const wxPoint& pos = wxDefaultPosition, const wxSize& size = wxSize( 369,317 ), long style = wxDEFAULT_DIALOG_STYLE|wxRESIZE_BORDER|wxFULL_REPAINT_ON_RESIZE|wxSUNKEN_BORDER ); 
+
+		DIALOG_NONCOPPER_ZONES_PROPERTIES_BASE( wxWindow* parent, wxWindowID id = wxID_ANY, const wxString& title = _("Non Copper Zones Properties"), const wxPoint& pos = wxDefaultPosition, const wxSize& size = wxSize( 595,491 ), long style = wxDEFAULT_DIALOG_STYLE|wxRESIZE_BORDER|wxFULL_REPAINT_ON_RESIZE|wxBORDER_SUNKEN );
 		~DIALOG_NONCOPPER_ZONES_PROPERTIES_BASE();
-	
+
 };
 
-#endif //__DIALOG_NON_COPPER_ZONES_PROPERTIES_BASE_H__

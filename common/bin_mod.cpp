@@ -2,7 +2,7 @@
  * This program source code file is part of KiCad, a free EDA CAD application.
  *
  * Copyright (C) 2014 CERN
- * Copyright (C) 2014 KiCad Developers, see CHANGELOG.TXT for contributors.
+ * Copyright (C) 2019 KiCad Developers, see AUTHORS.txt for contributors.
  *
  * This program is free software; you can redistribute it and/or
  * modify it under the terms of the GNU General Public License
@@ -24,21 +24,29 @@
 
 #include <bin_mod.h>
 #include <common.h>
+#include <filehistory.h>
+#include <id.h>         // for ID_FILE1 and FILE_HISTORY_SIZE
+#include <pgm_base.h>
+#include <settings/app_settings.h>
+#include <settings/common_settings.h>
+#include <settings/settings_manager.h>
 
 
 BIN_MOD::BIN_MOD( const char* aName ) :
     m_name( aName ),
-    m_config( 0 )
+    m_config( nullptr ),
+    m_history( nullptr )
 {
 }
 
 
 void BIN_MOD::Init()
 {
-    // do an OS specific wxConfig instantiation, using the bin_mod (EXE/DLL/DSO) name.
-    m_config = GetNewConfig( wxString::FromUTF8( m_name ) );
+    // get file history size from common settings
+    int fileHistorySize = Pgm().GetCommonSettings()->m_System.file_history_size;
 
-    m_history.Load( *m_config );
+    m_history = new FILE_HISTORY( (unsigned) std::max( 0, fileHistorySize ), ID_FILE1, ID_FILE_LIST_CLEAR );
+    m_history->Load( *m_config );
 
     // Prepare On Line Help. Use only lower case for help file names, in order to
     // avoid problems with upper/lower case file names under windows and unix.
@@ -54,18 +62,22 @@ void BIN_MOD::End()
 {
     if( m_config )
     {
-        m_history.Save( *m_config );
+        if( m_history )
+        {
+            m_history->Save( *m_config );
+            delete m_history;
+            m_history = nullptr;
+        }
 
-        // Deleting a wxConfigBase writes its contents to disk if changed.
-        // Might be NULL if called twice, in which case nothing happens.
-        delete m_config;
-        m_config = 0;
+        // The settings manager will outlive this module so we need to clean up the module level
+        // settings here instead of leaving it up to the manager
+        Pgm().GetSettingsManager().FlushAndRelease( m_config );
+        m_config = nullptr;
     }
 }
 
 
 BIN_MOD::~BIN_MOD()
 {
-    End();
 }
 

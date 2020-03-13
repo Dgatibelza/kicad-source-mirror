@@ -3,7 +3,7 @@
  *
  * Copyright (C) 1992-2011 jean-pierre Charras <jean-pierre.charras@gipsa-lab.inpg.fr>
  * Copyright (C) 1992-2011 Wayne Stambaugh <stambaughw@verizon.net>
- * Copyright (C) 1992-2015 KiCad Developers, see authors.txt for contributors.
+ * Copyright (C) 1992-2020 KiCad Developers, see authors.txt for contributors.
  *
  * This program is free software; you can redistribute it and/or
  * modify it under the terms of the GNU General Public License
@@ -23,11 +23,6 @@
  * 51 Franklin Street, Fifth Floor, Boston, MA  02110-1301, USA
  */
 
-
-/**
- * @file eeschema/sch_reference_list.h
- */
-
 #ifndef _SCH_REFERENCE_LIST_H_
 #define _SCH_REFERENCE_LIST_H_
 
@@ -45,7 +40,7 @@ class SCH_REFERENCE;
 class SCH_REFERENCE_LIST;
 
 /**
- * Class SCH_REFERENCE
+ * SCH_REFERENCE
  * is used as a helper to define a component's reference designator in a schematic.  This
  * helper is required in a complex hierarchy because a component can be used more than
  * once and its reference depends on the sheet path.  This class is used to flatten the
@@ -65,7 +60,7 @@ class SCH_REFERENCE
     SCH_SHEET_PATH m_SheetPath;         ///< The sheet path for this reference.
     bool           m_IsNew;             ///< True if not yet annotated.
     int            m_SheetNum;          ///< The sheet number for the reference.
-    time_t         m_TimeStamp;         ///< The time stamp for the reference.
+    KIID           m_Uuid;              ///< UUID of the component.
     EDA_TEXT*      m_Value;             ///< The component value of the reference.  It is the
                                         ///< same for all instances.
     int            m_NumRef;            ///< The numeric part of the reference designator.
@@ -79,29 +74,35 @@ public:
     SCH_REFERENCE() :
         m_SheetPath()
     {
-        m_RootCmp      = NULL;
-        m_Entry        = NULL;
-        m_Unit         = 0;
-        m_TimeStamp    = 0;
-        m_IsNew        = false;
-        m_Value        = NULL;
-        m_NumRef       = 0;
-        m_Flag         = 0;
-        m_SheetNum     = 0;
+        m_RootCmp         = NULL;
+        m_Entry           = NULL;
+        m_Unit            = 0;
+        m_IsNew           = false;
+        m_Value           = NULL;
+        m_NumRef          = 0;
+        m_Flag            = 0;
+        m_SheetNum        = 0;
     }
 
     SCH_REFERENCE( SCH_COMPONENT* aComponent, LIB_PART* aLibComponent,
                    SCH_SHEET_PATH& aSheetPath );
 
-    SCH_COMPONENT* GetComp() const          { return m_RootCmp; }
+    SCH_COMPONENT* GetComp() const             { return m_RootCmp; }
 
-    LIB_PART*      GetLibPart() const       { return m_Entry; }
+    LIB_PART*      GetLibPart() const          { return m_Entry; }
 
-    SCH_SHEET_PATH GetSheetPath() const     { return m_SheetPath; }
+    const SCH_SHEET_PATH& GetSheetPath() const { return m_SheetPath; }
 
-    int GetUnit() const                     { return m_Unit; }
+    SCH_SHEET_PATH& GetSheetPath()             { return m_SheetPath; }
 
-    void SetSheetNumber( int aSheetNumber ) { m_SheetNum = aSheetNumber; }
+    int GetUnit() const                        { return m_Unit; }
+
+    void SetSheetNumber( int aSheetNumber )    { m_SheetNum = aSheetNumber; }
+
+    const wxString GetPath() const
+    {
+        return m_RootCmp ? m_SheetPath.PathAsString() + m_RootCmp->m_Uuid.AsString() : "";
+    }
 
     /**
      * Function Annotate
@@ -140,6 +141,31 @@ public:
         return m_Ref.c_str();
     }
 
+    ///> Return reference name with unit altogether
+    wxString GetFullRef()
+    {
+        if( GetComp()->GetUnitCount() > 1 )
+            return GetRef() + LIB_PART::SubReference( GetUnit() );
+        else
+            return GetRef();
+    }
+
+    wxString GetRefNumber() const
+    {
+        wxString ref;
+
+        if( m_NumRef < 0 )
+            return wxT( "?" );
+
+        // To avoid a risk of duplicate, for power components
+        // the ref number is 0nnn instead of nnn.
+        // Just because sometimes only power components are annotated
+        if( GetLibPart() && GetLibPart()->IsPower() )
+            ref = wxT( "0" );
+
+        return ref << m_NumRef;
+    }
+
     int CompareValue( const SCH_REFERENCE& item ) const
     {
         return m_Value->GetText().Cmp( item.m_Value->GetText() );
@@ -163,7 +189,9 @@ public:
      */
     bool IsSameInstance( const SCH_REFERENCE& other ) const
     {
-        return GetComp() == other.GetComp() && GetSheetPath().Path() == other.GetSheetPath().Path();
+        // JEY TODO: should this be checking unit as well?
+        return GetComp() == other.GetComp()
+                    && GetSheetPath().Path() == other.GetSheetPath().Path();
     }
 
     bool IsUnitsLocked()
@@ -174,7 +202,7 @@ public:
 
 
 /**
- * Class SCH_REFERENCE_LIST
+ * SCH_REFERENCE_LIST
  * is used to create a flattened list of components because in a complex hierarchy, a component
  * can be used more than once and its reference designator is dependent on the sheet path for
  * the same component.  This flattened list is used for netlist generation, BOM generation,
@@ -183,7 +211,7 @@ public:
 class SCH_REFERENCE_LIST
 {
 private:
-    std::vector <SCH_REFERENCE> componentFlatList;
+    std::vector <SCH_REFERENCE> flatList;
 
 public:
     /** Constructor
@@ -194,7 +222,7 @@ public:
 
     SCH_REFERENCE& operator[]( int aIndex )
     {
-        return componentFlatList[ aIndex ];
+        return flatList[ aIndex ];
     }
 
     /**
@@ -203,7 +231,7 @@ public:
      */
     unsigned GetCount()
     {
-        return componentFlatList.size();
+        return flatList.size();
     }
 
     /**
@@ -212,7 +240,7 @@ public:
      */
     SCH_REFERENCE& GetItem( int aIdx )
     {
-        return componentFlatList[aIdx];
+        return flatList[aIdx];
     }
 
     /**
@@ -222,7 +250,7 @@ public:
      */
     void AddItem( SCH_REFERENCE& aItem )
     {
-        componentFlatList.push_back( aItem );
+        flatList.push_back( aItem );
     }
 
     /**
@@ -233,17 +261,9 @@ public:
      */
     void RemoveItem( unsigned int aIndex );
 
-    /**
-     * Function RemoveSubComponentsFromList
-     * Remove sub components from the list, when multiples parts per package are
-     * found in this list.
-     * Useful to create BOM, when a component must appear only once
-     */
-    void RemoveSubComponentsFromList();
-
     /* Sort functions:
      * Sort functions are used to sort components for annotation or BOM generation.
-     * Because sorting depend on we want to do, there are many sort functions.
+     * Because sorting depends on what we want to do, there are many sort functions.
      * Note:
      *    When creating BOM, components are fully annotated.
      *    references are something like U3, U5 or R4, R8
@@ -262,7 +282,7 @@ public:
     void SplitReferences()
     {
         for( unsigned ii = 0; ii < GetCount(); ii++ )
-            componentFlatList[ii].Split();
+            flatList[ii].Split();
     }
 
     /**
@@ -277,7 +297,7 @@ public:
         /* update the reference numbers */
         for( unsigned ii = 0; ii < GetCount(); ii++ )
         {
-            componentFlatList[ii].Annotate();
+            flatList[ii].Annotate();
         }
     }
 
@@ -287,6 +307,7 @@ public:
      * @param aUseSheetNum Set to true to start annotation for each sheet at the sheet number
      *                     times \a aSheetIntervalId.  Otherwise annotate incrementally.
      * @param aSheetIntervalId The per sheet reference designator multiplier.
+     * @param aStartNumber The number to start with if NOT numbering based on sheet number.
      * @param aLockedUnitMap A SCH_MULTI_UNIT_REFERENCE_MAP of reference designator wxStrings
      *      to SCH_REFERENCE_LISTs. May be an empty map. If not empty, any multi-unit parts
      *      found in this map will be annotated as a group rather than individually.
@@ -297,7 +318,8 @@ public:
      * referenced U201 to U351, and items in sheet 3 start from U352
      * </p>
      */
-    void Annotate( bool aUseSheetNum, int aSheetIntervalId, SCH_MULTI_UNIT_REFERENCE_MAP aLockedUnitMap );
+    void Annotate( bool aUseSheetNum, int aSheetIntervalId, int aStartNumber,
+                   SCH_MULTI_UNIT_REFERENCE_MAP aLockedUnitMap );
 
     /**
      * Function CheckAnnotation
@@ -311,10 +333,10 @@ public:
      * <li>Components with multiple parts per package with invalid part count.</li>
      * </ul>
      * </p>
-     * @param aMessageList A wxArrayString to store error messages.
+     * @param aReporter A sink for error messages.  Use NULL_REPORTER if you don't need errors.
      * @return The number of errors found.
      */
-    int CheckAnnotation( wxArrayString* aMessageList );
+    int CheckAnnotation( REPORTER& aReporter );
 
     /**
      * Function sortByXCoordinate
@@ -332,7 +354,7 @@ public:
      */
     void SortByXCoordinate()
     {
-        sort( componentFlatList.begin(), componentFlatList.end(), sortByXPosition );
+        sort( flatList.begin(), flatList.end(), sortByXPosition );
     }
 
     /**
@@ -351,17 +373,17 @@ public:
      */
     void SortByYCoordinate()
     {
-        sort( componentFlatList.begin(), componentFlatList.end(), sortByYPosition );
+        sort( flatList.begin(), flatList.end(), sortByYPosition );
     }
 
     /**
      * Function SortComponentsByTimeStamp
-     * sort the flat list by Time Stamp.
+     * sort the flat list by Time Stamp (sheet path + timestamp).
      * Useful to detect duplicate Time Stamps
      */
     void SortByTimeStamp()
     {
-        sort( componentFlatList.begin(), componentFlatList.end(), sortByTimeStamp );
+        sort( flatList.begin(), flatList.end(), sortByTimeStamp );
     }
 
     /**
@@ -381,7 +403,7 @@ public:
      */
     void SortByRefAndValue()
     {
-        sort( componentFlatList.begin(), componentFlatList.end(), sortByRefAndValue );
+        sort( flatList.begin(), flatList.end(), sortByRefAndValue );
     }
 
     /**
@@ -397,11 +419,10 @@ public:
      */
     void SortByReferenceOnly()
     {
-        sort( componentFlatList.begin(), componentFlatList.end(), sortByReferenceOnly );
+        sort( flatList.begin(), flatList.end(), sortByReferenceOnly );
     }
 
     /**
-     * Function GetUnit
      * searches the sorted list of components for a another component with the same
      * reference and a given part unit.  Use this method to manage components with
      * multiple parts per package.
@@ -410,6 +431,13 @@ public:
      * @return index in aComponentsList if found or -1 if not found
      */
     int FindUnit( size_t aIndex, int aUnit );
+
+    /**
+     * @brief Searches unit with designated path
+     * @param aPath path to search
+     * @return index in aComponentsList if found or -1 if not found
+     */
+    int FindRefByPath( const wxString& aPath ) const;
 
     /**
      * Function GetRefsInUse
@@ -437,9 +465,9 @@ public:
     {
         printf( "%s\n", aPrefix );
 
-        for( unsigned i=0; i<componentFlatList.size();  ++i )
+        for( unsigned i=0; i < flatList.size(); ++i )
         {
-            SCH_REFERENCE& schref = componentFlatList[i];
+            SCH_REFERENCE& schref = flatList[i];
 
             printf( " [%-2d] ref:%-8s num:%-3d lib_part:%s\n",
                 i,
@@ -451,8 +479,18 @@ public:
     }
 #endif
 
+    /**
+     * Function Shorthand
+     * Returns a shorthand string representing all the references in the list.  For instance,
+     * "R1, R2, R4 - R7, U1"
+     * @param aList
+     */
+    static wxString Shorthand( std::vector<SCH_REFERENCE> aList );
+
+    friend class BACK_ANNOTATION;
+
 private:
-    /* sort functions used to sort componentFlatList
+    /* sort functions used to sort flatList
     */
 
     static bool sortByRefAndValue( const SCH_REFERENCE& item1, const SCH_REFERENCE& item2 );
@@ -477,6 +515,9 @@ private:
      * @return The first free (not yet used) value.
      */
     int CreateFirstFreeRefId( std::vector<int>& aIdList, int aFirstValue );
+
+    // Used for sorting static sortByTimeStamp function
+    friend class BACK_ANNOTATE;
 };
 
 #endif    // _SCH_REFERENCE_LIST_H_

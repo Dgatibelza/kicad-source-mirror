@@ -2,7 +2,7 @@
  * This program source code file is part of KiCad, a free EDA CAD application.
  *
  * Copyright (C) 2004 Jean-Pierre Charras, jaen-pierre.charras@gipsa-lab.inpg.com
- * Copyright (C) 2004-2017 KiCad Developers, see change_log.txt for contributors.
+ * Copyright (C) 2004-2019 KiCad Developers, see change_log.txt for contributors.
  *
  * This program is free software; you can redistribute it and/or
  * modify it under the terms of the GNU General Public License
@@ -22,17 +22,11 @@
  * 51 Franklin Street, Fifth Floor, Boston, MA  02110-1301, USA
  */
 
-/**
- * @file schematic_undo_redo.cpp
- * @brief Eeschema undo and redo functions for schematic editor.
- */
-
 #include <fctsys.h>
-#include <class_drawpanel.h>
-#include <schframe.h>
-
+#include <sch_draw_panel.h>
+#include <sch_edit_frame.h>
+#include <tool/tool_manager.h>
 #include <general.h>
-#include <protos.h>
 #include <sch_bus_entry.h>
 #include <sch_marker.h>
 #include <sch_junction.h>
@@ -41,7 +35,10 @@
 #include <sch_component.h>
 #include <sch_sheet.h>
 #include <sch_bitmap.h>
-
+#include <sch_view.h>
+#include <tools/ee_selection_tool.h>
+#include <ws_proxy_undo_item.h>
+#include <tool/actions.h>
 
 /* Functions to undo and redo edit commands.
  *  commands to undo are stored in CurrentScreen->m_UndoList
@@ -79,7 +76,7 @@
  *
  *  Redo command
  *  - delete item(s) old command:
- *      => deleted items are moved in GetDrawItems() list, and in
+ *      => deleted items are moved into m_tree
  *
  *  - change item(s) command
  *      => the copy of item(s) is moved in Undo list
@@ -103,22 +100,30 @@
 
 /* Used if undo / redo command:
  * swap data between Item and its copy, pointed by its picked item link member
- * swapped data is data modified by edition, so not all values are swapped
+ * swapped data is data modified by editing, so not all values are swapped
  */
 
 void SCH_EDIT_FRAME::SaveCopyInUndoList( SCH_ITEM*      aItem,
                                          UNDO_REDO_T    aCommandType,
+                                         bool           aAppend,
                                          const wxPoint& aTransformPoint )
 {
-    /* Does not save a null item or a UR_WIRE_IMAGE command type.  UR_WIRE_IMAGE commands
-     * are handled by the overloaded version of SaveCopyInUndoList that takes a reference
-     * to a PICKED_ITEMS_LIST.
-     */
-    if( aItem == NULL || aCommandType == UR_WIRE_IMAGE )
+    PICKED_ITEMS_LIST* commandToUndo = nullptr;
+
+    if( !aItem )
         return;
 
-    PICKED_ITEMS_LIST* commandToUndo = new PICKED_ITEMS_LIST();
-    commandToUndo->m_TransformPoint = aTransformPoint;
+    // Connectivity may change
+    aItem->SetConnectivityDirty();
+
+    if( aAppend )
+        commandToUndo = GetScreen()->PopCommandFromUndoList();
+
+    if( !commandToUndo )
+    {
+        commandToUndo = new PICKED_ITEMS_LIST();
+        commandToUndo->m_TransformPoint = aTransformPoint;
+    }
 
     ITEM_PICKER itemWrapper( aItem, aCommandType );
     itemWrapper.SetFlags( aItem->GetFlags() );
@@ -126,7 +131,7 @@ void SCH_EDIT_FRAME::SaveCopyInUndoList( SCH_ITEM*      aItem,
     switch( aCommandType )
     {
     case UR_CHANGED:            /* Create a copy of item */
-        itemWrapper.SetLink( DuplicateStruct( aItem, true ) );
+        itemWrapper.SetLink( aItem->Duplicate( true ) );
         commandToUndo->PushItem( itemWrapper );
         break;
 
@@ -159,22 +164,47 @@ void SCH_EDIT_FRAME::SaveCopyInUndoList( SCH_ITEM*      aItem,
 
 
 void SCH_EDIT_FRAME::SaveCopyInUndoList( const PICKED_ITEMS_LIST& aItemsList,
-                                         UNDO_REDO_T        aTypeCommand,
-                                         const wxPoint&     aTransformPoint )
+                                         UNDO_REDO_T              aTypeCommand,
+                                         bool                     aAppend,
+                                         const wxPoint&           aTransformPoint )
 {
-    PICKED_ITEMS_LIST* commandToUndo = new PICKED_ITEMS_LIST();
+    PICKED_ITEMS_LIST* commandToUndo = nullptr;
 
-    commandToUndo->m_TransformPoint = aTransformPoint;
-    commandToUndo->m_Status = aTypeCommand;
+    if( !aItemsList.GetCount() )
+        return;
+
+    // Can't append a WIRE IMAGE, so fail to a new undo point
+    if( aAppend )
+        commandToUndo = GetScreen()->PopCommandFromUndoList();
+
+    if( !commandToUndo )
+    {
+        commandToUndo = new PICKED_ITEMS_LIST();
+        commandToUndo->m_TransformPoint = aTransformPoint;
+        commandToUndo->m_Status = aTypeCommand;
+    }
 
     // Copy picker list:
-    commandToUndo->CopyList( aItemsList );
+    if( !commandToUndo->GetCount() )
+        commandToUndo->CopyList( aItemsList );
+    else
+    {
+        // Unless we are appending, in which case, get the picker items
+        for( unsigned ii = 0; ii < aItemsList.GetCount(); ii++ )
+            commandToUndo->PushItem( aItemsList.GetItemWrapper( ii) );
+    }
 
     // Verify list, and creates data if needed
     for( unsigned ii = 0; ii < commandToUndo->GetCount(); ii++ )
     {
-        SCH_ITEM* item = (SCH_ITEM*) commandToUndo->GetPickedItem( ii );
-        wxASSERT( item );
+        SCH_ITEM* sch_item = dynamic_cast<SCH_ITEM*>( commandToUndo->GetPickedItem( ii ) );
+
+        // Common items implemented in EDA_DRAW_FRAME will not be SCH_ITEMs.
+        if( !sch_item )
+            continue;
+
+        // Connectivity may change
+        sch_item->SetConnectivityDirty();
 
         UNDO_REDO_T command = commandToUndo->GetPickedItemStatus( ii );
 
@@ -186,14 +216,14 @@ void SCH_EDIT_FRAME::SaveCopyInUndoList( const PICKED_ITEMS_LIST& aItemsList,
 
         switch( command )
         {
-        case UR_CHANGED:        /* Create a copy of item */
+        case UR_CHANGED:
 
             /* If needed, create a copy of item, and put in undo list
              * in the picker, as link
              * If this link is not null, the copy is already done
              */
-            if( commandToUndo->GetPickedItemLink( ii ) == NULL )
-                commandToUndo->SetPickedItemLink( DuplicateStruct( item, true ), ii );
+            if( commandToUndo->GetPickedItemLink( ii ) == nullptr )
+                commandToUndo->SetPickedItemLink( sch_item->Duplicate( true ), ii );
 
             wxASSERT( commandToUndo->GetPickedItemLink( ii ) );
             break;
@@ -205,7 +235,7 @@ void SCH_EDIT_FRAME::SaveCopyInUndoList( const PICKED_ITEMS_LIST& aItemsList,
         case UR_NEW:
         case UR_DELETED:
         case UR_EXCHANGE_T:
-        case UR_WIRE_IMAGE:
+        case UR_PAGESETTINGS:
             break;
 
         default:
@@ -214,7 +244,7 @@ void SCH_EDIT_FRAME::SaveCopyInUndoList( const PICKED_ITEMS_LIST& aItemsList,
         }
     }
 
-    if( commandToUndo->GetCount() || aTypeCommand == UR_WIRE_IMAGE )
+    if( commandToUndo->GetCount() )
     {
         /* Save the copy in undo list */
         GetScreen()->PushCommandToUndoList( commandToUndo );
@@ -231,152 +261,117 @@ void SCH_EDIT_FRAME::SaveCopyInUndoList( const PICKED_ITEMS_LIST& aItemsList,
 
 void SCH_EDIT_FRAME::PutDataInPreviousState( PICKED_ITEMS_LIST* aList, bool aRedoCommand )
 {
-    SCH_ITEM* item;
-    SCH_ITEM* alt_item;
-
-    // Exchange the current wires, buses, and junctions with the copy save by the last edit.
-    if( aList->m_Status == UR_WIRE_IMAGE )
-    {
-        DLIST< SCH_ITEM > oldWires;
-
-        // Prevent items from being deleted when the DLIST goes out of scope.
-        oldWires.SetOwnership( false );
-
-        // Remove all of the wires, buses, and junctions from the current screen.
-        GetScreen()->ExtractWires( oldWires, false );
-
-        // Copy the saved wires, buses, and junctions to the current screen.
-        for( unsigned int i = 0;  i < aList->GetCount();  i++ )
-            GetScreen()->Append( (SCH_ITEM*) aList->GetPickedItem( i ) );
-
-        aList->ClearItemsList();
-
-        // Copy the previous wires, buses, and junctions to the picked item list for the
-        // redo operation.
-        while( oldWires.GetCount() != 0 )
-        {
-            ITEM_PICKER picker = ITEM_PICKER( oldWires.PopFront(), UR_WIRE_IMAGE );
-            aList->PushItem( picker );
-        }
-
-        return;
-    }
-
     // Undo in the reverse order of list creation: (this can allow stacked changes like the
-    // same item can be changes and deleted in the same complex command.
-    for( int ii = aList->GetCount() - 1; ii >= 0; ii--  )
+    // same item can be changed and deleted in the same complex command).
+    for( int ii = aList->GetCount() - 1; ii >= 0; ii-- )
     {
-        item = (SCH_ITEM*) aList->GetPickedItem( ii );
-        wxASSERT( item );
+        UNDO_REDO_T status = aList->GetPickedItemStatus((unsigned) ii );
+        EDA_ITEM*   eda_item = aList->GetPickedItem( (unsigned) ii );
 
-        item->ClearFlags();
+        eda_item->SetFlags( aList->GetPickerFlags( (unsigned) ii ) );
+        eda_item->ClearEditFlags();
+        eda_item->ClearTempFlags();
 
-        SCH_ITEM* image = (SCH_ITEM*) aList->GetPickedItemLink( ii );
-
-        switch( aList->GetPickedItemStatus( ii ) )
+        if( status == UR_NEW )
         {
-        case UR_CHANGED: /* Exchange old and new data for each item */
-            item->SwapData( image );
-            break;
+            // new items are deleted on undo
+            RemoveFromScreen( eda_item );
+            aList->SetPickedItemStatus( UR_DELETED, (unsigned) ii );
+        }
+        else if( status == UR_DELETED )
+        {
+            // deleted items are re-inserted on undo
+            AddToScreen( eda_item );
+            aList->SetPickedItemStatus( UR_NEW, (unsigned) ii );
+        }
+        else if( status == UR_PAGESETTINGS )
+        {
+            // swap current settings with stored settings
+            WS_PROXY_UNDO_ITEM  alt_item( this );
+            WS_PROXY_UNDO_ITEM* item = (WS_PROXY_UNDO_ITEM*) eda_item;
+            item->Restore( this );
+            *item = alt_item;
+            GetToolManager()->RunAction( ACTIONS::zoomFitScreen, true );
+        }
+        else if( dynamic_cast<SCH_ITEM*>( eda_item ) )
+        {
+            // everthing else is modified in place
 
-        case UR_NEW:     /* new items are deleted */
-            aList->SetPickedItemStatus( UR_DELETED, ii );
-            GetScreen()->Remove( item );
-            break;
+            SCH_ITEM* item = (SCH_ITEM*) eda_item;
+            SCH_ITEM* alt_item = (SCH_ITEM*) aList->GetPickedItemLink( (unsigned) ii );
+            RemoveFromScreen( item );
 
-        case UR_DELETED: /* deleted items are put in the draw item list, as new items */
-            aList->SetPickedItemStatus( UR_NEW, ii );
-            GetScreen()->Append( item );
-            break;
+            switch( status )
+            {
+            case UR_CHANGED:
+                item->SwapData( alt_item );
+                break;
 
-        case UR_MOVED:
-            item->ClearFlags();
-            item->SetFlags( aList->GetPickerFlags( ii ) );
-            item->Move( aRedoCommand ? aList->m_TransformPoint : -aList->m_TransformPoint );
-            item->ClearFlags();
-            break;
+            case UR_MOVED:
+                item->Move( aRedoCommand ? aList->m_TransformPoint : -aList->m_TransformPoint );
+                break;
 
-        case UR_MIRRORED_Y:
-            item->MirrorY( aList->m_TransformPoint.x );
-            break;
+            case UR_MIRRORED_Y:
+                item->MirrorY( aList->m_TransformPoint.x );
+                break;
 
-        case UR_MIRRORED_X:
-            item->MirrorX( aList->m_TransformPoint.y );
-            break;
+            case UR_MIRRORED_X:
+                item->MirrorX( aList->m_TransformPoint.y );
+                break;
 
-        case UR_ROTATED:
-            // To undo a rotate 90 deg transform we must rotate 270 deg to undo
-            // and 90 deg to redo:
-            item->Rotate( aList->m_TransformPoint );
+            case UR_ROTATED:
+                if( aRedoCommand )
+                    item->Rotate( aList->m_TransformPoint );
+                else
+                {
+                    // Rotate 270 deg to undo 90-deg rotate
+                    item->Rotate( aList->m_TransformPoint );
+                    item->Rotate( aList->m_TransformPoint );
+                    item->Rotate( aList->m_TransformPoint );
+                }
+                break;
 
-            if( aRedoCommand )
-                break;  // A only one rotate transform is OK
+            case UR_EXCHANGE_T:
+                aList->SetPickedItem( alt_item, (unsigned) ii );
+                aList->SetPickedItemLink( item, (unsigned) ii );
+                item = alt_item;
+                break;
 
-            // Make 3 rotate 90 deg transforms is this is actually an undo command
-            item->Rotate( aList->m_TransformPoint );
-            item->Rotate( aList->m_TransformPoint );
-            break;
+            default:
+                wxFAIL_MSG( wxString::Format( wxT( "Unknown undo/redo command %d" ),
+                                              aList->GetPickedItemStatus( (unsigned) ii ) ) );
+                break;
+            }
 
-        case UR_EXCHANGE_T:
-            alt_item = (SCH_ITEM*) aList->GetPickedItemLink( ii );
-            alt_item->SetNext( NULL );
-            alt_item->SetBack( NULL );
-            GetScreen()->Remove( item );
-            GetScreen()->Append( alt_item );
-            aList->SetPickedItem( alt_item, ii );
-            aList->SetPickedItemLink( item, ii );
-            break;
-
-        default:
-            wxFAIL_MSG( wxString::Format( wxT( "Unknown undo/redo command %d" ),
-                                          aList->GetPickedItemStatus( ii ) ) );
-            break;
+            AddToScreen( item );
         }
     }
+
+    EE_SELECTION_TOOL* selTool = m_toolManager->GetTool<EE_SELECTION_TOOL>();
+    selTool->RebuildSelection();
+
+    // Bitmaps are cached in Opengl: clear the cache, because
+    // the cache data can be invalid
+    GetCanvas()->GetView()->RecacheAllItems();
+    GetCanvas()->GetView()->ClearHiddenFlags();
 }
 
 
-void SCH_EDIT_FRAME::GetSchematicFromUndoList( wxCommandEvent& event )
+void SCH_EDIT_FRAME::RollbackSchematicFromUndo()
 {
-    if( GetScreen()->GetUndoCommandCount() <= 0 || isBusy() )
-        return;
+    PICKED_ITEMS_LIST* undo = GetScreen()->PopCommandFromUndoList();
 
-    /* Get the old list */
-    PICKED_ITEMS_LIST* List = GetScreen()->PopCommandFromUndoList();
+    if( undo )
+    {
+        PutDataInPreviousState( undo, false );
+        undo->ClearListAndDeleteItems();
+        delete undo;
 
-    /* Undo the command */
-    PutDataInPreviousState( List, false );
+        SetSheetNumberAndCount();
 
-    /* Put the old list in RedoList */
-    List->ReversePickersListOrder();
-    GetScreen()->PushCommandToRedoList( List );
+        TestDanglingEnds();
+    }
 
-    OnModify();
-    SetSheetNumberAndCount();
-
-    GetScreen()->TestDanglingEnds();
-    m_canvas->Refresh();
-}
-
-
-void SCH_EDIT_FRAME::GetSchematicFromRedoList( wxCommandEvent& event )
-{
-    if( GetScreen()->GetRedoCommandCount() == 0 || isBusy() )
-        return;
-
-    /* Get the old list */
-    PICKED_ITEMS_LIST* List = GetScreen()->PopCommandFromRedoList();
-
-    /* Redo the command: */
-    PutDataInPreviousState( List, true );
-
-    /* Put the old list in UndoList */
-    List->ReversePickersListOrder();
-    GetScreen()->PushCommandToUndoList( List );
-
-    OnModify();
-    SetSheetNumberAndCount();
-
-    GetScreen()->TestDanglingEnds();
-    m_canvas->Refresh();
+    SyncView();
+    GetCanvas()->Refresh();
 }

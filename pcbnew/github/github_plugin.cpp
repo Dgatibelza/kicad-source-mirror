@@ -70,10 +70,10 @@ X-GitHub-Request-Id: 411087C2:659E:50FD6E6:52E67F66
 Vary: Accept-Encoding
 */
 
-#include <kicad_curl/kicad_curl_easy.h>     // Include before any wx file
-#include <sstream>
 #include <boost/ptr_container/ptr_map.hpp>
 #include <set>
+
+#include <kicad_curl/kicad_curl_easy.h>     // Include before any wx file
 
 #include <wx/zipstrm.h>
 #include <wx/mstream.h>
@@ -89,7 +89,6 @@ Vary: Accept-Encoding
 #include <class_module.h>
 #include <macros.h>
 #include <fp_lib_table.h>       // ExpandSubstitutions()
-#include <github_getliblist.h>
 
 
 using namespace std;
@@ -104,7 +103,7 @@ typedef MODULE_MAP::const_iterator              MODULE_CITER;
 
 
 /**
- * Class GH_CACHE
+ * GH_CACHE
  * assists only within GITHUB_PLUGIN and holds a map of footprint name to wxZipEntry
  */
 struct GH_CACHE : public MODULE_MAP
@@ -138,34 +137,38 @@ const wxString GITHUB_PLUGIN::GetFileExtension() const
 }
 
 
-void GITHUB_PLUGIN::FootprintEnumerate( wxArrayString& aFootprintNames,
-        const wxString& aLibraryPath, const PROPERTIES* aProperties )
+void GITHUB_PLUGIN::FootprintEnumerate( wxArrayString& aFootprintNames, const wxString& aLibPath,
+                                        bool aBestEfforts, const PROPERTIES* aProperties )
 {
-    //D(printf("%s: this:%p  aLibraryPath:'%s'\n", __func__, this, TO_UTF8(aLibraryPath) );)
-    cacheLib( aLibraryPath, aProperties );
-
-    typedef std::set<wxString>      MYSET;
-
-    MYSET   unique;
-
-    if( m_pretty_dir.size() )
+    try
     {
-        wxArrayString locals;
+        //D(printf("%s: this:%p  aLibPath:\"%s\"\n", __func__, this, TO_UTF8(aLibraryPath) );)
+        cacheLib( aLibPath, aProperties );
 
-        PCB_IO::FootprintEnumerate( locals, m_pretty_dir );
+        typedef std::set<wxString>      MYSET;
 
-        for( unsigned i=0; i<locals.GetCount();  ++i )
-            unique.insert( locals[i] );
+        MYSET   unique;
+
+        if( m_pretty_dir.size() )
+        {
+            wxArrayString locals;
+
+            PCB_IO::FootprintEnumerate( locals, m_pretty_dir, aBestEfforts );
+
+            for( unsigned i=0; i<locals.GetCount();  ++i )
+                unique.insert( locals[i] );
+        }
+
+        for( MODULE_ITER it = m_gh_cache->begin();  it!=m_gh_cache->end();  ++it )
+            unique.insert( it->first );
+
+        for( MYSET::const_iterator it = unique.begin();  it != unique.end();  ++it )
+            aFootprintNames.Add( *it );
     }
-
-    for( MODULE_ITER it = m_gh_cache->begin();  it!=m_gh_cache->end();  ++it )
+    catch( const IO_ERROR& ioe )
     {
-        unique.insert( it->first );
-    }
-
-    for( MYSET::const_iterator it = unique.begin();  it != unique.end();  ++it )
-    {
-        aFootprintNames.Add( *it );
+        if( !aBestEfforts )
+            throw ioe;
     }
 }
 
@@ -185,7 +188,7 @@ void GITHUB_PLUGIN::PrefetchLib(
 MODULE* GITHUB_PLUGIN::FootprintLoad( const wxString& aLibraryPath,
         const wxString& aFootprintName, const PROPERTIES* aProperties )
 {
-    // D(printf("%s: this:%p  aLibraryPath:'%s'\n", __func__, this, TO_UTF8(aLibraryPath) );)
+    // D(printf("%s: this:%p  aLibraryPath:\"%s\"\n", __func__, this, TO_UTF8(aLibraryPath) );)
 
     // clear or set to valid the variable m_pretty_dir
     cacheLib( aLibraryPath, aProperties );
@@ -232,7 +235,7 @@ MODULE* GITHUB_PLUGIN::FootprintLoad( const wxString& aLibraryPath,
             // any name found in the pretty file; any name in the pretty file
             // must be ignored here.  Also, the library nickname is unknown in
             // this context so clear it just in case.
-            ret->SetFPID( aFootprintName );
+            ret->SetFPID( LIB_ID( wxEmptyString, aFootprintName ) );
 
             return ret;
         }
@@ -267,7 +270,7 @@ void GITHUB_PLUGIN::FootprintSave( const wxString& aLibraryPath,
         // IsFootprintLibWritable() to determine if calling FootprintSave() is
         // even legal, so I spend no time on internationalization here:
 
-        string msg = StrPrintf( "Github library\n'%s'\nis only writable if you set option '%s' in Library Tables dialog.",
+        string msg = StrPrintf( "Github library\n\"%s\"\nis only writable if you set option \"%s\" in Library Tables dialog.",
                 TO_UTF8( aLibraryPath ), PRETTY_DIR );
 
         THROW_IO_ERROR( msg );
@@ -297,7 +300,7 @@ void GITHUB_PLUGIN::FootprintDelete( const wxString& aLibraryPath, const wxStrin
         else
         {
             wxString msg = wxString::Format(
-                    _( "Footprint\n'%s'\nis not in the writable portion of this Github library\n'%s'" ),
+                    _( "Footprint\n\"%s\"\nis not in the writable portion of this Github library\n\"%s\"" ),
                     GetChars( aFootprintName ),
                     GetChars( aLibraryPath )
                     );
@@ -311,7 +314,7 @@ void GITHUB_PLUGIN::FootprintDelete( const wxString& aLibraryPath, const wxStrin
         // IsFootprintLibWritable() to determine if calling FootprintSave() is
         // even legal, so I spend no time on internationalization here:
 
-        string msg = StrPrintf( "Github library\n'%s'\nis only writable if you set option '%s' in Library Tables dialog.",
+        string msg = StrPrintf( "Github library\n\"%s\"\nis only writable if you set option \"%s\" in Library Tables dialog.",
                 TO_UTF8( aLibraryPath ), PRETTY_DIR );
 
         THROW_IO_ERROR( msg );
@@ -325,13 +328,7 @@ void GITHUB_PLUGIN::FootprintLibCreate( const wxString& aLibraryPath, const PROP
     cacheLib( aLibraryPath, aProperties );
 
     if( m_pretty_dir.size() )
-    {
         PCB_IO::FootprintLibCreate( m_pretty_dir, aProperties );
-    }
-    else
-    {
-        // THROW_IO_ERROR()   @todo
-    }
 }
 
 
@@ -341,14 +338,9 @@ bool GITHUB_PLUGIN::FootprintLibDelete( const wxString& aLibraryPath, const PROP
     cacheLib( aLibraryPath, aProperties );
 
     if( m_pretty_dir.size() )
-    {
         return PCB_IO::FootprintLibDelete( m_pretty_dir, aProperties );
-    }
-    else
-    {
-        // THROW_IO_ERROR()   @todo
-        return false;
-    }
+
+    return false;
 }
 
 
@@ -413,7 +405,7 @@ void GITHUB_PLUGIN::cacheLib( const wxString& aLibraryPath, const PROPERTIES* aP
                   )
                 {
                     wxString msg = wxString::Format(
-                            _( "option '%s' for Github library '%s' must point to a writable directory ending with '.pretty'." ),
+                            _( "option \"%s\" for Github library \"%s\" must point to a writable directory ending with '.pretty'." ),
                             GetChars( FROM_UTF8( PRETTY_DIR ) ),
                             GetChars( aLibraryPath )
                             );
@@ -461,6 +453,29 @@ void GITHUB_PLUGIN::cacheLib( const wxString& aLibraryPath, const PROPERTIES* aP
                 delete entry;
         }
     }
+}
+
+
+long long GITHUB_PLUGIN::GetLibraryTimestamp( const wxString& aLibraryPath ) const
+{
+    // This plugin currently relies on the nginx server for caching (see comments
+    // at top of file).
+    // Since only the nginx server holds the timestamp information, we must defeat
+    // all caching above the nginx server.
+    return wxDateTime::Now().GetValue().GetValue();
+
+#if 0
+    // If we have no cache, return a number which won't match any stored timestamps
+    if( !m_gh_cache || m_lib_path != aLibraryPath )
+        return wxDateTime::Now().GetValue().GetValue();
+
+    long long hash = m_gh_cache->GetTimestamp();
+
+    if( m_pretty_dir.size() )
+        hash += PCB_IO::GetLibraryTimestamp( m_pretty_dir );
+
+    return hash;
+#endif
 }
 
 
@@ -546,7 +561,7 @@ void GITHUB_PLUGIN::remoteGetZip( const wxString& aRepoURL )
 
     if( !repoURL_zipURL( aRepoURL, &zip_url ) )
     {
-        wxString msg = wxString::Format( _( "Unable to parse URL:\n'%s'" ), GetChars( aRepoURL ) );
+        wxString msg = wxString::Format( _( "Unable to parse URL:\n\"%s\"" ), GetChars( aRepoURL ) );
         THROW_IO_ERROR( msg );
     }
 
@@ -570,7 +585,7 @@ void GITHUB_PLUGIN::remoteGetZip( const wxString& aRepoURL )
         // Note: kcurl.Perform() does not return an error if the file to download is not found
         static const char errorcmd[] = "http GET command failed";  // Do not translate this message
 
-        UTF8 fmt( _( "%s\nCannot get/download Zip archive: '%s'\nfor library path: '%s'.\nReason: '%s'" ) );
+        UTF8 fmt( _( "%s\nCannot get/download Zip archive: \"%s\"\nfor library path: \"%s\".\nReason: \"%s\"" ) );
 
         std::string msg = StrPrintf( fmt.c_str(),
                                      errorcmd,
@@ -587,7 +602,7 @@ void GITHUB_PLUGIN::remoteGetZip( const wxString& aRepoURL )
     if( ( m_zip_image.compare( 0, 9, "Not Found", 9 ) == 0 ) ||
         ( m_zip_image.compare( 0, 14, "404: Not Found", 14 ) == 0 ) )
     {
-        UTF8 fmt( _( "Cannot download library '%s'.\nThe library does not exist on the server" ) );
+        UTF8 fmt( _( "Cannot download library \"%s\".\nThe library does not exist on the server" ) );
         std::string msg = StrPrintf( fmt.c_str(), TO_UTF8( aRepoURL ) );
 
         THROW_IO_ERROR( msg );

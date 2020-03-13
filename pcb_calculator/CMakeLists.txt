@@ -5,8 +5,7 @@ include_directories(
     dialogs
     transline
     attenuators
-    ../polygon
-    ../common
+    ${CMAKE_SOURCE_DIR}/common
     ${INC_AFTER}
     )
 
@@ -14,15 +13,17 @@ set( PCB_CALCULATOR_SRCS
     attenuators.cpp
     board_classes_values.cpp
     colorcode.cpp
+    common_data.cpp
     electrical_spacing_values.cpp
     params_read_write.cpp
     pcb_calculator_frame.cpp
+    pcb_calculator_settings.cpp
     datafile_read_write.cpp
     regulators_funct.cpp
     tracks_width_versus_current.cpp
+    via.cpp
     transline_ident.cpp
     UnitSelector.cpp
-    pcb_calculator_datafile_keywords.cpp
     transline/transline.cpp
     transline/c_microstrip.cpp
     transline/microstrip.cpp
@@ -56,25 +57,25 @@ if( APPLE )
 endif()
 
 add_executable( pcb_calculator WIN32 MACOSX_BUNDLE
-    ../common/single_top.cpp
-    ../common/pgm_base.cpp
+    ${CMAKE_SOURCE_DIR}/common/single_top.cpp
+    ${CMAKE_SOURCE_DIR}/common/pgm_base.cpp
     ${PCB_CALCULATOR_RESOURCES}
     )
-set_source_files_properties( ../common/single_top.cpp PROPERTIES
+set_source_files_properties( ${CMAKE_SOURCE_DIR}/common/single_top.cpp PROPERTIES
     COMPILE_DEFINITIONS "TOP_FRAME=FRAME_CALC;BUILD_KIWAY_DLL"
     )
 target_link_libraries( pcb_calculator
     #singletop  # replaces common, giving us restrictive control and link warnings.
     # There's way too much crap coming in from common yet.
     common
-    bitmaps
     gal
+    common
     ${wxWidgets_LIBRARIES}
     )
 
 if( MAKE_LINK_MAPS )
     set_target_properties( pcb_calculator PROPERTIES
-        LINK_FLAGS "${TO_LINKER},-cref ${TO_LINKER},-Map=pcb_calculator.map" )
+        LINK_FLAGS "-Wl,-cref,-Map=pcb_calculator.map" )
 endif()
 
 # the main pcb_calculator program, in DSO form.
@@ -89,8 +90,7 @@ set_target_properties( pcb_calculator_kiface PROPERTIES
     )
 target_link_libraries( pcb_calculator_kiface
     common
-    bitmaps
-    polygon
+    markdown_lib
     ${wxWidgets_LIBRARIES}
     )
 set_source_files_properties( pcb_calculator.cpp PROPERTIES
@@ -100,7 +100,7 @@ set_source_files_properties( pcb_calculator.cpp PROPERTIES
 
 if( MAKE_LINK_MAPS )
     set_target_properties( pcb_calculator_kiface PROPERTIES
-        LINK_FLAGS "${TO_LINKER},-cref ${TO_LINKER},-Map=_pcb_calculator.kiface.map" )
+        LINK_FLAGS "-Wl,-cref,-Map=_pcb_calculator.kiface.map" )
 endif()
 
 # if building pcb_calculator, then also build pcb_calculator_kiface if out of date.
@@ -109,7 +109,7 @@ add_dependencies( pcb_calculator pcb_calculator_kiface )
 # these 2 binaries are a matched set, keep them together
 if( APPLE )
     set_target_properties( pcb_calculator PROPERTIES
-        MACOSX_BUNDLE_INFO_PLIST ${CMAKE_CURRENT_SOURCE_DIR}/Info.plist
+        MACOSX_BUNDLE_INFO_PLIST ${PROJECT_BINARY_DIR}/pcb_calculator/Info.plist
         )
 
     # puts binaries into the *.app bundle while linking
@@ -149,21 +149,12 @@ endif()
 # auto-generate pcb_calculator_datafile.h and pcb_calculator_datafile_keywords.cpp
 # for the storage data file format.
 make_lexer(
-    ${CMAKE_CURRENT_SOURCE_DIR}/pcb_calculator_datafile.keywords
-    ${CMAKE_CURRENT_SOURCE_DIR}/pcb_calculator_datafile_lexer.h
-    ${CMAKE_CURRENT_SOURCE_DIR}/pcb_calculator_datafile_keywords.cpp
+    pcb_calculator_kiface
+    pcb_calculator_datafile.keywords
+    pcb_calculator_datafile_lexer.h
+    pcb_calculator_datafile_keywords.cpp
     PCBCALC_DATA_T
-
-    # Pass header file with dependency on *_lexer.h as extra_arg
-    datafile_read_write.h
    )
-
-add_custom_target(
-    pcb_calculator_lexer_source_files ALL
-    DEPENDS
-        ${CMAKE_CURRENT_SOURCE_DIR}/pcb_calculator_datafile_lexer.h
-        ${CMAKE_CURRENT_SOURCE_DIR}/pcb_calculator_datafile_keywords.cpp
-)
 
 #
 # Conversion of .html doc source files to .h files included in cpp sources
@@ -179,21 +170,35 @@ function( html_doc2h inputFile )
         COMMENT "creating ${inputFile}.h from ${inputFile}.html"
         )
 endfunction()
+#
+# Conversion of .md doc source files to .h files included in cpp sources
+#
+# Function md_doc2h : converts a single *.md text file to a *.h header
+function( md_doc2h inputFile )
+    add_custom_command(
+        OUTPUT ${inputFile}.h
 
-    html_doc2h( ${CMAKE_CURRENT_SOURCE_DIR}/attenuators/bridget_tee_formula )
-    html_doc2h( ${CMAKE_CURRENT_SOURCE_DIR}/attenuators/splitter_formula )
-    html_doc2h( ${CMAKE_CURRENT_SOURCE_DIR}/attenuators/pi_formula )
-    html_doc2h( ${CMAKE_CURRENT_SOURCE_DIR}/attenuators/tee_formula )
+        COMMAND ${CMAKE_COMMAND} -DinputFile=${inputFile}.md -DoutputFile=${inputFile}.h
+            -P ${CMAKE_MODULE_PATH}/markdown2C.cmake
+        DEPENDS ${inputFile}.md ${CMAKE_MODULE_PATH}/markdown2C.cmake
+        COMMENT "creating ${inputFile}.h from ${inputFile}.md"
+        )
+endfunction()
+
+    md_doc2h( ${CMAKE_CURRENT_SOURCE_DIR}/attenuators/bridget_tee_formula )
+    md_doc2h( ${CMAKE_CURRENT_SOURCE_DIR}/attenuators/splitter_formula )
+    md_doc2h( ${CMAKE_CURRENT_SOURCE_DIR}/attenuators/pi_formula )
+    md_doc2h( ${CMAKE_CURRENT_SOURCE_DIR}/attenuators/tee_formula )
+    md_doc2h( ${CMAKE_CURRENT_SOURCE_DIR}/tracks_width_versus_current_formula )
 
 set( DOCS_LIST
         ${CMAKE_CURRENT_SOURCE_DIR}/attenuators/pi_formula.h
         ${CMAKE_CURRENT_SOURCE_DIR}/attenuators/tee_formula.h
         ${CMAKE_CURRENT_SOURCE_DIR}/attenuators/bridget_tee_formula.h
         ${CMAKE_CURRENT_SOURCE_DIR}/attenuators/splitter_formula.h
+        ${CMAKE_CURRENT_SOURCE_DIR}/tracks_width_versus_current_formula.h
     )
 
 set_source_files_properties( attenuators/attenuator_classes.cpp
     PROPERTIES OBJECT_DEPENDS "${DOCS_LIST}"
     )
-
-add_dependencies( pcb_calculator_kiface pcb_calculator_lexer_source_files )

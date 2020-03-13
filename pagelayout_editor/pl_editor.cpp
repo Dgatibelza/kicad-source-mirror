@@ -27,18 +27,16 @@
  * 51 Franklin Street, Fifth Floor, Boston, MA  02110-1301, USA
  */
 
-#include <fctsys.h>
+#include <wx/file.h>
+#include <wx/snglinst.h>
+
 #include <kiface_i.h>
 #include <confirm.h>
 #include <gestfich.h>
-#include <worksheet_shape_builder.h>
+#include <pgm_base.h>
 #include <pl_editor_frame.h>
-#include <hotkeys.h>
-
-#include <build_version.h>
-
-#include <wx/file.h>
-#include <wx/snglinst.h>
+#include <pl_editor_settings.h>
+#include <settings/settings_manager.h>
 
 
 namespace PGE {
@@ -89,6 +87,16 @@ static struct IFACE : public KIFACE_I
         return NULL;
     }
 
+    /**
+     * Function SaveFileAs
+     * Saving a file under a different name is delegated to the various KIFACEs because
+     * the project doesn't know the internal format of the various files (which may have
+     * paths in them that need updating).
+     */
+    void SaveFileAs( const wxString& aProjectBasePath, const wxString& aSrcProjectName,
+                     const wxString& aNewProjectBasePath, const wxString& aNewProjectName,
+                     const wxString& aSrcFilePath, wxString& aErrors ) override;
+
 } kiface( "pl_editor", KIWAY::FACE_PL_EDITOR );
 
 } // namespace
@@ -118,14 +126,9 @@ PGM_BASE& Pgm()
 
 bool IFACE::OnKifaceStart( PGM_BASE* aProgram, int aCtlBits )
 {
+    InitSettings( new PL_EDITOR_SETTINGS );
+    aProgram->GetSettingsManager().RegisterSettings( KifaceSettings() );
     start_common( aCtlBits );
-
-    // Must be called before creating the main frame in order to
-    // display the real hotkeys in menus or tool tips
-    ReadHotkeyConfig( PL_EDITOR_FRAME_NAME, PlEditorHokeysDescr );
-
-    g_UserUnit = MILLIMETRES;
-
     return true;
 }
 
@@ -136,71 +139,31 @@ void IFACE::OnKifaceEnd()
 }
 
 
-#if 0
-bool MYFACE::OnKifaceStart( PGM_BASE* aProgram )
-
+void IFACE::SaveFileAs( const wxString& aProjectBasePath, const wxString& aSrcProjectName,
+                        const wxString& aNewProjectBasePath, const wxString& aNewProjectName,
+                        const wxString& aSrcFilePath, wxString& aErrors )
 {
-    wxFileName          fn;
+    wxFileName destFile( aSrcFilePath );
+    wxString   destPath = destFile.GetPathWithSep();
+    wxUniChar  pathSep = wxFileName::GetPathSeparator();
+    wxString   ext = destFile.GetExt();
 
-    InitEDA_Appl( wxT( "pl_editor" ), APP_PL_EDITOR_T );
-
-    if( m_Checker && m_Checker->IsAnotherRunning() )
+    if( destPath.StartsWith( aProjectBasePath + pathSep ) )
     {
-        if( !IsOK( NULL, _( "pl_editor is already running. Continue?" ) ) )
-            return false;
+        destPath.Replace( aProjectBasePath, aNewProjectBasePath, false );
+        destFile.SetPath( destPath );
     }
 
-    g_UserUnit = MILLIMETRES;
-
-    // read current setup and reopen last directory if no filename to open in
-    // command line
-    bool reopenLastUsedDirectory = argc == 1;
-    GetSettings( reopenLastUsedDirectory );
-
-    // Must be called before creating the main frame in order to
-    // display the real hotkeys in menus or tool tips
-    ReadHotkeyConfig( PL_EDITOR_FRAME_NAME, s_PlEditor_Hokeys_Descr );
-
-    PL_EDITOR_FRAME * frame = new PL_EDITOR_FRAME( NULL, wxT( "PlEditorFrame" ), wxPoint( 0, 0 ), wxSize( 600, 400 ) );
-
-    // frame title:
-    frame->SetTitle( GetTitle() + wxT( " " ) + GetBuildVersion() );
-
-    SetTopWindow( frame );
-    frame->Show( true );
-    frame->Zoom_Automatique( true );        // Zoom fit in frame
-    frame->GetScreen()->m_FirstRedraw = false;
-
-
-    bool descrLoaded = false;
-    if( argc > 1 )
+    if( ext == "kicad_wks" )
     {
-        fn = argv[1];
+        if( destFile.GetName() == aSrcProjectName )
+            destFile.SetName( aNewProjectName );
 
-        if( fn.IsOk() )
-        {
-            bool success = frame->LoadPageLayoutDescrFile( fn.GetFullPath() );
-            if( !success )
-            {
-                wxString msg;
-                msg.Printf( _("Error when loading file <%s>"),
-                            fn.GetFullPath().GetData() );
-                wxMessageBox( msg );
-            }
-            else
-            {
-                descrLoaded = true;
-                frame->OnNewPageLayout();
-            }
-        }
+        CopyFile( aSrcFilePath, destFile.GetFullPath(), aErrors );
     }
-
-    if( !descrLoaded )
+    else
     {
-        WORKSHEET_LAYOUT::GetTheInstance().SetPageLayout();
-        frame->OnNewPageLayout();
+        wxFAIL_MSG( "Unexpected filetype for Pcbnew::SaveFileAs()" );
     }
-
-    return true;
 }
-#endif
+

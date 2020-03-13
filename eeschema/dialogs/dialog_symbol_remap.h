@@ -37,15 +37,16 @@ class REPORTER;
 class DIALOG_SYMBOL_REMAP : public DIALOG_SYMBOL_REMAP_BASE
 {
 public:
-    DIALOG_SYMBOL_REMAP( wxWindow* aParent );
+    DIALOG_SYMBOL_REMAP( SCH_EDIT_FRAME* aParent );
 
     void OnRemapSymbols( wxCommandEvent& aEvent ) override;
 
+protected:
+    void OnUpdateUIRemapButton( wxUpdateUIEvent& aEvent ) override;
+
 private:
     /**
-     * Function getLibsNotInGlobalSymbolLibTable
-     *
-     * adds libraries found in the legacy library list to \a aLibs that are not found in
+     * Add libraries found in the legacy library list to \a aLibs that are not found in
      * the global symbol library table.
      *
      * This function is used to create a project symbol library table when converting
@@ -66,9 +67,26 @@ private:
 
     bool remapSymbolToLibTable( SCH_COMPONENT* aSymbol );
 
-    bool normalizeAbsolutePaths( const wxFileName& aPathA,
-                                 const wxFileName& aPathB,
-                                 wxString*         aResultPath );
+    /**
+     * Backup all of the files that could be modified by the remapping with a time stamp
+     * appended to the file name into the "remap_backup" folder in case something goes wrong.
+     *
+     * Backup the following:
+     * - All schematic (prj-name.sch -> remap_backup/prj-name-time-stamp.sch ) files.
+     * - The project (prj-name.pro) -> remap_backup/prj-name-time-stamp.pro) file.
+     * - The cache library (prj-name-cache.lib -> remap_backup/prj-name.-cache-time-stamp.lib)
+     *   file.
+     * - The rescue library (prj-name-rescue.lib -> remap_backup/prj-name.rescue-time-stamp.lib)
+     *   file.
+     * - The rescue library (prj-name-rescue.dcm -> remap_backup/prj-name.rescue-time-stamp.dcm)
+     *   file.
+     *
+     * @param aReporter is the #REPORTER object in which to write information messages.
+     * @return true to continue rescue or false to abort rescue.
+     */
+    bool backupProject( REPORTER& aReporter );
+
+    bool m_remapped;
 };
 
 #endif  // _DIALOG_SYMBOL_REMAP_H_

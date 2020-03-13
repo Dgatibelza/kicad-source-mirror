@@ -25,13 +25,12 @@
 #ifndef PGM_KICAD_H_
 #define PGM_KICAD_H_
 
-
 #include <pgm_base.h>
 #include <bin_mod.h>
-
+#include "kicad_settings.h"
 
 /**
- * Class PGM_KICAD
+ * PGM_KICAD
  * extends PGM_BASE to bring in FileHistory() and PdfBrowser() which were moved
  * from EDA_APP into KIFACE_I.  KIFACE_I is not applicable in the project manager
  * since it is not a KIFACE.  This header is in the kicad directory since nobody
@@ -54,13 +53,13 @@ public:
 
     void MacOpenFile( const wxString& aFileName ) override;
 
-    wxFileHistory&  GetFileHistory()            { return m_bm.m_history; }
+    FILE_HISTORY&      GetFileHistory()    { return *m_bm.m_history; }
 
-    wxConfigBase*   PgmSettings()               { return m_bm.m_config; }
+    APP_SETTINGS_BASE* PgmSettings()       { return m_bm.m_config; }
 
-    SEARCH_STACK&   SysSearch()                 { return m_bm.m_search; }
+    SEARCH_STACK&      SysSearch()         { return m_bm.m_search; }
 
-    wxString        GetHelpFileName()           { return m_bm.m_help_file; }
+    wxString           GetHelpFileName()   { return m_bm.m_help_file; }
 
     // The PGM_* classes can have difficulties at termination if they
     // are not destroyed soon enough.  Relying on a static destructor can be

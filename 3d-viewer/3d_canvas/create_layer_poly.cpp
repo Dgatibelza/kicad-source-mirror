@@ -2,7 +2,7 @@
  * This program source code file is part of KiCad, a free EDA CAD application.
  *
  * Copyright (C) 2015-2016 Mario Luzeiro <mrluzeiro@ua.pt>
- * Copyright (C) 1992-2016 KiCad Developers, see AUTHORS.txt for contributors.
+ * Copyright (C) 1992-2019 KiCad Developers, see AUTHORS.txt for contributors.
  *
  * This program is free software; you can redistribute it and/or
  * modify it under the terms of the GNU General Public License
@@ -40,9 +40,7 @@
 // but it adds the rect/trapezoid shapes with a different winding
 void CINFO3D_VISU::buildPadShapePolygon( const D_PAD* aPad,
                                          SHAPE_POLY_SET& aCornerBuffer,
-                                         wxSize aInflateValue,
-                                         int aSegmentsPerCircle,
-                                         double aCorrectionFactor ) const
+                                         wxSize aInflateValue ) const
 {
     wxPoint corners[4];
     wxPoint PadShapePos = aPad->ShapePos(); /* Note: for pad having a shape offset,
@@ -52,8 +50,19 @@ void CINFO3D_VISU::buildPadShapePolygon( const D_PAD* aPad,
     case PAD_SHAPE_CIRCLE:
     case PAD_SHAPE_OVAL:
     case PAD_SHAPE_ROUNDRECT:
-        aPad->TransformShapeWithClearanceToPolygon( aCornerBuffer, aInflateValue.x,
-                                                    aSegmentsPerCircle, aCorrectionFactor );
+    case PAD_SHAPE_CHAMFERED_RECT:
+    {
+        // We are using TransformShapeWithClearanceToPolygon to build the shape.
+        // Currently, this method uses only the same inflate value for X and Y dirs.
+        // so because here this is not the case, we use a inflated dummy pad to build
+        // the polygonal shape
+        // TODO: remove this dummy pad when TransformShapeWithClearanceToPolygon will use
+        // a wxSize to inflate the pad size
+        D_PAD dummy( *aPad );
+        wxSize new_size = aPad->GetSize() + aInflateValue + aInflateValue;
+        dummy.SetSize( new_size );
+        dummy.TransformShapeWithClearanceToPolygon( aCornerBuffer, 0 );
+    }
         break;
 
     case PAD_SHAPE_TRAPEZOID:
@@ -78,8 +87,17 @@ void CINFO3D_VISU::buildPadShapePolygon( const D_PAD* aPad,
     case PAD_SHAPE_CUSTOM:
         {
         SHAPE_POLY_SET polyList;     // Will contain the pad outlines in board coordinates
+        auto           inflate_val = std::max( aInflateValue.x, aInflateValue.y );
+
         polyList.Append( aPad->GetCustomShapeAsPolygon() );
         aPad->CustomShapeAsPolygonToBoardPosition( &polyList, aPad->ShapePos(), aPad->GetOrientation() );
+
+        if( inflate_val > 0 )
+        {
+            int numSegs = GetNrSegmentsCircle( inflate_val );
+            polyList.Inflate( inflate_val, numSegs );
+        }
+
         aCornerBuffer.Append( polyList );
         }
         break;
@@ -93,11 +111,8 @@ void CINFO3D_VISU::buildPadShapeThickOutlineAsPolygon( const D_PAD* aPad,
 {
     if( aPad->GetShape() == PAD_SHAPE_CIRCLE )    // Draw a ring
     {
-        unsigned int nr_sides_per_circle = GetNrSegmentsCircle( ( aPad->GetSize().x / 2 +
-                                                                  aWidth / 2 ) * 2 );
-
         TransformRingToPolygon( aCornerBuffer, aPad->ShapePos(),
-                                aPad->GetSize().x / 2, nr_sides_per_circle, aWidth );
+                                aPad->GetSize().x / 2, ARC_HIGH_DEF, aWidth );
         return;
     }
 
@@ -105,11 +120,7 @@ void CINFO3D_VISU::buildPadShapeThickOutlineAsPolygon( const D_PAD* aPad,
     // For other shapes, draw polygon outlines
     SHAPE_POLY_SET corners;
 
-    unsigned int nr_sides_per_circle = GetNrSegmentsCircle( glm::min( aPad->GetSize().x,
-                                                                      aPad->GetSize().y) );
-    buildPadShapePolygon( aPad, corners, wxSize( 0, 0 ),
-                          nr_sides_per_circle,
-                          GetCircleCorrectionFactor( nr_sides_per_circle ) );
+    buildPadShapePolygon( aPad, corners, wxSize( 0, 0 ) );
 
     // Add outlines as thick segments in polygon buffer
 
@@ -120,26 +131,21 @@ void CINFO3D_VISU::buildPadShapeThickOutlineAsPolygon( const D_PAD* aPad,
         const VECTOR2I& a = path.CPoint( ii );
         const VECTOR2I& b = path.CPoint( ii + 1 );
 
-        TransformRoundedEndsSegmentToPolygon( aCornerBuffer,
-                                              wxPoint( a.x, a.y ),
-                                              wxPoint( b.x, b.y ),
-                                              nr_sides_per_circle,
-                                              aWidth );
+        TransformSegmentToPolygon( aCornerBuffer, wxPoint( a.x, a.y ),
+                                   wxPoint( b.x, b.y ), ARC_HIGH_DEF, aWidth );
     }
 }
 
 
 // Based on the same function name in board_items_to_polyshape_transform.cpp
 // It was implemented here to allow dynamic segments count per pad shape
-void CINFO3D_VISU::transformPadsShapesWithClearanceToPolygon( const DLIST<D_PAD>& aPads, PCB_LAYER_ID aLayer,
+void CINFO3D_VISU::transformPadsShapesWithClearanceToPolygon( const PADS& aPads, PCB_LAYER_ID aLayer,
                                                               SHAPE_POLY_SET& aCornerBuffer,
                                                               int aInflateValue,
                                                               bool aSkipNPTHPadsWihNoCopper ) const
 {
-    const D_PAD* pad = aPads;
-
     wxSize margin;
-    for( ; pad != NULL; pad = pad->Next() )
+    for( auto pad : aPads )
     {
         if( !pad->IsOnLayer(aLayer) )
             continue;
@@ -188,11 +194,7 @@ void CINFO3D_VISU::transformPadsShapesWithClearanceToPolygon( const DLIST<D_PAD>
             break;
         }
 
-        unsigned int aCircleToSegmentsCount = GetNrSegmentsCircle( pad->GetSize().x );
-        double aCorrectionFactor = GetCircleCorrectionFactor( aCircleToSegmentsCount );
-
-        buildPadShapePolygon( pad, aCornerBuffer, margin,
-                                   aCircleToSegmentsCount, aCorrectionFactor );
+        buildPadShapePolygon( pad, aCornerBuffer, margin );
     }
 }
 
@@ -200,9 +202,7 @@ void CINFO3D_VISU::transformGraphicModuleEdgeToPolygonSet( const MODULE *aModule
                                                            PCB_LAYER_ID aLayer,
                                                            SHAPE_POLY_SET& aCornerBuffer ) const
 {
-    for( const EDA_ITEM* item = aModule->GraphicalItemsList();
-         item != NULL;
-         item = item->Next() )
+    for( auto item : aModule->GraphicalItems() )
     {
         switch( item->Type() )
         {
@@ -213,15 +213,7 @@ void CINFO3D_VISU::transformGraphicModuleEdgeToPolygonSet( const MODULE *aModule
             if( outline->GetLayer() != aLayer )
                 break;
 
-            unsigned int aCircleToSegmentsCount =
-                    GetNrSegmentsCircle( outline->GetBoundingBox().GetSizeMax() );
-
-            double aCorrectionFactor = GetCircleCorrectionFactor( aCircleToSegmentsCount );
-
-            outline->TransformShapeWithClearanceToPolygon( aCornerBuffer,
-                                                           0,
-                                                           aCircleToSegmentsCount,
-                                                           aCorrectionFactor );
+            outline->TransformShapeWithClearanceToPolygon( aCornerBuffer, 0 );
         }
             break;
 

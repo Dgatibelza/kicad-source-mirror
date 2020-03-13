@@ -3,7 +3,7 @@
  *
  * Copyright (C) 2007 Jean-Pierre Charras, jp.charras at wanadoo.fr
  * Copyright (C) 2013 SoftPLC Corporation, Dick Hollenbeck <dick@softplc.com>
- * Copyright (C) 1992-2013 KiCad Developers, see AUTHORS.txt for contributors.
+ * Copyright (C) 1992-2019 KiCad Developers, see AUTHORS.txt for contributors.
  *
  * This program is free software; you can redistribute it and/or
  * modify it under the terms of the GNU General Public License
@@ -23,29 +23,33 @@
  * 51 Franklin Street, Fifth Floor, Boston, MA  02110-1301, USA
  */
 
-/**
- * @file displlst.cpp
- */
-
 #include <fctsys.h>
 #include <macros.h>
-#include <draw_frame.h>
+#include <eda_draw_frame.h>
 #include <kicad_string.h>
 #include <dialog_helpers.h>
+
+
+// wxWidgets spends *far* too long calcuating column widths (most of it, believe it or
+// not, in repeatedly creating/destroying a wxDC to do the measurement in).
+// Use default column widths instead.
+static int DEFAULT_COL_WIDTHS[] = { 200, 600 };
+
+
 
 EDA_LIST_DIALOG::EDA_LIST_DIALOG( EDA_DRAW_FRAME* aParent, const wxString& aTitle,
                                   const wxArrayString& aItemHeaders,
                                   const std::vector<wxArrayString>& aItemList,
                                   const wxString& aSelection,
                                   void( *aCallBackFunction )( wxString&, void* ),
-                                  void* aCallBackFunctionData,
-                                  bool aSortList ) :
+                                  void* aCallBackFunctionData ) :
     EDA_LIST_DIALOG_BASE( aParent, wxID_ANY, aTitle )
 {
-    m_sortList    = aSortList;
     m_cb_func     = aCallBackFunction;
     m_cb_data     = aCallBackFunctionData;
     m_itemsListCp = &aItemList;
+
+    m_filterBox->SetHint( _( "Filter" ) );
 
     initDialog( aItemHeaders, aSelection );
 
@@ -54,7 +58,7 @@ EDA_LIST_DIALOG::EDA_LIST_DIALOG( EDA_DRAW_FRAME* aParent, const wxString& aTitl
     // columns, different column names, and column widths.
     m_hash_key = TO_UTF8( aTitle );
 
-    m_filterBox->SetFocus();
+    m_sdbSizerOK->SetDefault();
 
     // this line fixes an issue on Linux Ubuntu using Unity (dialog not shown),
     // and works fine on all systems
@@ -64,19 +68,11 @@ EDA_LIST_DIALOG::EDA_LIST_DIALOG( EDA_DRAW_FRAME* aParent, const wxString& aTitl
 }
 
 
-void EDA_LIST_DIALOG::initDialog( const wxArrayString& aItemHeaders,
-                                  const wxString& aSelection)
+void EDA_LIST_DIALOG::initDialog( const wxArrayString& aItemHeaders, const wxString& aSelection)
 {
-
     for( unsigned i = 0; i < aItemHeaders.Count(); i++ )
-    {
-        wxListItem column;
-
-        column.SetId( i );
-        column.SetText( aItemHeaders.Item( i ) );
-
-        m_listBox->InsertColumn( i, column );
-    }
+        m_listBox->InsertColumn( i, aItemHeaders.Item( i ),
+                                 wxLIST_FORMAT_LEFT, DEFAULT_COL_WIDTHS[ i ] );
 
     InsertItems( *m_itemsListCp, 0 );
 
@@ -86,27 +82,36 @@ void EDA_LIST_DIALOG::initDialog( const wxArrayString& aItemHeaders,
         m_staticTextMsg->Show( false );
     }
 
-    for( unsigned col = 0; col < aItemHeaders.Count();  ++col )
-    {
-        m_listBox->SetColumnWidth( col, wxLIST_AUTOSIZE );
-        int columnwidth = m_listBox->GetColumnWidth( col );
-        m_listBox->SetColumnWidth( col, wxLIST_AUTOSIZE_USEHEADER );
-        int headerwidth = m_listBox->GetColumnWidth( col );
-        m_listBox->SetColumnWidth( col, std::max( columnwidth, headerwidth ) );
-    }
-
-    if( !!aSelection )
+    if( !aSelection.IsEmpty() )
     {
         for( unsigned row = 0; row < m_itemsListCp->size(); ++row )
         {
             if( (*m_itemsListCp)[row][0] == aSelection )
             {
                 m_listBox->SetItemState( row, wxLIST_STATE_SELECTED, wxLIST_STATE_SELECTED );
+
+                // Set to a small size so EnsureVisible() won't be foiled by later additions.
+                // ListBox will expand to fit later.
+                m_listBox->SetSize( m_listBox->GetSize().GetX(), 100 );
                 m_listBox->EnsureVisible( row );
+
                 break;
             }
         }
     }
+}
+
+
+void EDA_LIST_DIALOG::SetListLabel( const wxString& aLabel )
+{
+    m_listLabel->SetLabel( aLabel );
+    m_listBox->SetSingleStyle( wxLC_NO_HEADER, true );
+}
+
+
+void EDA_LIST_DIALOG::SetOKLabel( const wxString& aLabel )
+{
+    m_sdbSizerOK->SetLabel( aLabel );
 }
 
 
@@ -129,8 +134,7 @@ void EDA_LIST_DIALOG::textChangeInFilterBox( wxCommandEvent& event )
         }
     }
 
-    if( m_sortList )
-        sortList();
+    sortList();
 }
 
 
@@ -177,30 +181,30 @@ void EDA_LIST_DIALOG::InsertItems( const std::vector< wxArrayString >& itemList,
     {
         wxASSERT( (int) itemList[row].GetCount() == m_listBox->GetColumnCount() );
 
-        long itemIndex = 0;
         for( unsigned col = 0; col < itemList[row].GetCount(); col++ )
         {
+            wxListItem info;
+            info.m_itemId = row + position;
+            info.m_col = col;
+            info.m_text = itemList[row].Item( col );
+            info.m_width = DEFAULT_COL_WIDTHS[ col ];
+            info.m_mask = wxLIST_MASK_TEXT | wxLIST_MASK_WIDTH;
 
             if( col == 0 )
             {
-                itemIndex = m_listBox->InsertItem( row+position, itemList[row].Item( col ) );
-                m_listBox->SetItemPtrData( itemIndex, wxUIntPtr( &itemList[row].Item( col ) ) );
+                info.m_data = wxUIntPtr( &itemList[row].Item( col ) );
+                info.m_mask |= wxLIST_MASK_DATA;
+
+                m_listBox->InsertItem( info );
             }
             else
             {
-                m_listBox->SetItem( itemIndex, col, itemList[row].Item( col ) );
+                m_listBox->SetItem( info );
             }
         }
     }
 
-    if( m_sortList )
-        sortList();
-}
-
-
-void EDA_LIST_DIALOG::onCancelClick( wxCommandEvent& event )
-{
-    EndModal( wxID_CANCEL );
+    sortList();
 }
 
 
@@ -222,18 +226,6 @@ void EDA_LIST_DIALOG::onListItemActivated( wxListEvent& event )
 }
 
 
-void EDA_LIST_DIALOG::onOkClick( wxCommandEvent& event )
-{
-    EndModal( wxID_OK );
-}
-
-
-void EDA_LIST_DIALOG::onClose( wxCloseEvent& event )
-{
-    EndModal( wxID_CANCEL );
-}
-
-
 /* Sort alphabetically, case insensitive.
  */
 static int wxCALLBACK myCompareFunction( wxIntPtr aItem1, wxIntPtr aItem2,
@@ -242,7 +234,7 @@ static int wxCALLBACK myCompareFunction( wxIntPtr aItem1, wxIntPtr aItem2,
     wxString* component1Name = (wxString*) aItem1;
     wxString* component2Name = (wxString*) aItem2;
 
-    return StrNumCmp( *component1Name, *component2Name, INT_MAX, true );
+    return StrNumCmp( *component1Name, *component2Name, true );
 }
 
 

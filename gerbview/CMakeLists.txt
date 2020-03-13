@@ -7,56 +7,48 @@ add_definitions(-DGERBVIEW)
 
 include_directories( BEFORE ${INC_BEFORE} )
 include_directories(
-    ../pcbnew
+    ${CMAKE_SOURCE_DIR}/pcbnew
     dialogs
-    ../3d-viewer
-    ../polygon
+    ${CMAKE_SOURCE_DIR}/common
+    ${CMAKE_SOURCE_DIR}/3d-viewer
     ${INC_AFTER}
     )
 
 
 set( DIALOGS_SRCS
-    dialogs/gerbview_dialog_display_options_frame_base.cpp
-    dialogs/gerbview_dialog_display_options_frame.cpp
+    dialogs/panel_gerbview_display_options.cpp
+    dialogs/panel_gerbview_display_options_base.cpp
+    dialogs/panel_gerbview_settings.cpp
+    dialogs/panel_gerbview_settings_base.cpp
     dialogs/dialog_layers_select_to_pcb_base.cpp
-    dialogs/dialog_print_using_printer.cpp
-    dialogs/dialog_print_using_printer_base.cpp
+    dialogs/dialog_print_gerbview.cpp
     dialogs/dialog_select_one_pcb_layer.cpp
-    dialogs/dialog_show_page_borders.cpp
-    dialogs/dialog_show_page_borders_base.cpp
     )
 
 set( GERBVIEW_SRCS
-    block.cpp
-    class_am_param.cpp
-    class_aperture_macro.cpp
-    class_DCodeSelectionbox.cpp
-    class_gbr_screen.cpp
-    class_gbr_layout.cpp
-    class_gerber_file_image.cpp
-    class_gerber_file_image_list.cpp
-    class_gerber_draw_item.cpp
-    class_gerbview_layer_widget.cpp
-    class_gbr_layer_box_selector.cpp
-    class_X2_gerber_attributes.cpp
+    am_param.cpp
+    am_primitive.cpp
+    DCodeSelectionbox.cpp
+    gbr_screen.cpp
+    gbr_layout.cpp
+    gerber_file_image.cpp
+    gerber_file_image_list.cpp
+    gerber_draw_item.cpp
+    gerbview_layer_widget.cpp
+    gerbview_printout.cpp
+    gbr_layer_box_selector.cpp
+    X2_gerber_attributes.cpp
     clear_gbr_drawlayers.cpp
-    controle.cpp
     dcode.cpp
-    draw_gerber_screen.cpp
     evaluate.cpp
     events_called_functions.cpp
     excellon_read_drill_file.cpp
     export_to_pcbnew.cpp
     files.cpp
-    gerbview_config.cpp
+    gerbview_settings.cpp
     gerbview_frame.cpp
-    hotkeys.cpp
     job_file_reader.cpp
-    locate.cpp
     menubar.cpp
-    onleftclick.cpp
-    onrightclick.cpp
-    printout_control.cpp
     readgerb.cpp
     rs274_read_XY_and_IJ_coordinates.cpp
     rs274d.cpp
@@ -68,20 +60,20 @@ set( GERBVIEW_SRCS
     gerbview_painter.cpp
 
     tools/gerbview_actions.cpp
-    tools/selection_tool.cpp
+    tools/gerbview_selection.cpp
+    tools/gerbview_selection_tool.cpp
     tools/gerbview_control.cpp
     gerber_collectors.cpp
     )
 
 set( GERBVIEW_EXTRA_SRCS
-    ../common/base_screen.cpp
-    ../common/base_units.cpp
-    ../common/eda_text.cpp
-    ../common/class_layer_box_selector.cpp
-    ../common/class_page_info.cpp
-    ../common/lset.cpp
-    ../common/settings.cpp
-    ../pcbnew/layer_widget.cpp
+    ${CMAKE_SOURCE_DIR}/common/base_screen.cpp
+    ${CMAKE_SOURCE_DIR}/common/base_units.cpp
+    ${CMAKE_SOURCE_DIR}/common/eda_text.cpp
+    ${CMAKE_SOURCE_DIR}/common/widgets/layer_box_selector.cpp
+    ${CMAKE_SOURCE_DIR}/common/lset.cpp
+    ${CMAKE_SOURCE_DIR}/pcbnew/layer_widget.cpp
+    ${CMAKE_SOURCE_DIR}/common/page_info.cpp
 )
 
 if( MINGW )
@@ -106,25 +98,25 @@ if( APPLE )
 endif()
 
 add_executable( gerbview WIN32 MACOSX_BUNDLE
-    ../common/single_top.cpp
-    ../common/pgm_base.cpp
+    ${CMAKE_SOURCE_DIR}/common/single_top.cpp
+    ${CMAKE_SOURCE_DIR}/common/pgm_base.cpp
     ${GERBVIEW_RESOURCES}
     )
-set_source_files_properties( ../common/single_top.cpp PROPERTIES
+set_source_files_properties( ${CMAKE_SOURCE_DIR}/common/single_top.cpp PROPERTIES
     COMPILE_DEFINITIONS "TOP_FRAME=FRAME_GERBER;BUILD_KIWAY_DLL"
     )
 target_link_libraries( gerbview
     #singletop  # replaces common, giving us restrictive control and link warnings.
     # There's way too much crap coming in from common yet.
-    common
-    bitmaps
     gal
+    common
+    nlohmann_json
     ${wxWidgets_LIBRARIES}
     )
 
 if( MAKE_LINK_MAPS )
     set_target_properties( gerbview PROPERTIES
-        LINK_FLAGS "${TO_LINKER},-cref ${TO_LINKER},-Map=gerbview.map" )
+        LINK_FLAGS "-Wl,-cref,-Map=gerbview.map" )
 endif()
 
 # the main gerbview program, in DSO form.
@@ -140,10 +132,8 @@ set_target_properties( gerbview_kiface PROPERTIES
     SUFFIX          ${KIFACE_SUFFIX}
     )
 target_link_libraries( gerbview_kiface
-    common
-    polygon
-    bitmaps
     gal
+    common
     ${wxWidgets_LIBRARIES}
     ${GDI_PLUS_LIBRARIES}
     )
@@ -154,8 +144,12 @@ set_source_files_properties( gerbview.cpp PROPERTIES
 
 if( MAKE_LINK_MAPS )
     set_target_properties( gerbview_kiface PROPERTIES
-        LINK_FLAGS "${TO_LINKER},-cref ${TO_LINKER},-Map=_gerbview.kiface.map" )
+        LINK_FLAGS "-Wl,-cref,-Map=_gerbview.kiface.map" )
 endif()
+
+target_include_directories( gerbview_kiface PRIVATE
+    $<TARGET_PROPERTY:nlohmann_json,INTERFACE_INCLUDE_DIRECTORIES>
+    )
 
 # if building gerbview, then also build gerbview_kiface if out of date.
 add_dependencies( gerbview gerbview_kiface )
@@ -163,7 +157,7 @@ add_dependencies( gerbview gerbview_kiface )
 # these 2 binaries are a matched set, keep them together
 if( APPLE )
     set_target_properties( gerbview PROPERTIES
-        MACOSX_BUNDLE_INFO_PLIST ${CMAKE_CURRENT_SOURCE_DIR}/Info.plist
+        MACOSX_BUNDLE_INFO_PLIST ${PROJECT_BINARY_DIR}/gerbview/Info.plist
         )
 
     # puts binaries into the *.app bundle while linking

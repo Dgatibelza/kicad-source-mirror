@@ -1,7 +1,7 @@
 /*
  * This program source code file is part of KiCad, a free EDA CAD application.
  *
- * Copyright (C) 2017 KiCad Developers, see AUTHORS.txt for contributors.
+ * Copyright (C) 2017-2018 KiCad Developers, see AUTHORS.txt for contributors.
  *
  * This program is free software; you can redistribute it and/or
  * modify it under the terms of the GNU General Public License
@@ -27,7 +27,7 @@
 #include <wx/wx.h>
 
 /**
- * Class representing a row indicator icon for use in
+ * representing a row indicator icon for use in
  * places like the layer widget
  */
 class INDICATOR_ICON: public wxPanel
@@ -78,8 +78,7 @@ public:
      * @param aID the ID to use for the widgets - events will have
      * this ID.
      */
-    INDICATOR_ICON( wxWindow* aParent,
-                   ICON_PROVIDER& aIconProvider,
+    INDICATOR_ICON( wxWindow* aParent, ICON_PROVIDER& aIconProvider,
                    ICON_ID aInitialIcon, int aID );
 
     /**
@@ -121,20 +120,27 @@ public:
     enum STATE
     {
         OFF,    ///> Row "off" or "deselected"
+        DIMMED, ///> Row "dimmed"
         ON,     ///> Row "on" or "selected"
+        UP,     ///> Row above design alpha
+        DOWN,   ///> Row below design alpha
     };
 
     /**
      * @param aAlt false: normal icons (blue arrow/blank), true:
      * alternative icons (blue arrow/green diamond)
      */
-    ROW_ICON_PROVIDER( bool aAlt );
+    ROW_ICON_PROVIDER( int aSize );
 
     ///> @copydoc INDICATOR_ICON::ICON_PROVIDER::GetIndicatorIcon()
     const wxBitmap& GetIndicatorIcon( INDICATOR_ICON::ICON_ID aIconId ) const override;
 
 private:
-    bool m_alt;
+    wxBitmap m_blankBitmap;
+    wxBitmap m_rightArrowBitmap;
+    wxBitmap m_upArrowBitmap;
+    wxBitmap m_downArrowBitmap;
+    wxBitmap m_dotBitmap;
 };
 
 

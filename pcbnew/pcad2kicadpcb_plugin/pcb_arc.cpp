@@ -3,7 +3,7 @@
  *
  * Copyright (C) 2007, 2008 Lubo Racko <developer@lura.sk>
  * Copyright (C) 2007, 2008, 2012-2013 Alexander Lunev <al.lunev@yahoo.com>
- * Copyright (C) 2012 KiCad Developers, see CHANGELOG.TXT for contributors.
+ * Copyright (C) 2012-2020 KiCad Developers, see CHANGELOG.TXT for contributors.
  *
  * This program is free software; you can redistribute it and/or
  * modify it under the terms of the GNU General Public License
@@ -28,9 +28,9 @@
  */
 
 #include <wx/wx.h>
-#include <wx/config.h>
 
 #include <common.h>
+#include <math/util.h>      // for KiROUND
 #include <trigo.h>
 
 #include <pcb_arc.h>
@@ -52,10 +52,10 @@ PCB_ARC::~PCB_ARC()
 }
 
 
-void PCB_ARC::Parse( XNODE*     aNode,
-                     int        aLayer,
-                     wxString   aDefaultMeasurementUnit,
-                     wxString   aActualConversion )
+void PCB_ARC::Parse( XNODE*          aNode,
+                     int             aLayer,
+                     const wxString& aDefaultMeasurementUnit,
+                     const wxString& aActualConversion )
 {
     XNODE*      lNode;
     double      a = 0.0;
@@ -160,8 +160,8 @@ void PCB_ARC::AddToModule( MODULE* aModule )
 {
     if( IsNonCopperLayer( m_KiCadLayer ) )
     {
-        EDGE_MODULE* arc = new EDGE_MODULE( aModule, S_ARC );
-        aModule->GraphicalItemsList().PushBack( arc );
+        EDGE_MODULE* arc = new EDGE_MODULE( aModule, ( IsCircle() ? S_CIRCLE : S_ARC ) );
+        aModule->Add( arc );
 
         arc->SetAngle( -m_angle );
         arc->m_Start0   = wxPoint( m_positionX, m_positionY );
@@ -179,15 +179,20 @@ void PCB_ARC::AddToBoard()
 {
     DRAWSEGMENT* dseg = new DRAWSEGMENT( m_board );
 
-    m_board->Add( dseg, ADD_APPEND );
+    m_board->Add( dseg, ADD_MODE::APPEND );
 
-    dseg->SetShape( S_ARC );
-    dseg->SetTimeStamp( m_timestamp );
+    dseg->SetShape( IsCircle() ? S_CIRCLE : S_ARC );
     dseg->SetLayer( m_KiCadLayer );
     dseg->SetStart( wxPoint( m_positionX, m_positionY ) );
     dseg->SetEnd( wxPoint( m_startX, m_startY ) );
     dseg->SetAngle( -m_angle );
     dseg->SetWidth( m_width );
+}
+
+
+bool PCB_ARC::IsCircle()
+{
+    return ( m_angle == 3600 );
 }
 
 } // namespace PCAD2KICAD

@@ -1,8 +1,8 @@
 /*
  * This program source code file is part of KiCad, a free EDA CAD application.
  *
- * Copyright (C) 2017 Jean-Pierre Charras, jp.charras at wanadoo.fr
- * Copyright (C) 1992-2017 KiCad Developers, see AUTHORS.txt for contributors.
+ * Copyright (C) 2018 Jean-Pierre Charras, jp.charras at wanadoo.fr
+ * Copyright (C) 1992-2020 KiCad Developers, see AUTHORS.txt for contributors.
  *
  * This program is free software; you can redistribute it and/or
  * modify it under the terms of the GNU General Public License
@@ -30,15 +30,16 @@
 #ifndef PAD_H_
 #define PAD_H_
 
-
-#include <class_board_item.h>
-#include <class_board_connected_item.h>
-#include <pad_shapes.h>
-#include <PolyLine.h>
-#include <config_params.h>       // PARAM_CFG_ARRAY
 #include "zones.h"
+#include <board_connected_item.h>
+#include <class_board_item.h>
+#include <convert_to_biu.h>
+#include <geometry/shape_poly_set.h>
+#include <pad_shapes.h>
+#include <pcbnew.h>
 
 class DRAWSEGMENT;
+class PARAM_CFG;
 
 enum CUST_PAD_SHAPE_IN_ZONE
 {
@@ -48,7 +49,6 @@ enum CUST_PAD_SHAPE_IN_ZONE
 
 class LINE_READER;
 class EDA_3D_CANVAS;
-class EDA_DRAW_PANEL;
 class MODULE;
 class EDGE_MODULE;
 class TRACK;
@@ -57,14 +57,12 @@ class MSG_PANEL_INFO;
 namespace KIGFX
 {
     class VIEW;
-};
+}
 
 // Helper class to store parameters used to draw a pad
 class PAD_DRAWINFO
 {
 public:
-    EDA_DRAW_PANEL* m_DrawPanel;  // the EDA_DRAW_PANEL used to draw a PAD ; can be null
-    GR_DRAWMODE m_DrawMode;       // the draw mode
     COLOR4D m_Color;              // color used to draw the pad shape , from pad layers and
                                   // visible layers
     COLOR4D m_HoleColor;          // color used to draw the pad hole
@@ -99,6 +97,8 @@ public:
     double m_ArcAngle;  /// angle of an arc, from its starting point, in 0.1 deg
     wxPoint m_Start;    /// is also the center of the circle and arc
     wxPoint m_End;      /// is also the start point of the arc
+    wxPoint m_Ctrl1;    /// Bezier Control point 1
+    wxPoint m_Ctrl2;    /// Bezier Control point 2
     std::vector<wxPoint> m_Poly;
 
     PAD_CS_PRIMITIVE( STROKE_T aShape ):
@@ -116,6 +116,13 @@ public:
      */
     void Move( wxPoint aMoveVector );
 
+    /**
+     * Rotates the primitive about a point
+     * @param aRotCentre center of rotation
+     * @param aAngle angle in tenths of degree
+     */
+    void Rotate( const wxPoint& aRotCentre, double aAngle );
+
     /** Export the PAD_CS_PRIMITIVE parameters to a DRAWSEGMENT
      * useful to draw a primitive shape
      * @param aTarget is the DRAWSEGMENT to initialize
@@ -123,8 +130,7 @@ public:
     void ExportTo( DRAWSEGMENT* aTarget );
 
     /** Export the PAD_CS_PRIMITIVE parameters to a EDGE_MODULE
-     * useful to convert a primitive shape to a EDGE_MODULE shape for edition
-     * in footprint editor
+     * useful to convert a primitive shape to a EDGE_MODULE shape for editing in footprint editor
      * @param aTarget is the EDGE_MODULE to initialize
      */
     void ExportTo( EDGE_MODULE* aTarget );
@@ -151,13 +157,12 @@ public:
     static LSET ConnSMDMask();      ///< layer set for a SMD pad on Front layer
                                     ///< used for edge board connectors
     static LSET UnplatedHoleMask(); ///< layer set for a mechanical unplated through hole pad
+    static LSET ApertureMask();     ///< layer set for an aperture pad
 
     static inline bool ClassOf( const EDA_ITEM* aItem )
     {
         return aItem && PCB_PAD_T == aItem->Type();
     }
-
-    D_PAD* Next() const       { return static_cast<D_PAD*>( Pnext ); }
 
     MODULE* GetParent() const { return (MODULE*) m_Parent; }
 
@@ -167,7 +172,7 @@ public:
      * as aMasterPad
      * @param aMasterPad = the template pad
      */
-    void ImportSettingsFromMaster( const D_PAD& aMasterPad );
+    void ImportSettingsFrom( const D_PAD& aMasterPad );
 
     /**
      * @return true if the pad has a footprint parent flipped
@@ -185,11 +190,27 @@ public:
     }
 
     /**
+     * Set the pad function (pin name in schematic)
+     */
+    void SetPinFunction( const wxString& aName )
+    {
+        m_pinFunction = aName;
+    }
+
+    /**
      * @return the pad name
      */
     const wxString& GetName() const
     {
         return m_name;
+    }
+
+    /**
+     * @return the pad function (pin name in schematic)
+     */
+    const wxString& GetPinFunction() const
+    {
+        return m_pinFunction;
     }
 
     /**
@@ -217,7 +238,7 @@ public:
     void SetShape( PAD_SHAPE_T aShape )         { m_padShape = aShape; m_boundingRadius = -1; }
 
     void SetPosition( const wxPoint& aPos ) override { m_Pos = aPos; }
-    const wxPoint& GetPosition() const override { return m_Pos; }
+    const wxPoint GetPosition() const override { return m_Pos; }
 
     /**
      * Function GetAnchorPadShape
@@ -256,6 +277,16 @@ public:
         m_boundingRadius = -1;
     }
 
+    /**
+     * @return true if the pad is on any copper layer, false otherwise.
+     * pads can be only on tech layers to build special pads.
+     * they are therefore not always on a copper layer
+     */
+    bool IsOnCopperLayer() const override
+    {
+        return ( GetLayerSet() & LSET::AllCuMask() ) != 0;
+    }
+
     void SetY( int y )                          { m_Pos.y = y; }
     void SetX( int x )                          { m_Pos.x = x; }
 
@@ -285,13 +316,20 @@ public:
      *   a thick segment
      *   a filled circle or ring ( if thickness == 0, this is a filled circle, else a ring)
      *   a arc
+     *   a curve
      */
-    void AddPrimitive( const SHAPE_POLY_SET& aPoly, int aThickness );  ///< add a polygonal basic shape
-    void AddPrimitive( const std::vector<wxPoint>& aPoly, int aThickness );  ///< add a polygonal basic shape
-    void AddPrimitive( wxPoint aStart, wxPoint aEnd, int aThickness ); ///< segment basic shape
-    void AddPrimitive( wxPoint aCenter, int aRadius, int aThickness ); ///< ring or circle basic shape
-    void AddPrimitive( wxPoint aCenter, wxPoint aStart,
-                        int aArcAngle, int aThickness );    ///< arc basic shape
+    void AddPrimitivePoly( const SHAPE_POLY_SET& aPoly, int aThickness,
+            bool aMergePrimitives = true ); ///< add a polygonal basic shape
+    void AddPrimitivePoly( const std::vector<wxPoint>& aPoly, int aThickness,
+            bool aMergePrimitives = true ); ///< add a polygonal basic shape
+    void AddPrimitiveSegment( wxPoint aStart, wxPoint aEnd, int aThickness,
+            bool aMergePrimitives = true ); ///< segment basic shape
+    void AddPrimitiveCircle( wxPoint aCenter, int aRadius, int aThickness,
+            bool aMergePrimitives = true ); ///< ring or circle basic shape
+    void AddPrimitiveArc( wxPoint aCenter, wxPoint aStart, int aArcAngle, int aThickness,
+            bool aMergePrimitives = true ); ///< arc basic shape
+    void AddPrimitiveCurve( wxPoint aStart, wxPoint aEnd, wxPoint aCtrl1, wxPoint aCtrl2,
+            int aThickness, bool aMergePrimitives = true ); ///< curve basic shape
 
 
     bool GetBestAnchorPosition( VECTOR2I& aPos );
@@ -307,8 +345,7 @@ public:
      * (default = 32)
      * Note: The corners coordinates are relative to the pad position, orientation 0,
      */
-    bool MergePrimitivesAsPolygon( SHAPE_POLY_SET * aMergedPolygon = NULL,
-                                    int aCircleToSegmentsCount = 32 );
+    bool MergePrimitivesAsPolygon( SHAPE_POLY_SET* aMergedPolygon = NULL );
 
     /**
      * clear the basic shapes list
@@ -340,7 +377,7 @@ public:
      */
     const SHAPE_POLY_SET& GetCustomShapeAsPolygon() const { return m_customShapeAsPolygon; }
 
-    void Flip( const wxPoint& aCentre ) override;
+    void Flip( const wxPoint& aCentre, bool aFlipLeftRight ) override;
 
     /**
      * Flip the basic shapes, in custom pads
@@ -348,11 +385,25 @@ public:
     void FlipPrimitives();
 
     /**
+     * Mirror the primitives about a coordinate
+     *
+     * @param aX the x coordinate about which to mirror
+     */
+    void MirrorXPrimitives( int aX );
+
+    /**
      * Import to the basic shape list
      * @return true if OK, false if issues
      * (more than one polygon to build the polygon shape list)
      */
     bool SetPrimitives( const std::vector<PAD_CS_PRIMITIVE>& aPrimitivesList );
+
+    /**
+     * Add to the basic shape list
+     * @return true if OK, false if issues
+     * (more than one polygon to build the polygon shape list)
+     */
+    bool AddPrimitives( const std::vector<PAD_CS_PRIMITIVE>& aPrimitivesList );
 
 
     /**
@@ -397,6 +448,13 @@ public:
     void SetAttribute( PAD_ATTR_T aAttribute );
     PAD_ATTR_T GetAttribute() const             { return m_Attribute; }
 
+    void SetProperty( PAD_PROP_T aProperty );
+    PAD_PROP_T GetProperty() const              { return m_Property; }
+
+    // We don't currently have an attribute for APERTURE, and adding one will change the file
+    // format, so for now just infer a copper-less pad to be an APERTURE pad.
+    bool IsAperturePad() const                  { return ( m_layerMask & LSET::AllCuMask() ).none(); }
+
     void SetPadToDieLength( int aLength )       { m_LengthPadToDie = aLength; }
     int GetPadToDieLength() const               { return m_LengthPadToDie; }
 
@@ -420,17 +478,14 @@ public:
      * Circles and arcs are approximated by segments
      * @param aCornerBuffer = a buffer to store the polygon
      * @param aClearanceValue = the clearance around the pad
-     * @param aCircleToSegmentsCount = the number of segments to approximate a circle
-     * @param aCorrectionFactor = the correction to apply to circles radius to keep
-     * clearance when the circle is approximated by segment bigger or equal
-     * to the real clearance value (usually near from 1.0)
-    */
-    void TransformShapeWithClearanceToPolygon( SHAPE_POLY_SET& aCornerBuffer,
-                                               int aClearanceValue,
-                                               int aCircleToSegmentsCount,
-                                               double aCorrectionFactor ) const;
+     * @param aMaxError = Maximum error from true when converting arcs
+     * @param ignoreLineWidth = used for edge cut items where the line width is only
+     * for visualization
+     */
+    void TransformShapeWithClearanceToPolygon( SHAPE_POLY_SET& aCornerBuffer, int aClearanceValue,
+            int aMaxError = ARC_HIGH_DEF, bool ignoreLineWidth = false ) const override;
 
-     /**
+    /**
      * Function GetClearance
      * returns the clearance in internal units.  If \a aItem is not NULL then the
      * returned clearance is the greater of this object's clearance and
@@ -447,27 +502,42 @@ public:
      * Function GetSolderMaskMargin
      * @return the margin for the solder mask layer
      * usually > 0 (mask shape bigger than pad
-     * value is
+     * For pads also on copper layers, the value (used to build a default shape) is
      * 1 - the local value
-     * 2 - if null, the parent footprint value
-     * 1 - if null, the global value
+     * 2 - if 0, the parent footprint value
+     * 3 - if 0, the global value
+     * For pads NOT on copper layers, the value is the local value because there is
+     * not default shape to build
      */
     int GetSolderMaskMargin() const;
 
     /**
      * Function GetSolderPasteMargin
      * @return the margin for the solder mask layer
-     * usually < 0 (mask shape smaller than pad
+     * usually < 0 (mask shape smaller than pad)
      * because the margin can be dependent on the pad size, the margin has a x and a y value
-     * value is
+     *
+     * For pads also on copper layers, the value (used to build a default shape) is
      * 1 - the local value
-     * 2 - if null, the parent footprint value
-     * 1 - if null, the global value
-     */
+     * 2 - if 0, the parent footprint value
+     * 3 - if 0, the global value
+     *
+     * For pads NOT on copper layers, the value is the local value because there is
+     * not default shape to build
+    */
     wxSize GetSolderPasteMargin() const;
 
-    void SetZoneConnection( ZoneConnection aType ) { m_ZoneConnection = aType; }
-    ZoneConnection GetZoneConnection() const;
+    void SetZoneConnection( ZONE_CONNECTION aType )
+    {
+        m_ZoneConnection = aType;
+    }
+
+    ZONE_CONNECTION GetZoneConnection() const;
+
+    ZONE_CONNECTION GetLocalZoneConnection() const
+    {
+        return m_ZoneConnection;
+    }
 
     void SetThermalWidth( int aWidth ) { m_ThermalWidth = aWidth; }
     int GetThermalWidth() const;
@@ -475,21 +545,17 @@ public:
     void SetThermalGap( int aGap ) { m_ThermalGap = aGap; }
     int GetThermalGap() const;
 
-    /* drawing functions */
-    void Draw( EDA_DRAW_PANEL* aPanel, wxDC* aDC,
-               GR_DRAWMODE aDrawMode, const wxPoint& aOffset = ZeroOffset ) override;
+    void Print( PCB_BASE_FRAME* aFrame, wxDC* aDC, const wxPoint& aOffset = ZeroOffset ) override;
 
     /**
-     * Function DrawShape
-     * basic function to draw a pad.
+     * Function PrintShape
+     * basic function to print a pad.
      * <p>
-     * This function is used by Draw after calculation of parameters (color, ) final
-     * orientation transforms are set. It can also be called to draw a pad on any panel
-     * even if this panel is not a EDA_DRAW_PANEL for instance on a wxPanel inside the
-     * pad editor.
+     * This function is used by Print after calculation of parameters (color, ) final
+     * orientation transforms are set.
      * </p>
      */
-    void DrawShape( EDA_RECT* aClipBox, wxDC* aDC, PAD_DRAWINFO& aDrawInfo );
+    void PrintShape( wxDC* aDC, PAD_DRAWINFO& aDrawInfo );
 
     /**
      * Function BuildPadPolygon
@@ -525,6 +591,12 @@ public:
     int GetRoundRectCornerRadius( const wxSize& aSize ) const;
 
     /**
+     * Set the rounded rectangle radius ratio based on a given radius
+     * @param aRadius = desired radius of curvature
+     */
+    void SetRoundRectCornerRadius( double aRadius );
+
+    /**
      * Function BuildPadShapePolygon
      * Build the Corner list of the polygonal shape,
      * depending on shape, extra size (clearance ...) pad and orientation
@@ -538,14 +610,10 @@ public:
      *              value > 0: inflate, < 0 deflate, = 0 : no change
      *              the clearance can have different values for x and y directions
      *              (relative to the pad)
-     * @param aSegmentsPerCircle = number of segments to approximate a circle
-     *              (used for round and oblong shapes only (16 to 32 is a good value)
-     * @param aCorrectionFactor = the correction to apply to circles radius to keep
-     *        the pad size/clearance when the arcs are approximated by segments
+     * @param aError = Maximum deviation of an arc from the polygon segment
      */
-    void BuildPadShapePolygon( SHAPE_POLY_SET& aCornerBuffer,
-                               wxSize aInflateValue, int aSegmentsPerCircle,
-                               double aCorrectionFactor ) const;
+    void BuildPadShapePolygon(
+            SHAPE_POLY_SET& aCornerBuffer, wxSize aInflateValue, int aError = ARC_HIGH_DEF ) const;
 
     /**
      * Function BuildPadDrillShapePolygon
@@ -554,12 +622,11 @@ public:
      * @param aCornerBuffer = a buffer to fill.
      * @param aInflateValue = the clearance or margin value.
      *              value > 0: inflate, < 0 deflate, = 0 : no change
-     * @param aSegmentsPerCircle = number of segments to approximate a circle
-     *              (used for round and oblong shapes only(16 to 32 is a good value)
+     * @param aError = Maximum deviation of an arc from the polygon approximation
      * @return false if the pad has no hole, true otherwise
      */
-    bool BuildPadDrillShapePolygon( SHAPE_POLY_SET& aCornerBuffer,
-                                    int aInflateValue, int aSegmentsPerCircle ) const;
+    bool BuildPadDrillShapePolygon(
+            SHAPE_POLY_SET& aCornerBuffer, int aInflateValue, int aError = ARC_HIGH_DEF ) const;
 
     /**
      * Function BuildSegmentFromOvalShape
@@ -626,21 +693,62 @@ public:
     }
 
     /**
+     * has meaning only for chamfered rect pads
+     * @return the ratio between the smaller Y or Y size and the radius
+     * of the rounded corners.
+     * Cannot be > 0.5
+     */
+    double GetChamferRectRatio() const
+    {
+        return m_padChamferRectScale;
+    }
+
+    /**
+     * has meaning only for chamfered rect pads
+     * Set the ratio between the smaller Y or Y size and the radius
+     * of the rounded corners.
+     * Cannot be < 0.5 and obviously must be > 0
+     */
+    void SetChamferRectRatio( double aChamferScale )
+    {
+        if( aChamferScale < 0.0 )
+            aChamferScale = 0.0;
+
+        m_padChamferRectScale = std::min( aChamferScale, 0.5 );
+    }
+
+    /**
+     * has meaning only for chamfered rect pads
+     * @return the position of the chamfer for a 0 orientation
+     */
+    int GetChamferPositions() const { return m_chamferPositions; }
+
+    /**
+     * has meaning only for chamfered rect pads
+     * set the position of the chamfer for a 0 orientation, one of
+     * RECT_CHAMFER_TOP_LEFT, RECT_CHAMFER_TOP_RIGHT,
+     * RECT_CHAMFER_BOTTOM_LEFT, RECT_CHAMFER_BOTTOM_RIGHT
+     */
+    void SetChamferPositions( int aChamferPositions )
+    {
+        m_chamferPositions = aChamferPositions;
+    }
+
+    /**
      * Function GetSubRatsnest
      * @return int - the netcode
      */
     int GetSubRatsnest() const                  { return m_SubRatsnest; }
     void SetSubRatsnest( int aSubRatsnest )     { m_SubRatsnest = aSubRatsnest; }
 
-    void GetMsgPanelInfo( std::vector< MSG_PANEL_ITEM >& aList ) override;
+    void GetMsgPanelInfo( EDA_UNITS aUnits, std::vector<MSG_PANEL_ITEM>& aList ) override;
 
     bool IsOnLayer( PCB_LAYER_ID aLayer ) const override
     {
         return m_layerMask[aLayer];
     }
 
-    bool HitTest( const wxPoint& aPosition ) const override;
-
+    bool HitTest( const wxPoint& aPosition, int aAccuracy = 0 ) const override;
     bool HitTest( const EDA_RECT& aRect, bool aContained, int aAccuracy = 0 ) const override;
 
     wxString GetClass() const override
@@ -654,6 +762,7 @@ public:
     ///> Set absolute coordinates.
     void SetDrawCoord();
 
+    //todo: Remove SetLocalCoord along with m_pos
     ///> Set relative coordinates.
     void SetLocalCoord();
 
@@ -672,7 +781,7 @@ public:
 
     void Rotate( const wxPoint& aRotCentre, double aAngle ) override;
 
-    wxString GetSelectMenuText() const override;
+    wxString GetSelectMenuText( EDA_UNITS aUnits ) const override;
 
     BITMAP_DEF GetMenuImage() const override;
 
@@ -694,19 +803,25 @@ public:
      * allow reading or writing of configuration file information directly into
      * this object.
      */
-    void AppendConfigs( PARAM_CFG_ARRAY* aResult );
+    void AppendConfigs( std::vector<PARAM_CFG*>* aResult );
 
     EDA_ITEM* Clone() const override;
 
     /**
      * same as Clone, but returns a D_PAD item.
-     * Useful mainly for pythons scripts, because Clone (virtual function)
-     * returns an EDA_ITEM.
+     * Useful mainly for python scripts, because Clone returns an EDA_ITEM.
      */
-    D_PAD* Duplicate() const
+    D_PAD* ClonePad() const
     {
         return (D_PAD*) Clone();
     }
+
+    /**
+     * A pad whose hole is the same size as the pad is a NPTH.  However, if the user
+     * fails to mark this correctly then the pad will become invisible on the board.
+     * This check allows us to special-case this error-condition.
+     */
+    bool PadShouldBeNPTH() const;
 
     virtual void ViewGetLayers( int aLayers[], int& aCount ) const override;
 
@@ -714,22 +829,7 @@ public:
 
     virtual const BOX2I ViewBBox() const override;
 
-    /**
-     * Function CopyNetlistSettings
-     * copies the netlist settings to \a aPad, and the net name.
-     * Used to copy some pad parameters when replacing a footprint by an other
-     * footprint when reading a netlist, or in exchange footprint dialog
-     *
-     * The netlist settings are all of the #D_PAD settings not define by a #D_PAD in
-     * a netlist.
-     * The copied settings are the net name and optionally include local clearance, etc.
-     * The pad physical geometry settings are not copied.
-     *
-     * @param aPad is the #D_PAD to copy the settings to.
-     * @param aCopyLocalSettings = false to copy only the net name
-     *   true to also copy local prms
-     */
-    void CopyNetlistSettings( D_PAD* aPad, bool aCopyLocalSettings );
+    virtual void SwapData( BOARD_ITEM* aImage ) override;
 
 #if defined(DEBUG)
     virtual void Show( int nestLevel, std::ostream& os ) const override { ShowDummy( os ); }
@@ -743,16 +843,18 @@ private:
      */
     int boundingRadius() const;
 
-    bool buildCustomPadPolygon( SHAPE_POLY_SET* aMergedPolygon,
-                                int aCircleToSegmentsCount );
+    bool buildCustomPadPolygon( SHAPE_POLY_SET* aMergedPolygon, int aError );
 
 private:    // Private variable members:
 
     // Actually computed and cached on demand by the accessor
-    mutable int m_boundingRadius;  ///< radius of the circle containing the pad shape
+    mutable int m_boundingRadius;   ///< radius of the circle containing the pad shape
 
-    wxString    m_name;
+    wxString    m_name;             ///< pad name (pin number in schematic)
 
+    wxString    m_pinFunction;      ///< pin function in schematic
+
+    // TODO: Remove m_Pos from Pad or make private.  View positions calculated from m_Pos0
     wxPoint     m_Pos;              ///< pad Position on board
 
     PAD_SHAPE_T m_padShape;         ///< Shape: PAD_SHAPE_CIRCLE, PAD_SHAPE_RECT,
@@ -791,6 +893,9 @@ private:    // Private variable members:
 
     double      m_padRoundRectRadiusScale;  ///< scaling factor from smallest m_Size coord
                                             ///< to corner radius, default 0.25
+    double      m_padChamferRectScale;      ///< scaling factor from smallest m_Size coord
+                                            ///< to chamfer value, default 0.25
+    int m_chamferPositions;                 ///< the positions of the chamfered position for a 0 orientation
 
     PAD_SHAPE_T m_anchorPadShape;         ///< for custom shaped pads: shape of pad anchor,
                                           ///< PAD_SHAPE_RECT, PAD_SHAPE_CIRCLE
@@ -822,6 +927,8 @@ private:    // Private variable members:
 
     PAD_ATTR_T  m_Attribute;        ///< PAD_ATTRIB_NORMAL, PAD_ATTRIB_SMD,
                                     ///< PAD_ATTRIB_CONN, PAD_ATTRIB_HOLE_NOT_PLATED
+    PAD_PROP_T  m_Property;         ///< property in fab files (BGA, FIDUCIAL, TEST POINT, CASTELLATED)
+
     double      m_Orient;           ///< in 1/10 degrees
 
     int         m_LengthPadToDie;   ///< Length net from pad to die, inside the package
@@ -839,7 +946,7 @@ private:    // Private variable members:
     double      m_LocalSolderPasteMarginRatio;  ///< Local solder mask margin ratio value of pad size
                                                 ///< The final margin is the sum of these 2 values
     /// how the connection to zone is made: no connection, thermal relief ...
-    ZoneConnection m_ZoneConnection;
+    ZONE_CONNECTION m_ZoneConnection;
 
     int         m_ThermalWidth;
     int         m_ThermalGap;

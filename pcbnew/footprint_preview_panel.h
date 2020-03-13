@@ -32,7 +32,7 @@
 #include <gal/gal_display_options.h>
 #include <lib_id.h>
 #include <kiway_player.h>
-#include <boost/optional.hpp>
+#include <core/optional.h>
 
 #include <widgets/footprint_preview_widget.h>
 
@@ -42,7 +42,6 @@ class IO_MGR;
 class BOARD;
 class FP_LOADER_THREAD;
 class FP_THREAD_IFACE;
-class COLORS_DESIGN_SETTINGS;
 
 
 /**
@@ -59,9 +58,9 @@ public:
 
     virtual ~FOOTPRINT_PREVIEW_PANEL( );
 
-    virtual void CacheFootprint( LIB_ID const& aFPID ) override;
+    virtual void CacheFootprint( const LIB_ID& aFPID ) override;
 
-    virtual void DisplayFootprint ( LIB_ID const& aFPID ) override;
+    virtual void DisplayFootprint( const LIB_ID& aFPID ) override;
 
     virtual void SetStatusHandler( FOOTPRINT_STATUS_HANDLER aHandler ) override;
 
@@ -70,32 +69,41 @@ public:
     static FOOTPRINT_PREVIEW_PANEL* New( KIWAY* aKiway, wxWindow* aParent );
 
 private:
-
-    struct CACHE_ENTRY {
-        LIB_ID fpid;
-        MODULE *module;
-        FOOTPRINT_STATUS status;
+    struct CACHE_ENTRY
+    {
+        LIB_ID                  fpid;
+        std::shared_ptr<MODULE> module;
+        FOOTPRINT_STATUS        status;
     };
 
-    FOOTPRINT_PREVIEW_PANEL(
-            KIWAY* aKiway, wxWindow* aParent,
-            KIGFX::GAL_DISPLAY_OPTIONS& aOpts, GAL_TYPE aGalType );
+    /**
+     * Create a new panel
+     *
+     * @param aKiway the connected KIWAY
+     * @param aParent the owning WX window
+     * @param aOpts the GAL options (ownership is assumed)
+     * @param aGalType the displayed GAL type
+     */
+    FOOTPRINT_PREVIEW_PANEL( KIWAY* aKiway, wxWindow* aParent,
+            std::unique_ptr<KIGFX::GAL_DISPLAY_OPTIONS> aOpts, GAL_TYPE aGalType );
 
 
-    virtual CACHE_ENTRY CacheAndReturn ( LIB_ID const& aFPID );
+    virtual CACHE_ENTRY CacheAndReturn( const LIB_ID& aFPID );
 
     void OnLoaderThreadUpdate( wxCommandEvent& aEvent );
 
-    void renderFootprint( MODULE *module );
+    void renderFootprint( std::shared_ptr<MODULE> aModule );
 
-    FP_LOADER_THREAD*                   m_loader;
-    std::shared_ptr<FP_THREAD_IFACE>    m_iface;
-    FOOTPRINT_STATUS_HANDLER            m_handler;
-    std::unique_ptr<BOARD>              m_dummyBoard;
-    std::unique_ptr<COLORS_DESIGN_SETTINGS>    m_colorsSettings;
+    FP_LOADER_THREAD*                m_loader;
+    std::shared_ptr<FP_THREAD_IFACE> m_iface;
+    FOOTPRINT_STATUS_HANDLER         m_handler;
 
-    LIB_ID      m_currentFPID;
-    bool        m_footprintDisplayed;
+    std::unique_ptr<BOARD>                      m_dummyBoard;
+    std::unique_ptr<KIGFX::GAL_DISPLAY_OPTIONS> m_displayOptions;
+
+    std::shared_ptr<MODULE> m_currentModule;
+    LIB_ID                  m_currentFPID;
+    bool                    m_footprintDisplayed;
 };
 
 #endif

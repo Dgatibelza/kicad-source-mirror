@@ -21,19 +21,19 @@
 
 #include <base_units.h> // God forgive me doing this...
 
-#include "pns_node.h"
-#include "pns_itemset.h"
-#include "pns_topology.h"
-#include "pns_meander_placer.h"
-#include "pns_router.h"
 #include "pns_debug_decorator.h"
+#include "pns_itemset.h"
+#include "pns_meander_placer.h"
+#include "pns_node.h"
+#include "pns_router.h"
+#include "pns_solid.h"
+#include "pns_topology.h"
 
 namespace PNS {
 
 MEANDER_PLACER::MEANDER_PLACER( ROUTER* aRouter ) :
     MEANDER_PLACER_BASE( aRouter )
 {
-    m_world = NULL;
     m_currentNode = NULL;
 
     // Init temporary variables (do not leave uninitialized members)
@@ -77,6 +77,8 @@ bool MEANDER_PLACER::Start( const VECTOR2I& aP, ITEM* aStartItem )
     m_world = Router()->GetWorld()->Branch();
     m_originLine = m_world->AssembleLine( m_initialSegment );
 
+    m_padToDieLenth = GetTotalPadToDieLength( m_originLine );
+
     TOPOLOGY topo( m_world );
     m_tunedPath = topo.AssembleTrivialPath( m_initialSegment );
 
@@ -89,9 +91,9 @@ bool MEANDER_PLACER::Start( const VECTOR2I& aP, ITEM* aStartItem )
 }
 
 
-int MEANDER_PLACER::origPathLength() const
+long long int MEANDER_PLACER::origPathLength() const
 {
-    int total = 0;
+    long long int total = m_padToDieLenth;
     for( const ITEM* item : m_tunedPath.CItems() )
     {
         if( const LINE* l = dyn_cast<const LINE*>( item ) )
@@ -110,7 +112,7 @@ bool MEANDER_PLACER::Move( const VECTOR2I& aP, ITEM* aEndItem )
 }
 
 
-bool MEANDER_PLACER::doMove( const VECTOR2I& aP, ITEM* aEndItem, int aTargetLength )
+bool MEANDER_PLACER::doMove( const VECTOR2I& aP, ITEM* aEndItem, long long int aTargetLength )
 {
     SHAPE_LINE_CHAIN pre, tuned, post;
 
@@ -133,7 +135,7 @@ bool MEANDER_PLACER::doMove( const VECTOR2I& aP, ITEM* aEndItem, int aTargetLeng
         m_result.AddCorner( s.B );
     }
 
-    int lineLen = origPathLength();
+    long long int lineLen = origPathLength();
 
     m_lastLength = lineLen;
     m_lastStatus = TUNED;
@@ -188,17 +190,41 @@ bool MEANDER_PLACER::doMove( const VECTOR2I& aP, ITEM* aEndItem, int aTargetLeng
 }
 
 
-bool MEANDER_PLACER::FixRoute( const VECTOR2I& aP, ITEM* aEndItem )
+bool MEANDER_PLACER::FixRoute( const VECTOR2I& aP, ITEM* aEndItem, bool aForceFinish )
 {
     if( !m_currentNode )
         return false;
 
     m_currentTrace = LINE( m_originLine, m_finalShape );
     m_currentNode->Add( m_currentTrace );
+    CommitPlacement();
 
-    Router()->CommitRouting( m_currentNode );
     return true;
 }
+
+
+bool MEANDER_PLACER::AbortPlacement()
+{
+    m_world->KillChildren();
+    return true;
+}
+
+
+bool MEANDER_PLACER::HasPlacedAnything() const
+{
+     return m_currentTrace.SegmentCount() > 0;
+}
+
+
+bool MEANDER_PLACER::CommitPlacement()
+{
+    if( m_currentNode )
+        Router()->CommitRouting( m_currentNode );
+
+    m_currentNode = NULL;
+    return true;
+}
+
 
 
 bool MEANDER_PLACER::CheckFit( MEANDER_SHAPE* aShape )
@@ -233,7 +259,7 @@ int MEANDER_PLACER::CurrentLayer() const
 }
 
 
-const wxString MEANDER_PLACER::TuningInfo() const
+const wxString MEANDER_PLACER::TuningInfo( EDA_UNITS aUnits ) const
 {
     wxString status;
 
@@ -252,9 +278,9 @@ const wxString MEANDER_PLACER::TuningInfo() const
         return _( "?" );
     }
 
-    status += LengthDoubleToString( (double) m_lastLength, false );
+    status += ::MessageTextFromValue( aUnits, m_lastLength, false );
     status += "/";
-    status += LengthDoubleToString( (double) m_settings.m_targetLength, false );
+    status += ::MessageTextFromValue( aUnits, m_settings.m_targetLength, false );
 
     return status;
 }

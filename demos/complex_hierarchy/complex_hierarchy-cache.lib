@@ -1,11 +1,11 @@
-EESchema-LIBRARY Version 2.3
+EESchema-LIBRARY Version 2.4
 #encoding utf-8
 #
-# +12C
+# complex_hierarchy_schlib_+12C
 #
-DEF +12C #PWR 0 0 Y Y 1 F P
+DEF complex_hierarchy_schlib_+12C #PWR 0 0 Y Y 1 F P
 F0 "#PWR" 0 -150 50 H I C CNN
-F1 "+12C" 0 150 50 H V C CNN
+F1 "complex_hierarchy_schlib_+12C" 0 150 50 H V C CNN
 F2 "" 0 0 60 H V C CNN
 F3 "" 0 0 60 H V C CNN
 DRAW
@@ -16,11 +16,11 @@ X +12C 1 0 0 0 U 50 50 1 1 W N
 ENDDRAW
 ENDDEF
 #
-# +12V
+# complex_hierarchy_schlib_+12V
 #
-DEF +12V #PWR 0 0 Y Y 1 F P
+DEF complex_hierarchy_schlib_+12V #PWR 0 0 Y Y 1 F P
 F0 "#PWR" 0 -150 50 H I C CNN
-F1 "+12V" 0 140 50 H V C CNN
+F1 "complex_hierarchy_schlib_+12V" 0 140 50 H V C CNN
 F2 "" 0 0 60 H V C CNN
 F3 "" 0 0 60 H V C CNN
 DRAW
@@ -31,41 +31,40 @@ X +12V 1 0 0 0 U 50 50 1 1 W N
 ENDDRAW
 ENDDEF
 #
-# -VAA
+# complex_hierarchy_schlib_-VAA
 #
-DEF -VAA #PWR 0 0 Y Y 1 F P
+DEF complex_hierarchy_schlib_-VAA #PWR 0 0 Y Y 1 F P
 F0 "#PWR" 0 100 20 H I C CNN
-F1 "-VAA" 0 100 30 H V C CNN
+F1 "complex_hierarchy_schlib_-VAA" 0 100 30 H V C CNN
 F2 "" 0 0 60 H V C CNN
 F3 "" 0 0 60 H V C CNN
 DRAW
-X -VAA 1 0 0 0 U 20 20 0 0 W N
 P 3 0 1 0 0 0 0 50 0 50 N
 P 7 0 1 0 0 80 30 50 -20 50 -30 50 0 80 0 80 0 80 F
+X -VAA 1 0 0 0 U 20 20 0 0 W N
 ENDDRAW
 ENDDEF
 #
-# 7805
+# complex_hierarchy_schlib_7805
 #
-DEF 7805 U 0 30 N Y 1 F N
+DEF complex_hierarchy_schlib_7805 U 0 20 Y Y 1 F N
 F0 "U" 150 -196 60 H V C CNN
-F1 "7805" 0 200 60 H V C CNN
+F1 "complex_hierarchy_schlib_7805" 0 200 60 H V C CNN
 F2 "" 0 0 60 H V C CNN
 F3 "" 0 0 60 H V C CNN
-ALIAS LM7805 LM7812 78L05
 DRAW
 S -200 -150 200 150 0 1 0 N
-X VI VI -400 50 200 R 40 40 1 1 I
-X VO VO 400 50 200 L 40 40 1 1 w
-X GND GND 0 -250 100 U 40 40 1 1 I
+X VO 1 400 50 200 L 30 40 1 1 w
+X GND 2 0 -250 100 U 30 40 1 1 I
+X VI 3 -400 50 200 R 30 40 1 1 I
 ENDDRAW
 ENDDEF
 #
-# C
+# complex_hierarchy_schlib_C
 #
-DEF C C 0 10 N Y 1 F N
+DEF complex_hierarchy_schlib_C C 0 10 N Y 1 F N
 F0 "C" 25 100 50 H V L CNN
-F1 "C" 25 -100 50 H V L CNN
+F1 "complex_hierarchy_schlib_C" 25 -100 50 H V L CNN
 F2 "" 38 -150 30 H V C CNN
 F3 "" 0 0 60 H V C CNN
 $FPLIST
@@ -83,11 +82,11 @@ X ~ 2 0 -150 110 U 40 40 1 1 P
 ENDDRAW
 ENDDEF
 #
-# CONN_2
+# complex_hierarchy_schlib_CONN_2
 #
-DEF CONN_2 P 0 40 Y N 1 F N
+DEF complex_hierarchy_schlib_CONN_2 P 0 40 Y N 1 F N
 F0 "P" -50 0 40 V V C CNN
-F1 "CONN_2" 50 0 40 V V C CNN
+F1 "complex_hierarchy_schlib_CONN_2" 50 0 40 V V C CNN
 F2 "" 0 0 60 H V C CNN
 F3 "" 0 0 60 H V C CNN
 DRAW
@@ -97,11 +96,11 @@ X PM 2 -350 -100 250 R 60 60 1 1 P I
 ENDDRAW
 ENDDEF
 #
-# CP
+# complex_hierarchy_schlib_CP
 #
-DEF CP C 0 10 N Y 1 F N
+DEF complex_hierarchy_schlib_CP C 0 10 N Y 1 F N
 F0 "C" 25 100 50 H V L CNN
-F1 "CP" 25 -100 50 H V L CNN
+F1 "complex_hierarchy_schlib_CP" 25 -100 50 H V L CNN
 F2 "" 38 -150 30 H V C CNN
 F3 "" 0 0 60 H V C CNN
 $FPLIST
@@ -125,11 +124,11 @@ X ~ 2 0 -150 110 U 40 40 1 1 P
 ENDDRAW
 ENDDEF
 #
-# D_Small
+# complex_hierarchy_schlib_D_Small
 #
-DEF D_Small D 0 10 N N 1 F N
+DEF complex_hierarchy_schlib_D_Small D 0 10 N N 1 F N
 F0 "D" -50 80 50 H V L CNN
-F1 "D_Small" -150 -80 50 H V L CNN
+F1 "complex_hierarchy_schlib_D_Small" -150 -80 50 H V L CNN
 F2 "" 0 0 60 V V C CNN
 F3 "" 0 0 60 V V C CNN
 $FPLIST
@@ -147,11 +146,11 @@ X A 2 100 0 70 L 50 50 1 1 P
 ENDDRAW
 ENDDEF
 #
-# GND
+# complex_hierarchy_schlib_GND
 #
-DEF GND #PWR 0 0 Y Y 1 F P
+DEF complex_hierarchy_schlib_GND #PWR 0 0 Y Y 1 F P
 F0 "#PWR" 0 -150 50 H I C CNN
-F1 "GND" 0 -123 30 H V C CNN
+F1 "complex_hierarchy_schlib_GND" 0 -123 30 H V C CNN
 F2 "" 0 0 60 H V C CNN
 F3 "" 0 0 60 H V C CNN
 DRAW
@@ -160,25 +159,25 @@ X GND 1 0 0 0 D 20 30 1 1 W N
 ENDDRAW
 ENDDEF
 #
-# HT
+# complex_hierarchy_schlib_HT
 #
-DEF HT #PWR 0 0 Y Y 1 F P
+DEF complex_hierarchy_schlib_HT #PWR 0 0 Y Y 1 F P
 F0 "#PWR" 0 120 50 H I C CNN
-F1 "HT" 0 90 50 H V C CNN
+F1 "complex_hierarchy_schlib_HT" 0 90 50 H V C CNN
 F2 "" 0 0 60 H V C CNN
 F3 "" 0 0 60 H V C CNN
 DRAW
-X HT 1 0 0 0 U 20 20 0 0 W N
 P 3 0 1 0 0 0 0 40 0 40 N
 P 6 0 1 0 0 40 20 20 0 70 -20 20 0 40 0 40 N
+X HT 1 0 0 0 U 20 20 0 0 W N
 ENDDRAW
 ENDDEF
 #
-# ICL7660
+# complex_hierarchy_schlib_ICL7660
 #
-DEF ICL7660 U 0 40 Y Y 1 F N
+DEF complex_hierarchy_schlib_ICL7660 U 0 40 Y Y 1 F N
 F0 "U" 200 400 70 H V L CNN
-F1 "ICL7660" 50 -450 70 H V L CNN
+F1 "complex_hierarchy_schlib_ICL7660" 50 -450 70 H V L CNN
 F2 "" 0 0 60 H V C CNN
 F3 "" 0 0 60 H V C CNN
 DRAW
@@ -193,32 +192,11 @@ X V+ 8 -50 650 300 D 60 60 1 1 W
 ENDDRAW
 ENDDEF
 #
-# LM358
+# complex_hierarchy_schlib_MPSA42
 #
-DEF LM358 U 0 20 Y Y 2 F N
-F0 "U" -50 200 60 H V L CNN
-F1 "LM358" -50 -250 60 H V L CNN
-F2 "" 0 0 60 H V C CNN
-F3 "" 0 0 60 H V C CNN
-ALIAS LMC6062 LMC6082 LM358N TL072 TL082
-DRAW
-P 4 0 1 6 -200 200 200 0 -200 -200 -200 200 f
-X V- 4 -100 -400 250 U 40 40 0 1 W
-X V+ 8 -100 400 250 D 40 40 0 1 W
-X ~ 1 500 0 300 L 40 40 1 1 O
-X - 2 -500 -100 300 R 40 40 1 1 I
-X + 3 -500 100 300 R 40 40 1 1 I
-X + 5 -500 100 300 R 40 40 2 1 I
-X - 6 -500 -100 300 R 40 40 2 1 I
-X ~ 7 500 0 300 L 40 40 2 1 O
-ENDDRAW
-ENDDEF
-#
-# MPSA42
-#
-DEF MPSA42 Q 0 40 Y N 1 F N
+DEF complex_hierarchy_schlib_MPSA42 Q 0 0 Y Y 1 F N
 F0 "Q" 150 -150 60 H V L CNN
-F1 "MPSA42" 150 150 60 H V L CNN
+F1 "complex_hierarchy_schlib_MPSA42" 150 150 60 H V L CNN
 F2 "TO92-CBE" 150 0 30 H I C CNN
 F3 "" 0 0 60 H V C CNN
 $FPLIST
@@ -231,17 +209,17 @@ P 3 0 1 10 0 75 0 -75 0 -75 N
 P 3 0 1 0 50 -50 0 0 0 0 N
 P 3 0 1 0 90 -90 100 -100 100 -100 N
 P 5 0 1 0 90 -90 70 -30 30 -70 90 -90 90 -90 F
-X B B -200 0 200 R 40 40 1 1 I
-X C C 100 200 100 D 40 40 1 1 P
-X E E 100 -200 100 U 40 40 1 1 P
+X E 1 100 -200 100 U 20 20 1 1 P
+X B 2 -200 0 200 R 20 20 1 1 I
+X C 3 100 200 100 D 20 20 1 1 P
 ENDDRAW
 ENDDEF
 #
-# MPSA92
+# complex_hierarchy_schlib_MPSA92
 #
-DEF MPSA92 Q 0 40 Y N 1 F N
+DEF complex_hierarchy_schlib_MPSA92 Q 0 0 Y Y 1 F N
 F0 "Q" 150 -150 60 H V L CNN
-F1 "MPSA92" 150 150 60 H V L CNN
+F1 "complex_hierarchy_schlib_MPSA92" 150 150 60 H V L CNN
 F2 "TO92-CBE" 150 0 30 H I C CNN
 F3 "" 0 0 60 H V C CNN
 $FPLIST
@@ -254,17 +232,17 @@ P 3 0 1 10 0 75 0 -75 0 -75 F
 P 3 0 1 0 25 -25 0 0 0 0 N
 P 3 0 1 0 100 -100 65 -65 65 -65 N
 P 5 0 1 0 25 -25 50 -75 75 -50 25 -25 25 -25 F
-X B B -200 0 200 R 40 40 1 1 I
-X C C 100 200 100 D 40 40 1 1 P
-X E E 100 -200 100 U 40 40 1 1 P
+X E 1 100 -200 100 U 20 20 1 1 P
+X B 2 -200 0 200 R 20 20 1 1 I
+X C 3 100 200 100 D 20 20 1 1 P
 ENDDRAW
 ENDDEF
 #
-# POT
+# complex_hierarchy_schlib_POT
 #
-DEF POT RV 0 40 Y N 1 F N
+DEF complex_hierarchy_schlib_POT RV 0 40 Y N 1 F N
 F0 "RV" 0 -100 50 H V C CNN
-F1 "POT" 0 0 50 H V C CNN
+F1 "complex_hierarchy_schlib_POT" 0 0 50 H V C CNN
 F2 "" 0 0 60 H V C CNN
 F3 "" 0 0 60 H V C CNN
 DRAW
@@ -276,24 +254,24 @@ X 3 3 250 0 100 L 40 40 1 1 P
 ENDDRAW
 ENDDEF
 #
-# PWR_FLAG
+# complex_hierarchy_schlib_PWR_FLAG
 #
-DEF PWR_FLAG #FLG 0 0 N N 1 F P
+DEF complex_hierarchy_schlib_PWR_FLAG #FLG 0 0 N N 1 F P
 F0 "#FLG" 0 95 50 H I C CNN
-F1 "PWR_FLAG" 0 180 50 H V C CNN
+F1 "complex_hierarchy_schlib_PWR_FLAG" 0 180 50 H V C CNN
 F2 "" 0 0 60 H V C CNN
 F3 "" 0 0 60 H V C CNN
 DRAW
-X pwr 1 0 0 0 U 20 20 0 0 w
 P 6 0 1 0 0 0 0 50 -75 100 0 150 75 100 0 50 N
+X pwr 1 0 0 0 U 20 20 0 0 w
 ENDDRAW
 ENDDEF
 #
-# R
+# complex_hierarchy_schlib_R
 #
-DEF R R 0 0 N Y 1 F N
+DEF complex_hierarchy_schlib_R R 0 0 N Y 1 F N
 F0 "R" 80 0 50 V V C CNN
-F1 "R" 0 0 50 V V C CNN
+F1 "complex_hierarchy_schlib_R" 0 0 50 V V C CNN
 F2 "" -70 0 30 V V C CNN
 F3 "" 0 0 30 H V C CNN
 $FPLIST
@@ -307,17 +285,17 @@ X ~ 2 0 -150 50 U 60 60 1 1 P
 ENDDRAW
 ENDDEF
 #
-# VCC
+# complex_hierarchy_schlib_VCC
 #
-DEF VCC #PWR 0 0 Y Y 1 F P
-F0 "#PWR" 0 -50 40 H I C CNN
-F1 "VCC" 0 133 50 H V C CNN
+DEF complex_hierarchy_schlib_VCC #PWR 0 0 Y Y 1 F P
+F0 "#PWR" 0 -150 50 H I C CNN
+F1 "complex_hierarchy_schlib_VCC" 0 150 50 H V C CNN
 F2 "" 0 0 60 H V C CNN
 F3 "" 0 0 60 H V C CNN
 DRAW
 C 0 75 25 0 1 0 N
 P 2 0 1 0 0 0 0 50 N
-X VCC 1 0 0 0 U 20 30 1 1 W N
+X VCC 1 0 0 0 U 50 50 1 1 W N
 ENDDRAW
 ENDDEF
 #

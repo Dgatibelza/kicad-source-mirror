@@ -23,13 +23,13 @@
 
 #include <tool/tool_action.h>
 #include <tool/actions.h>
-#include <boost/optional.hpp>
+#include <core/optional.h>
 
 class TOOL_EVENT;
 class TOOL_MANAGER;
 
 /**
- * Class GERBVIEW_ACTIONS
+ * GERBVIEW_ACTIONS
  *
  * Gathers all the actions that are shared by tools. The instance of GERBVIEW_ACTIONS is created
  * inside of ACTION_MANAGER object that registers the actions.
@@ -56,72 +56,19 @@ public:
     /// Activation of the edit tool
     static TOOL_ACTION properties;
 
-    static TOOL_ACTION measureTool;
-
-    // View controls
-    static TOOL_ACTION zoomIn;
-    static TOOL_ACTION zoomOut;
-    static TOOL_ACTION zoomInCenter;
-    static TOOL_ACTION zoomOutCenter;
-    static TOOL_ACTION zoomCenter;
-    static TOOL_ACTION zoomFitScreen;
-    static TOOL_ACTION zoomPreset;
-
     // Display modes
-    static TOOL_ACTION zoneDisplayEnable;
-    static TOOL_ACTION zoneDisplayDisable;
-    static TOOL_ACTION zoneDisplayOutlines;
-    static TOOL_ACTION highContrastMode;
-    static TOOL_ACTION highContrastInc;
-    static TOOL_ACTION highContrastDec;
+    static TOOL_ACTION linesDisplayOutlines;
+    static TOOL_ACTION flashedDisplayOutlines;
+    static TOOL_ACTION polygonsDisplayOutlines;
+    static TOOL_ACTION negativeObjectDisplay;
+    static TOOL_ACTION dcodeDisplay;
+    static TOOL_ACTION toggleDiffMode;
 
     // Layer control
     static TOOL_ACTION layerPrev;
-    static TOOL_ACTION layerAlphaInc;
-    static TOOL_ACTION layerAlphaDec;
-    static TOOL_ACTION layerToggle;
+    static TOOL_ACTION layerNext;
 
     static TOOL_ACTION layerChanged;        // notification
-
-    // Grid control
-    static TOOL_ACTION gridFast1;
-    static TOOL_ACTION gridFast2;
-    static TOOL_ACTION gridNext;
-    static TOOL_ACTION gridPrev;
-    static TOOL_ACTION gridSetOrigin;
-    static TOOL_ACTION gridResetOrigin;
-    static TOOL_ACTION gridPreset;
-
-    /// Cursor control with keyboard
-    static TOOL_ACTION cursorUp;
-    static TOOL_ACTION cursorDown;
-    static TOOL_ACTION cursorLeft;
-    static TOOL_ACTION cursorRight;
-
-    static TOOL_ACTION cursorUpFast;
-    static TOOL_ACTION cursorDownFast;
-    static TOOL_ACTION cursorLeftFast;
-    static TOOL_ACTION cursorRightFast;
-
-    static TOOL_ACTION cursorClick;
-    static TOOL_ACTION cursorDblClick;
-
-    // Panning with keyboard
-    static TOOL_ACTION panUp;
-    static TOOL_ACTION panDown;
-    static TOOL_ACTION panLeft;
-    static TOOL_ACTION panRight;
-
-    // Miscellaneous
-    static TOOL_ACTION selectionTool;
-    static TOOL_ACTION zoomTool;
-    static TOOL_ACTION panTool;
-    static TOOL_ACTION pickerTool;
-    static TOOL_ACTION resetCoords;
-    static TOOL_ACTION switchCursor;
-    static TOOL_ACTION switchUnits;
-    static TOOL_ACTION showHelp;
-    static TOOL_ACTION toBeDone;
 
     // Highlighting
     static TOOL_ACTION highlightClear;
@@ -130,10 +77,7 @@ public:
     static TOOL_ACTION highlightAttribute;
 
     ///> @copydoc COMMON_ACTIONS::TranslateLegacyId()
-    virtual boost::optional<TOOL_EVENT> TranslateLegacyId( int aId ) override;
-
-    ///> @copydoc COMMON_ACTIONS::RegisterAllTools()
-    virtual void RegisterAllTools( TOOL_MANAGER* aToolManager ) override;
+    virtual OPT<TOOL_EVENT> TranslateLegacyId( int aId ) override;
 };
 
 #endif  // __GERBVIEW_ACTIONS_H

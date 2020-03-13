@@ -40,7 +40,7 @@ class SHOVE;
 class OPTIMIZER;
 
 /**
- * Class MEANDER_PLACER_BASE
+ * MEANDER_PLACER_BASE
  *
  * Base class for Single trace & Differenial pair meandering tools, as
  * both of them share a lot of code.
@@ -64,7 +64,7 @@ public:
      * Returns a string describing the status and length of the
      * tuned traces.
      */
-    virtual const wxString TuningInfo() const = 0;
+    virtual const wxString TuningInfo( EDA_UNITS aUnits ) const = 0;
 
     /**
      * Function TuningStatus()
@@ -120,6 +120,8 @@ public:
         return false;
     }
 
+    int GetTotalPadToDieLength( const LINE& aLine ) const;
+
 protected:
 
     /**
@@ -147,14 +149,21 @@ protected:
      * Takes a set of meanders in aTuned and tunes their length to
      * extend the original line length by aElongation.
      */
-    void tuneLineLength( MEANDERED_LINE& aTuned, int aElongation );
+    void tuneLineLength( MEANDERED_LINE& aTuned, long long int aElongation );
 
     /**
      * Function compareWithTolerance()
      *
      * Compares aValue against aExpected with given tolerance.
      */
-    int compareWithTolerance ( int aValue, int aExpected, int aTolerance = 0 ) const;
+    int compareWithTolerance(
+            long long int aValue, long long int aExpected, long long int aTolerance = 0 ) const;
+
+    ///> pointer to world to search colliding items
+    NODE* m_world;
+
+    ///> total length added by pad to die size
+    int m_padToDieLenth;
 
     ///> width of the meandered trace(s)
     int m_currentWidth;

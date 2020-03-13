@@ -43,13 +43,16 @@
 #include <class_pad.h>
 #include <class_track.h>
 #include <wx/gdicmn.h>
-#include <wxBasePcbFrame.h>
+#include <pcb_base_frame.h>
 #include <class_pcb_text.h>
 #include <class_drawsegment.h>
 #include <class_dimension.h>
 #include <class_zone.h>
 #include <class_module.h>
 #include <reporter.h>
+
+
+class COLOR_SETTINGS;
 
 /// A type that stores a container of 2d objects for each layer id
 typedef std::map< PCB_LAYER_ID, CBVHCONTAINER2D *> MAP_CONTAINER_2D;
@@ -127,12 +130,15 @@ class CINFO3D_VISU
      */
     const BOARD *GetBoard() const { return m_board; }
 
+    void SetColorSettings( COLOR_SETTINGS* aSettings ) { m_colors = aSettings; }
+
     /**
      * @brief InitSettings - Function to be called by the render when it need to
      * reload the settings for the board.
      * @param aStatusTextReporter: the pointer for the status reporter
+     * @param aWarningTextReporter: pointer for the warning reporter
      */
-    void InitSettings( REPORTER *aStatusTextReporter );
+    void InitSettings( REPORTER* aStatusTextReporter, REPORTER* aWarningTextReporter );
 
     /**
      * @brief BiuTo3Dunits - Board integer units To 3D units
@@ -144,7 +150,7 @@ class CINFO3D_VISU
      * @brief GetBBox3DU - Get the bbox of the pcb board
      * @return the board bbox in 3d units
      */
-    const CBBOX &GetBBox3DU() const { return m_boardBoudingBox; }
+    const CBBOX &GetBBox3DU() const { return m_boardBoundingBox; }
 
     /**
      * @brief GetEpoxyThickness3DU - Get the current epoxy thickness
@@ -394,10 +400,10 @@ class CINFO3D_VISU
 
     /**
      * @brief GetNrSegmentsCircle
-     * @param aDiameterBUI: diameter in board unities
+     * @param aDiameterBIU: diameter in board internal units
      * @return number of sides that should be used in that circle
      */
-    unsigned int GetNrSegmentsCircle( int aDiameterBUI ) const;
+    unsigned int GetNrSegmentsCircle( int aDiameterBIU ) const;
 
     /**
      * @brief GetCircleCorrectionFactor - computes a angle correction
@@ -418,20 +424,21 @@ class CINFO3D_VISU
     const MAP_POLY &GetPolyMapHoles_Outer() const { return m_layers_outer_holes_poly; }
 
  private:
-    void createBoardPolygon();
+    /**
+     * Create the board outline polygon.
+     *
+     * @return false if the outline could not be created
+     */
+    bool createBoardPolygon();
     void createLayers( REPORTER *aStatusTextReporter );
     void destroyLayers();
 
     // Helper functions to create the board
     COBJECT2D *createNewTrack( const TRACK* aTrack , int aClearanceValue ) const;
 
-    void createNewPad( const D_PAD* aPad,
-                       CGENERICCONTAINER2D *aDstContainer,
-                       const wxSize &aInflateValue ) const;
-
     void createNewPadWithClearance( const D_PAD *aPad,
                                     CGENERICCONTAINER2D *aDstContainer,
-                                    int aClearanceValue ) const;
+                                    wxSize aClearanceValue ) const;
 
     COBJECT2D *createNewPadDrill( const D_PAD* aPad, int aInflateValue );
 
@@ -482,7 +489,7 @@ class CINFO3D_VISU
                                              SHAPE_POLY_SET &aCornerBuffer,
                                              int aWidth) const;
 
-    void transformPadsShapesWithClearanceToPolygon( const DLIST<D_PAD> &aPads,
+    void transformPadsShapesWithClearanceToPolygon( const PADS &aPads,
                                                     PCB_LAYER_ID aLayer,
                                                     SHAPE_POLY_SET &aCornerBuffer,
                                                     int aInflateValue,
@@ -494,22 +501,22 @@ class CINFO3D_VISU
 
     void buildPadShapePolygon( const D_PAD *aPad,
                                SHAPE_POLY_SET &aCornerBuffer,
-                               wxSize aInflateValue,
-                               int aSegmentsPerCircle,
-                               double aCorrectionFactor ) const;
+                               wxSize aInflateValue ) const;
 
 
- public:
-    SFVEC3D m_BgColorBot;       ///< background bottom color
-    SFVEC3D m_BgColorTop;       ///< background top color
-    SFVEC3D m_BoardBodyColor;   ///< in realistic mode: FR4 board color
-    SFVEC3D m_SolderMaskColor;  ///< in realistic mode: solder mask color
-    SFVEC3D m_SolderPasteColor; ///< in realistic mode: solder paste color
-    SFVEC3D m_SilkScreenColor;  ///< in realistic mode: SilkScreen color
-    SFVEC3D m_CopperColor;      ///< in realistic mode: copper color
+public:
+    SFVEC3D m_BgColorBot;         ///< background bottom color
+    SFVEC3D m_BgColorTop;         ///< background top color
+    SFVEC3D m_BoardBodyColor;     ///< in realistic mode: FR4 board color
+    SFVEC3D m_SolderMaskColorBot; ///< in realistic mode: solder mask color ( bot )
+    SFVEC3D m_SolderMaskColorTop; ///< in realistic mode: solder mask color ( top )
+    SFVEC3D m_SolderPasteColor;   ///< in realistic mode: solder paste color
+    SFVEC3D m_SilkScreenColorBot; ///< in realistic mode: SilkScreen color ( bot )
+    SFVEC3D m_SilkScreenColorTop; ///< in realistic mode: SilkScreen color ( top )
+    SFVEC3D m_CopperColor;        ///< in realistic mode: copper color
 
 
- private:
+private:
 
     /// Current board
     BOARD *m_board;
@@ -517,6 +524,8 @@ class CINFO3D_VISU
     /// pointer to the 3d model manager
     S3D_CACHE *m_3d_model_manager;
 
+    /// pointer to current color settings
+    COLOR_SETTINGS* m_colors;
 
     // Render options
 
@@ -547,11 +556,8 @@ class CINFO3D_VISU
 
     // Pcb board bounding boxes
 
-    /// 3d bouding box of the pcb board in 3d units
-    CBBOX   m_boardBoudingBox;
-
-    /// 2d bouding box of the pcb board in 3d units
-    CBBOX2D m_board2dBBox3DU;
+    /// 3d bounding box of the pcb board in 3d units
+    CBBOX   m_boardBoundingBox;
 
     /// It contains polygon contours for each layer
     MAP_POLY          m_layers_poly;

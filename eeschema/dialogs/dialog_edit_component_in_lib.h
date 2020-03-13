@@ -1,11 +1,7 @@
-/**
- * @file dialog_edit_component_in_lib.h
- */
-
 /*
  * This program source code file is part of KiCad, a free EDA CAD application.
  *
- * Copyright (C) 1992-2013 KiCad Developers, see AUTHORS.txt for contributors.
+ * Copyright (C) 1992-2019 KiCad Developers, see AUTHORS.txt for contributors.
  *
  * This program is free software; you can redistribute it and/or
  * modify it under the terms of the GNU General Public License
@@ -29,42 +25,77 @@
 #ifndef _DIALOG_EDIT_COMPONENT_IN_LIB_H_
 #define _DIALOG_EDIT_COMPONENT_IN_LIB_H_
 
+#include <fields_grid_table.h>
+#include <widgets/unit_binder.h>
 #include <dialog_edit_component_in_lib_base.h>
+
+
+class LIB_EDIT_FRAME;
+class LIB_PART;
+class WX_GRID;
 
 
 class DIALOG_EDIT_COMPONENT_IN_LIBRARY: public DIALOG_EDIT_COMPONENT_IN_LIBRARY_BASE
 {
     static int m_lastOpenedPage;    // To remember the last notebook selection
 
+    enum LAST_LAYOUT {
+        NONE,
+        ALIAS,
+        PARENT
+    };
+
+    static LAST_LAYOUT m_lastLayout;
+
 public:
     LIB_EDIT_FRAME* m_Parent;
-    bool m_RecreateToolbar;
-    int m_AliasLocation;
+    LIB_PART*       m_libEntry;
+
+    FIELDS_GRID_TABLE<LIB_FIELD>* m_fields;
+
+    UNIT_BINDER     m_pinNameOffset;
+
+    wxControl*      m_delayedFocusCtrl;
+    WX_GRID*        m_delayedFocusGrid;
+    int             m_delayedFocusRow;
+    int             m_delayedFocusColumn;
+    int             m_delayedFocusPage;
+    wxString        m_delayedErrorMessage;
+
+    wxString        m_shownColumns;
+    int             m_width;
+
+    bool TransferDataToWindow() override;
+    bool TransferDataFromWindow() override;
+
+    bool Validate() override;
 
 public:
     /// Constructors
-    DIALOG_EDIT_COMPONENT_IN_LIBRARY( LIB_EDIT_FRAME* parent);
+    DIALOG_EDIT_COMPONENT_IN_LIBRARY( LIB_EDIT_FRAME* parent, LIB_PART* aLibEntry );
     ~DIALOG_EDIT_COMPONENT_IN_LIBRARY();
 
 private:
-    void initDlg();
-    void InitPanelDoc();
-    void InitBasicPanel();
-    void OnCancelClick( wxCommandEvent& event ) override;
-    void OnOkClick(wxCommandEvent& event) override;
-    void DeleteAllAliasOfPart(wxCommandEvent& event) override;
-    void DeleteAliasOfPart(wxCommandEvent& event) override;
-    void AddAliasOfPart(wxCommandEvent& event) override;
-    bool ChangeNbUnitsPerPackage(int newUnit);
-    bool SetUnsetConvert();
-    void CopyDocFromRootToAlias(wxCommandEvent& event) override;
-    void BrowseAndSelectDocFile(wxCommandEvent& event) override;
-    void DeleteAllFootprintFilter(wxCommandEvent& event) override;
-    void DeleteOneFootprintFilter(wxCommandEvent& event) override;
-    void AddFootprintFilter(wxCommandEvent& event) override;
-    void EditOneFootprintFilter( wxCommandEvent& event ) override;
-	void OnUpdateInterchangeableUnits( wxUpdateUIEvent& event ) override;
+    void transferAliasDataToBuffer();
+
+    void OnAddField( wxCommandEvent& event ) override;
+    void OnDeleteField( wxCommandEvent& event ) override;
+    void OnMoveUp( wxCommandEvent& event ) override;
+    void OnMoveDown( wxCommandEvent& event ) override;
+    void OnSymbolNameKillFocus( wxFocusEvent& event ) override;
+    void OnSymbolNameText( wxCommandEvent& event ) override;
+    void OnAddFootprintFilter( wxCommandEvent& event ) override;
+    void OnDeleteFootprintFilter( wxCommandEvent& event ) override;
+    void OnEditFootprintFilter( wxCommandEvent& event ) override;
+    void OnSizeGrid( wxSizeEvent& event ) override;
+    void OnGridCellChanging( wxGridEvent& event );
+    void OnEditSpiceModel( wxCommandEvent& event ) override;
+    void OnUpdateUI( wxUpdateUIEvent& event ) override;
+    void OnFilterDClick( wxMouseEvent& event ) override;
+    void OnCancelButtonClick( wxCommandEvent& event ) override;
+
+    void adjustGridColumns( int aWidth );
+    void syncControlStates( bool aIsAlias );
 };
 
-#endif
-    // _DIALOG_EDIT_COMPONENT_IN_LIB_H_
+#endif // _DIALOG_EDIT_COMPONENT_IN_LIB_H_

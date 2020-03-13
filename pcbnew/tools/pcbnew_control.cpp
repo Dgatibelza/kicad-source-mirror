@@ -2,6 +2,7 @@
  * This program source code file is part of KiCad, a free EDA CAD application.
  *
  * Copyright (C) 2014-2016 CERN
+ * Copyright (C) 2019 KiCad Developers, see AUTHORS.txt for contributors.
  * @author Maciej Suminski <maciej.suminski@cern.ch>
  *
  * This program is free software; you can redistribute it and/or
@@ -22,42 +23,41 @@
  * 51 Franklin Street, Fifth Floor, Boston, MA  02110-1301, USA
  */
 
-#include <cstdint>
-
-#include "pcbnew_control.h"
-#include "pcb_actions.h"
-#include "selection_tool.h"
 #include "edit_tool.h"
-#include "picker_tool.h"
-#include "pcb_editor_control.h"
-#include "grid_helper.h"
-
+#include "pcb_actions.h"
+#include "pcbnew_control.h"
+#include "pcbnew_picker_tool.h"
+#include "selection_tool.h"
+#include <3d_viewer/eda_3d_viewer.h>
+#include <bitmaps.h>
+#include <board_commit.h>
 #include <class_board.h>
+#include <class_board_item.h>
 #include <class_module.h>
 #include <class_track.h>
 #include <class_zone.h>
-#include <class_pcb_screen.h>
-
+#include <class_edge_mod.h>
 #include <confirm.h>
-#include <hotkeys.h>
-#include <properties.h>
-#include <io_mgr.h>
-#include <kicad_plugin.h>
-#include <kicad_clipboard.h>
-
-#include <pcbnew_id.h>
-#include <wxPcbStruct.h>
-#include <pcb_draw_panel_gal.h>
-#include <connectivity.h>
-#include <tool/tool_manager.h>
+#include <connectivity/connectivity_data.h>
 #include <gal/graphics_abstraction_layer.h>
-#include <view/view_controls.h>
-#include <pcb_painter.h>
+#include <io_mgr.h>
+#include <kicad_clipboard.h>
+#include <kicad_plugin.h>
+#include <kiway.h>
 #include <origin_viewitem.h>
-#include <board_commit.h>
-#include <bitmaps.h>
-
+#include <pcb_edit_frame.h>
+#include <pcb_painter.h>
+#include <pcb_screen.h>
+#include <pcbnew_settings.h>
+#include <properties.h>
+#include <settings/color_settings.h>
+#include <tool/tool_manager.h>
+#include <view/view_controls.h>
 #include <functional>
+#include <footprint_viewer_frame.h>
+#include <footprint_edit_frame.h>
+#include <math/util.h>      // for KiROUND
+
 using namespace std::placeholders;
 
 
@@ -67,173 +67,10 @@ extern bool AskLoadBoardFileName( wxWindow* aParent, int* aCtl, wxString* aFileN
 extern IO_MGR::PCB_FILE_T plugin_type( const wxString& aFileName, int aCtl );
 
 
-// Display modes
-TOOL_ACTION PCB_ACTIONS::trackDisplayMode( "pcbnew.Control.trackDisplayMode",
-        AS_GLOBAL, TOOL_ACTION::LegacyHotKey( HK_SWITCH_TRACK_DISPLAY_MODE ),
-        "", "" );
-
-TOOL_ACTION PCB_ACTIONS::padDisplayMode( "pcbnew.Control.padDisplayMode",
-        AS_GLOBAL, 0,
-        "", "" );
-
-TOOL_ACTION PCB_ACTIONS::viaDisplayMode( "pcbnew.Control.viaDisplayMode",
-        AS_GLOBAL, 0,
-        "", "" );
-
-TOOL_ACTION PCB_ACTIONS::zoneDisplayEnable( "pcbnew.Control.zoneDisplayEnable",
-        AS_GLOBAL, 0,
-        "", "" );
-
-TOOL_ACTION PCB_ACTIONS::zoneDisplayDisable( "pcbnew.Control.zoneDisplayDisable",
-        AS_GLOBAL, 0,
-        "", "" );
-
-TOOL_ACTION PCB_ACTIONS::zoneDisplayOutlines( "pcbnew.Control.zoneDisplayOutlines",
-        AS_GLOBAL, 0,
-        "", "" );
-
-TOOL_ACTION PCB_ACTIONS::highContrastMode( "pcbnew.Control.highContrastMode",
-        AS_GLOBAL, TOOL_ACTION::LegacyHotKey( HK_SWITCH_HIGHCONTRAST_MODE ),
-        "", "" );
-
-TOOL_ACTION PCB_ACTIONS::highContrastInc( "pcbnew.Control.highContrastInc",
-        AS_GLOBAL, '>',
-        "", "" );
-
-TOOL_ACTION PCB_ACTIONS::highContrastDec( "pcbnew.Control.highContrastDec",
-        AS_GLOBAL, '<',
-        "", "" );
-
-
-// Layer control
-TOOL_ACTION PCB_ACTIONS::layerTop( "pcbnew.Control.layerTop",
-        AS_GLOBAL, TOOL_ACTION::LegacyHotKey( HK_SWITCH_LAYER_TO_COMPONENT ),
-        "", "", NULL, AF_NONE, (void*) F_Cu );
-
-TOOL_ACTION PCB_ACTIONS::layerInner1( "pcbnew.Control.layerInner1",
-        AS_GLOBAL, TOOL_ACTION::LegacyHotKey( HK_SWITCH_LAYER_TO_INNER1 ),
-        "", "", NULL, AF_NONE, (void*) In1_Cu );
-
-TOOL_ACTION PCB_ACTIONS::layerInner2( "pcbnew.Control.layerInner2",
-        AS_GLOBAL, TOOL_ACTION::LegacyHotKey( HK_SWITCH_LAYER_TO_INNER2 ),
-        "", "", NULL, AF_NONE, (void*) In2_Cu );
-
-TOOL_ACTION PCB_ACTIONS::layerInner3( "pcbnew.Control.layerInner3",
-        AS_GLOBAL, TOOL_ACTION::LegacyHotKey( HK_SWITCH_LAYER_TO_INNER3 ),
-        "", "", NULL, AF_NONE, (void*) In3_Cu );
-
-TOOL_ACTION PCB_ACTIONS::layerInner4( "pcbnew.Control.layerInner4",
-        AS_GLOBAL, TOOL_ACTION::LegacyHotKey( HK_SWITCH_LAYER_TO_INNER4 ),
-        "", "", NULL, AF_NONE, (void*) In4_Cu );
-
-TOOL_ACTION PCB_ACTIONS::layerInner5( "pcbnew.Control.layerInner5",
-        AS_GLOBAL, TOOL_ACTION::LegacyHotKey( HK_SWITCH_LAYER_TO_INNER5 ),
-        "", "", NULL, AF_NONE, (void*) In5_Cu );
-
-TOOL_ACTION PCB_ACTIONS::layerInner6( "pcbnew.Control.layerInner6",
-        AS_GLOBAL, TOOL_ACTION::LegacyHotKey( HK_SWITCH_LAYER_TO_INNER6 ),
-        "", "", NULL, AF_NONE, (void*) In6_Cu );
-
-TOOL_ACTION PCB_ACTIONS::layerBottom( "pcbnew.Control.layerBottom",
-        AS_GLOBAL, TOOL_ACTION::LegacyHotKey( HK_SWITCH_LAYER_TO_COPPER ),
-        "", "", NULL, AF_NONE, (void*) B_Cu );
-
-TOOL_ACTION PCB_ACTIONS::layerNext( "pcbnew.Control.layerNext",
-        AS_GLOBAL, TOOL_ACTION::LegacyHotKey( HK_SWITCH_LAYER_TO_NEXT ),
-        "", "" );
-
-TOOL_ACTION PCB_ACTIONS::layerPrev( "pcbnew.Control.layerPrev",
-        AS_GLOBAL, TOOL_ACTION::LegacyHotKey( HK_SWITCH_LAYER_TO_PREVIOUS ),
-        "", "" );
-
-TOOL_ACTION PCB_ACTIONS::layerToggle( "pcbnew.Control.layerToggle",
-        AS_GLOBAL, TOOL_ACTION::LegacyHotKey( HK_ADD_THROUGH_VIA ),
-        "", "" );
-
-TOOL_ACTION PCB_ACTIONS::layerAlphaInc( "pcbnew.Control.layerAlphaInc",
-        AS_GLOBAL, TOOL_ACTION::LegacyHotKey( HK_INC_LAYER_ALHPA ),
-        "", "" );
-
-TOOL_ACTION PCB_ACTIONS::layerAlphaDec( "pcbnew.Control.layerAlphaDec",
-        AS_GLOBAL, TOOL_ACTION::LegacyHotKey( HK_DEC_LAYER_ALHPA ),
-        "", "" );
-
-TOOL_ACTION PCB_ACTIONS::layerChanged( "pcbnew.Control.layerChanged",
-        AS_GLOBAL, 0,
-        "", "", NULL, AF_NOTIFY );
-
-// Cursor control
-TOOL_ACTION PCB_ACTIONS::cursorUp( "pcbnew.Control.cursorUp",
-        AS_GLOBAL, WXK_UP, "", "", NULL, AF_NONE, (void*) CURSOR_UP );
-TOOL_ACTION PCB_ACTIONS::cursorDown( "pcbnew.Control.cursorDown",
-        AS_GLOBAL, WXK_DOWN, "", "" , NULL, AF_NONE, (void*) CURSOR_DOWN );
-TOOL_ACTION PCB_ACTIONS::cursorLeft( "pcbnew.Control.cursorLeft",
-        AS_GLOBAL, WXK_LEFT, "", "" , NULL, AF_NONE, (void*) CURSOR_LEFT );
-TOOL_ACTION PCB_ACTIONS::cursorRight( "pcbnew.Control.cursorRight",
-        AS_GLOBAL, WXK_RIGHT, "", "" , NULL, AF_NONE, (void*) CURSOR_RIGHT );
-
-TOOL_ACTION PCB_ACTIONS::cursorUpFast( "pcbnew.Control.cursorUpFast",
-        AS_GLOBAL, MD_CTRL + WXK_UP, "", "", NULL, AF_NONE, (void*) ( CURSOR_UP | CURSOR_FAST_MOVE ) );
-TOOL_ACTION PCB_ACTIONS::cursorDownFast( "pcbnew.Control.cursorDownFast",
-        AS_GLOBAL, MD_CTRL + WXK_DOWN, "", "" , NULL, AF_NONE, (void*) ( CURSOR_DOWN | CURSOR_FAST_MOVE ) );
-TOOL_ACTION PCB_ACTIONS::cursorLeftFast( "pcbnew.Control.cursorLeftFast",
-        AS_GLOBAL, MD_CTRL + WXK_LEFT, "", "" , NULL, AF_NONE, (void*) ( CURSOR_LEFT | CURSOR_FAST_MOVE ) );
-TOOL_ACTION PCB_ACTIONS::cursorRightFast( "pcbnew.Control.cursorRightFast",
-        AS_GLOBAL, MD_CTRL + WXK_RIGHT, "", "" , NULL, AF_NONE, (void*) ( CURSOR_RIGHT | CURSOR_FAST_MOVE ) );
-
-TOOL_ACTION PCB_ACTIONS::cursorClick( "pcbnew.Control.cursorClick",
-        AS_GLOBAL, TOOL_ACTION::LegacyHotKey( HK_LEFT_CLICK ),
-        "", "", NULL, AF_NONE, (void*) CURSOR_CLICK );
-TOOL_ACTION PCB_ACTIONS::cursorDblClick( "pcbnew.Control.cursorDblClick",
-        AS_GLOBAL, TOOL_ACTION::LegacyHotKey( HK_LEFT_DCLICK ),
-        "", "", NULL, AF_NONE, (void*) CURSOR_DBL_CLICK );
-
-TOOL_ACTION PCB_ACTIONS::panUp( "pcbnew.Control.panUp",
-        AS_GLOBAL, MD_SHIFT + WXK_UP, "", "", NULL, AF_NONE, (void*) CURSOR_UP );
-TOOL_ACTION PCB_ACTIONS::panDown( "pcbnew.Control.panDown",
-        AS_GLOBAL, MD_SHIFT + WXK_DOWN, "", "" , NULL, AF_NONE, (void*) CURSOR_DOWN );
-TOOL_ACTION PCB_ACTIONS::panLeft( "pcbnew.Control.panLeft",
-        AS_GLOBAL, MD_SHIFT + WXK_LEFT, "", "" , NULL, AF_NONE, (void*) CURSOR_LEFT );
-TOOL_ACTION PCB_ACTIONS::panRight( "pcbnew.Control.panRight",
-        AS_GLOBAL, MD_SHIFT + WXK_RIGHT, "", "" , NULL, AF_NONE, (void*) CURSOR_RIGHT );
-
-// Miscellaneous
-TOOL_ACTION PCB_ACTIONS::selectionTool( "pcbnew.Control.selectionTool",
-        AS_GLOBAL, 0,
-        "", "", NULL, AF_ACTIVATE );
-
-TOOL_ACTION PCB_ACTIONS::resetCoords( "pcbnew.Control.resetCoords",
-        AS_GLOBAL, TOOL_ACTION::LegacyHotKey( HK_RESET_LOCAL_COORD ),
-        "", "" );
-
-TOOL_ACTION PCB_ACTIONS::switchCursor( "pcbnew.Control.switchCursor",
-        AS_GLOBAL, 0,
-        "", "" );
-
-TOOL_ACTION PCB_ACTIONS::switchUnits( "pcbnew.Control.switchUnits",
-        AS_GLOBAL, TOOL_ACTION::LegacyHotKey( HK_SWITCH_UNITS ),
-        "", "" );
-
-TOOL_ACTION PCB_ACTIONS::deleteItemCursor( "pcbnew.Control.deleteItemCursor",
-        AS_GLOBAL, 0,
-        "", "" );
-
-TOOL_ACTION PCB_ACTIONS::showHelp( "pcbnew.Control.showHelp",
-        AS_GLOBAL, TOOL_ACTION::LegacyHotKey( HK_HELP ),
-        "", "" );
-
-TOOL_ACTION PCB_ACTIONS::toBeDone( "pcbnew.Control.toBeDone",
-        AS_GLOBAL, 0,           // dialog saying it is not implemented yet
-        "", "" );               // so users are aware of that
-
-TOOL_ACTION PCB_ACTIONS::pasteFromClipboard( "pcbnew.InteractiveEdit.pasteFromClipboard",
-        AS_GLOBAL, MD_CTRL + int( 'V' ),
-        _( "Paste" ), _( "Paste content from clipboard" ),
-        paste_xpm );
-
-
 PCBNEW_CONTROL::PCBNEW_CONTROL() :
-    PCB_TOOL( "pcbnew.Control" ), m_frame( NULL )
+    PCB_TOOL_BASE( "pcbnew.Control" ),
+    m_frame( nullptr ),
+    m_pickerItem( nullptr )
 {
     m_gridOrigin.reset( new KIGFX::ORIGIN_VIEWITEM() );
 }
@@ -251,21 +88,46 @@ void PCBNEW_CONTROL::Reset( RESET_REASON aReason )
     if( aReason == MODEL_RELOAD || aReason == GAL_SWITCH )
     {
         m_gridOrigin->SetPosition( board()->GetGridOrigin() );
+        m_gridOrigin->SetColor( m_frame->GetGridColor() );
         getView()->Remove( m_gridOrigin.get() );
         getView()->Add( m_gridOrigin.get() );
     }
 }
 
 
+int PCBNEW_CONTROL::AddLibrary( const TOOL_EVENT& aEvent )
+{
+    if( m_frame->IsType( FRAME_FOOTPRINT_EDITOR ) || m_frame->IsType( FRAME_PCB_EDITOR ) )
+    {
+        if( aEvent.IsAction( &ACTIONS::newLibrary ) )
+            static_cast<PCB_BASE_EDIT_FRAME*>( m_frame )->CreateNewLibrary();
+        else if( aEvent.IsAction( &ACTIONS::addLibrary ) )
+            static_cast<PCB_BASE_EDIT_FRAME*>( m_frame )->AddLibrary();
+    }
+
+    return 0;
+}
+
+
+int PCBNEW_CONTROL::Quit( const TOOL_EVENT& aEvent )
+{
+    m_frame->Close( false );
+    return 0;
+}
+
+
+template<class T> void Flip( T& aValue )
+{
+    aValue = !aValue;
+}
+
 int PCBNEW_CONTROL::TrackDisplayMode( const TOOL_EVENT& aEvent )
 {
-    auto painter = static_cast<KIGFX::PCB_PAINTER*>( getView()->GetPainter() );
-    auto settings = painter->GetSettings();
+    auto opts = displayOptions();
 
-    // Apply new display options to the GAL canvas
-    DISPLAY_OPTIONS* displ_opts = (DISPLAY_OPTIONS*)m_frame->GetDisplayOptions();
-    displ_opts->m_DisplayPcbTrackFill = !displ_opts->m_DisplayPcbTrackFill;
-    settings->LoadDisplayOptions( displ_opts );
+    Flip( opts.m_DisplayPcbTrackFill );
+    m_frame->SetDisplayOptions( opts );
+    view()->UpdateDisplayOptions( opts );
 
     for( auto track : board()->Tracks() )
     {
@@ -273,7 +135,35 @@ int PCBNEW_CONTROL::TrackDisplayMode( const TOOL_EVENT& aEvent )
             view()->Update( track, KIGFX::GEOMETRY );
     }
 
-    m_frame->GetGalCanvas()->Refresh();
+    canvas()->Refresh();
+
+    return 0;
+}
+
+
+int PCBNEW_CONTROL::ToggleRatsnest( const TOOL_EVENT& aEvent )
+{
+    auto opts = displayOptions();
+
+    if( aEvent.IsAction( &PCB_ACTIONS::showRatsnest ) )
+    {
+        // N.B. Do not disable the Ratsnest layer here.  We use it for local ratsnest
+        Flip( opts.m_ShowGlobalRatsnest );
+        m_frame->SetDisplayOptions( opts );
+        view()->UpdateDisplayOptions( opts );
+        getEditFrame<PCB_EDIT_FRAME>()->SetElementVisibility( LAYER_RATSNEST,
+                opts.m_ShowGlobalRatsnest );
+
+    }
+    else if( aEvent.IsAction( &PCB_ACTIONS::ratsnestLineMode ) )
+    {
+        Flip( opts.m_DisplayRatsnestLinesCurved );
+        m_frame->SetDisplayOptions( opts );
+        view()->UpdateDisplayOptions( opts );
+    }
+
+    canvas()->RedrawRatsnest();
+    canvas()->Refresh();
 
     return 0;
 }
@@ -281,22 +171,19 @@ int PCBNEW_CONTROL::TrackDisplayMode( const TOOL_EVENT& aEvent )
 
 int PCBNEW_CONTROL::PadDisplayMode( const TOOL_EVENT& aEvent )
 {
-    auto painter = static_cast<KIGFX::PCB_PAINTER*>( getView()->GetPainter() );
-    auto settings = painter->GetSettings();
+    auto opts = displayOptions();
 
-    DISPLAY_OPTIONS* displ_opts = (DISPLAY_OPTIONS*)m_frame->GetDisplayOptions();
+    Flip( opts.m_DisplayPadFill );
+    m_frame->SetDisplayOptions( opts );
+    view()->UpdateDisplayOptions( opts );
 
-    // Apply new display options to the GAL canvas
-    displ_opts->m_DisplayPadFill = !displ_opts->m_DisplayPadFill;
-    settings->LoadDisplayOptions( displ_opts );
-
-    for( auto module : board()->Modules() )
+    for( auto module : board()->Modules() ) // fixme: move to PCB_VIEW
     {
         for( auto pad : module->Pads() )
-            getView()->Update( pad, KIGFX::GEOMETRY );
+            view()->Update( pad, KIGFX::GEOMETRY );
     }
 
-    m_frame->GetGalCanvas()->Refresh();
+    canvas()->Refresh();
 
     return 0;
 }
@@ -304,21 +191,87 @@ int PCBNEW_CONTROL::PadDisplayMode( const TOOL_EVENT& aEvent )
 
 int PCBNEW_CONTROL::ViaDisplayMode( const TOOL_EVENT& aEvent )
 {
-    auto painter = static_cast<KIGFX::PCB_PAINTER*>( getView()->GetPainter() );
-    auto settings = painter->GetSettings();
-    DISPLAY_OPTIONS* displ_opts = (DISPLAY_OPTIONS*)m_frame->GetDisplayOptions();
+    auto opts = displayOptions();
 
-    // Apply new display options to the GAL canvas
-    displ_opts->m_DisplayViaFill = !displ_opts->m_DisplayViaFill;
-    settings->LoadDisplayOptions( displ_opts );
+    Flip( opts.m_DisplayViaFill );
+    view()->UpdateDisplayOptions( opts );
+    m_frame->SetDisplayOptions( opts );
 
     for( auto track : board()->Tracks() )
     {
         if( track->Type() == PCB_TRACE_T || track->Type() == PCB_VIA_T )
-            getView()->Update( track, KIGFX::GEOMETRY );
+            view()->Update( track, KIGFX::GEOMETRY );
     }
 
-    m_frame->GetGalCanvas()->Refresh();
+    canvas()->Refresh();
+
+    return 0;
+}
+
+
+int PCBNEW_CONTROL::GraphicDisplayMode( const TOOL_EVENT& aEvent )
+{
+    auto opts = displayOptions();
+
+    Flip( opts.m_DisplayDrawItemsFill );
+    m_frame->SetDisplayOptions( opts );
+    view()->UpdateDisplayOptions( opts );
+
+    for( auto item : board()->Drawings() )
+    {
+        view()->Update( item, KIGFX::GEOMETRY );
+    }
+
+    canvas()->Refresh();
+
+    return 0;
+}
+
+
+int PCBNEW_CONTROL::ModuleEdgeOutlines( const TOOL_EVENT& aEvent )
+{
+    auto opts = displayOptions();
+
+    Flip( opts.m_DisplayModEdgeFill );
+    m_frame->SetDisplayOptions( opts );
+    view()->UpdateDisplayOptions( opts );
+
+    for( auto module : board()->Modules() )
+    {
+        for( auto item : module->GraphicalItems() )
+        {
+            if( item->Type() == PCB_MODULE_EDGE_T )
+                view()->Update( item, KIGFX::GEOMETRY );
+        }
+    }
+
+    canvas()->Refresh();
+
+    return 0;
+}
+
+
+int PCBNEW_CONTROL::ModuleTextOutlines( const TOOL_EVENT& aEvent )
+{
+    auto opts = displayOptions();
+
+    Flip( opts.m_DisplayModTextFill );
+    m_frame->SetDisplayOptions( opts );
+    view()->UpdateDisplayOptions( opts );
+
+    for( auto module : board()->Modules() )
+    {
+        view()->Update( &module->Reference(), KIGFX::GEOMETRY );
+        view()->Update( &module->Value(), KIGFX::GEOMETRY );
+
+        for( auto item : module->GraphicalItems() )
+        {
+            if( item->Type() == PCB_MODULE_TEXT_T )
+                view()->Update( item, KIGFX::GEOMETRY );
+        }
+    }
+
+    canvas()->Refresh();
 
     return 0;
 }
@@ -326,26 +279,27 @@ int PCBNEW_CONTROL::ViaDisplayMode( const TOOL_EVENT& aEvent )
 
 int PCBNEW_CONTROL::ZoneDisplayMode( const TOOL_EVENT& aEvent )
 {
-    auto painter = static_cast<KIGFX::PCB_PAINTER*>( getView()->GetPainter() );
-    auto settings = painter->GetSettings();
-    DISPLAY_OPTIONS* displ_opts = (DISPLAY_OPTIONS*)m_frame->GetDisplayOptions();
+    auto opts = displayOptions();
 
     // Apply new display options to the GAL canvas
     if( aEvent.IsAction( &PCB_ACTIONS::zoneDisplayEnable ) )
-        displ_opts->m_DisplayZonesMode = 0;
+        opts.m_DisplayZonesMode = 0;
     else if( aEvent.IsAction( &PCB_ACTIONS::zoneDisplayDisable ) )
-        displ_opts->m_DisplayZonesMode = 1;
+        opts.m_DisplayZonesMode = 1;
     else if( aEvent.IsAction( &PCB_ACTIONS::zoneDisplayOutlines ) )
-        displ_opts->m_DisplayZonesMode = 2;
+        opts.m_DisplayZonesMode = 2;
+    else if( aEvent.IsAction( &PCB_ACTIONS::zoneDisplayToggle ) )
+        opts.m_DisplayZonesMode = ( opts.m_DisplayZonesMode + 1 ) % 3;
     else
-        assert( false );
+        wxFAIL;
 
-    settings->LoadDisplayOptions( displ_opts );
+    m_frame->SetDisplayOptions( opts );
+    view()->UpdateDisplayOptions( opts );
 
     for( int i = 0; i < board()->GetAreaCount(); ++i )
         view()->Update( board()->GetArea( i ), KIGFX::GEOMETRY );
 
-    m_frame->GetGalCanvas()->Refresh();
+    canvas()->Refresh();
 
     return 0;
 }
@@ -353,26 +307,13 @@ int PCBNEW_CONTROL::ZoneDisplayMode( const TOOL_EVENT& aEvent )
 
 int PCBNEW_CONTROL::HighContrastMode( const TOOL_EVENT& aEvent )
 {
-    auto painter = static_cast<KIGFX::PCB_PAINTER*>( getView()->GetPainter() );
-    auto settings = painter->GetSettings();
-    DISPLAY_OPTIONS* displ_opts = (DISPLAY_OPTIONS*)m_frame->GetDisplayOptions();
+    auto opts = displayOptions();
 
-    displ_opts->m_ContrastModeDisplay = !displ_opts->m_ContrastModeDisplay;
-    settings->LoadDisplayOptions( displ_opts );
-    m_frame->GetGalCanvas()->SetHighContrastLayer( m_frame->GetActiveLayer() );
+    Flip( opts.m_ContrastModeDisplay );
+    m_frame->SetDisplayOptions( opts );
+    view()->UpdateDisplayOptions( opts );
+    canvas()->SetHighContrastLayer( m_frame->GetActiveLayer() );
 
-    return 0;
-}
-
-
-int PCBNEW_CONTROL::HighContrastInc( const TOOL_EVENT& aEvent )
-{
-    return 0;
-}
-
-
-int PCBNEW_CONTROL::HighContrastDec( const TOOL_EVENT& aEvent )
-{
     return 0;
 }
 
@@ -380,7 +321,7 @@ int PCBNEW_CONTROL::HighContrastDec( const TOOL_EVENT& aEvent )
 // Layer control
 int PCBNEW_CONTROL::LayerSwitch( const TOOL_EVENT& aEvent )
 {
-    m_frame->SwitchLayer( NULL, (PCB_LAYER_ID) aEvent.Parameter<intptr_t>() );
+    m_frame->SwitchLayer( NULL, aEvent.Parameter<PCB_LAYER_ID>() );
 
     return 0;
 }
@@ -389,21 +330,23 @@ int PCBNEW_CONTROL::LayerSwitch( const TOOL_EVENT& aEvent )
 int PCBNEW_CONTROL::LayerNext( const TOOL_EVENT& aEvent )
 {
     PCB_BASE_FRAME* editFrame = m_frame;
+    BOARD*          brd        = board();
     LAYER_NUM layer = editFrame->GetActiveLayer();
+    LAYER_NUM       startLayer = layer;
 
     if( layer < F_Cu || layer > B_Cu )
         return 0;
 
-    int layerCount = board()->GetCopperLayerCount();
+    while( startLayer != ++layer )
+    {
+        if( brd->IsLayerVisible( static_cast<PCB_LAYER_ID>( layer ) ) && IsCopperLayer( layer ) )
+            break;
 
-    if( layer == layerCount - 2 || layerCount < 2 )
-        layer = B_Cu;
-    else if( layer == B_Cu )
-        layer = F_Cu;
-    else
-        ++layer;
+        if( layer >= B_Cu )
+            layer = F_Cu - 1;
+    }
 
-    assert( IsCopperLayer( layer ) );
+    wxCHECK( IsCopperLayer( layer ), 0 );
     editFrame->SwitchLayer( NULL, ToLAYER_ID( layer ) );
 
     return 0;
@@ -413,21 +356,25 @@ int PCBNEW_CONTROL::LayerNext( const TOOL_EVENT& aEvent )
 int PCBNEW_CONTROL::LayerPrev( const TOOL_EVENT& aEvent )
 {
     PCB_BASE_FRAME* editFrame = m_frame;
+    BOARD*          brd        = board();
     LAYER_NUM layer = editFrame->GetActiveLayer();
+    LAYER_NUM       startLayer = layer;
 
     if( layer < F_Cu || layer > B_Cu )
         return 0;
 
-    int layerCount = board()->GetCopperLayerCount();
+    while( startLayer != --layer )
+    {
+        if( IsCopperLayer( layer )       // also test for valid layer id (layer >= F_Cu)
+            && brd->IsLayerVisible( static_cast<PCB_LAYER_ID>( layer ) ) )
+            break;
 
-    if( layer == F_Cu || layerCount < 2 )
-        layer = B_Cu;
-    else if( layer == B_Cu )
-        layer = layerCount - 2;
-    else
-        --layer;
+        if( layer <= F_Cu )
+            layer = B_Cu + 1;
+    }
 
-    assert( IsCopperLayer( layer ) );
+
+    wxCHECK( IsCopperLayer( layer ), 0 );
     editFrame->SwitchLayer( NULL, ToLAYER_ID( layer ) );
 
     return 0;
@@ -448,20 +395,33 @@ int PCBNEW_CONTROL::LayerToggle( const TOOL_EVENT& aEvent )
 }
 
 
+// It'd be nice to share the min/max with the DIALOG_COLOR_PICKER, but those are
+// set in wxFormBuilder.
+#define ALPHA_MIN 0.20
+#define ALPHA_MAX 1.00
+#define ALPHA_STEP 0.05
+
 int PCBNEW_CONTROL::LayerAlphaInc( const TOOL_EVENT& aEvent )
 {
-    auto painter = static_cast<KIGFX::PCB_PAINTER*>( getView()->GetPainter() );
-    auto settings = painter->GetSettings();
+    auto settings = m_frame->ColorSettings();
 
     LAYER_NUM currentLayer = m_frame->GetActiveLayer();
-    KIGFX::COLOR4D currentColor = settings->GetLayerColor( currentLayer );
+    KIGFX::COLOR4D currentColor = settings->GetColor( currentLayer );
 
-    if( currentColor.a <= 0.95 )
+    if( currentColor.a <= ALPHA_MAX - ALPHA_STEP )
     {
-        currentColor.a += 0.05;
-        settings->SetLayerColor( currentLayer, currentColor );
-        m_frame->GetGalCanvas()->GetView()->UpdateLayerColor( currentLayer );
+        currentColor.a += ALPHA_STEP;
+        settings->SetColor( currentLayer, currentColor );
+        m_frame->GetCanvas()->UpdateColors();
+
+        KIGFX::VIEW* view = m_frame->GetCanvas()->GetView();
+        view->UpdateLayerColor( currentLayer );
+
+        wxUpdateUIEvent dummy;
+        static_cast<PCB_EDIT_FRAME*>( m_frame )->OnUpdateLayerAlpha( dummy );
     }
+    else
+        wxBell();
 
     return 0;
 }
@@ -469,121 +429,25 @@ int PCBNEW_CONTROL::LayerAlphaInc( const TOOL_EVENT& aEvent )
 
 int PCBNEW_CONTROL::LayerAlphaDec( const TOOL_EVENT& aEvent )
 {
-    auto painter = static_cast<KIGFX::PCB_PAINTER*>( getView()->GetPainter() );
-    auto settings = painter->GetSettings();
+    auto settings = m_frame->ColorSettings();
 
     LAYER_NUM currentLayer = m_frame->GetActiveLayer();
-    KIGFX::COLOR4D currentColor = settings->GetLayerColor( currentLayer );
+    KIGFX::COLOR4D currentColor = settings->GetColor( currentLayer );
 
-    if( currentColor.a >= 0.05 )
+    if( currentColor.a >= ALPHA_MIN + ALPHA_STEP )
     {
-        currentColor.a -= 0.05;
-        settings->SetLayerColor( currentLayer, currentColor );
-        m_frame->GetGalCanvas()->GetView()->UpdateLayerColor( currentLayer );
+        currentColor.a -= ALPHA_STEP;
+        settings->SetColor( currentLayer, currentColor );
+        m_frame->GetCanvas()->UpdateColors();
+
+        KIGFX::VIEW* view = m_frame->GetCanvas()->GetView();
+        view->UpdateLayerColor( currentLayer );
+
+        wxUpdateUIEvent dummy;
+        static_cast<PCB_BASE_FRAME*>( m_frame )->OnUpdateLayerAlpha( dummy );
     }
-
-    return 0;
-}
-
-
-// Cursor control
-int PCBNEW_CONTROL::CursorControl( const TOOL_EVENT& aEvent )
-{
-    long type = aEvent.Parameter<intptr_t>();
-    bool fastMove = type & PCB_ACTIONS::CURSOR_FAST_MOVE;
-    type &= ~PCB_ACTIONS::CURSOR_FAST_MOVE;
-    bool mirroredX = getView()->IsMirroredX();
-
-    GRID_HELPER gridHelper( m_frame );
-    VECTOR2D cursor = getViewControls()->GetCursorPosition();
-    VECTOR2I gridSize = gridHelper.GetGrid();
-
-    if( fastMove )
-        gridSize = gridSize * 10;
-
-    switch( type )
-    {
-        case PCB_ACTIONS::CURSOR_UP:
-            cursor -= VECTOR2D( 0, gridSize.y );
-            break;
-
-        case PCB_ACTIONS::CURSOR_DOWN:
-            cursor += VECTOR2D( 0, gridSize.y );
-            break;
-
-        case PCB_ACTIONS::CURSOR_LEFT:
-            cursor -= VECTOR2D( mirroredX ? -gridSize.x : gridSize.x, 0 );
-            break;
-
-        case PCB_ACTIONS::CURSOR_RIGHT:
-            cursor += VECTOR2D( mirroredX ? -gridSize.x : gridSize.x, 0 );
-            break;
-
-        case PCB_ACTIONS::CURSOR_CLICK:              // fall through
-        case PCB_ACTIONS::CURSOR_DBL_CLICK:
-        {
-            TOOL_ACTIONS action = TA_NONE;
-            int modifiers = 0;
-
-            modifiers |= wxGetKeyState( WXK_SHIFT ) ? MD_SHIFT : 0;
-            modifiers |= wxGetKeyState( WXK_CONTROL ) ? MD_CTRL : 0;
-            modifiers |= wxGetKeyState( WXK_ALT ) ? MD_ALT : 0;
-
-            if( type == PCB_ACTIONS::CURSOR_CLICK )
-                action = TA_MOUSE_CLICK;
-            else if( type == PCB_ACTIONS::CURSOR_DBL_CLICK )
-                action = TA_MOUSE_DBLCLICK;
-            else
-                assert( false );
-
-            TOOL_EVENT evt( TC_MOUSE, action, BUT_LEFT | modifiers );
-            evt.SetMousePosition( getViewControls()->GetCursorPosition() );
-            m_toolMgr->ProcessEvent( evt );
-
-            return 0;
-        }
-        break;
-    }
-
-    getViewControls()->SetCursorPosition( cursor );
-
-    return 0;
-}
-
-
-int PCBNEW_CONTROL::PanControl( const TOOL_EVENT& aEvent )
-{
-    long type = aEvent.Parameter<intptr_t>();
-    KIGFX::VIEW* view = getView();
-    GRID_HELPER gridHelper( m_frame );
-    VECTOR2D center = view->GetCenter();
-    VECTOR2I gridSize = gridHelper.GetGrid() * 10;
-    bool mirroredX = view->IsMirroredX();
-
-    switch( type )
-    {
-        case PCB_ACTIONS::CURSOR_UP:
-            center -= VECTOR2D( 0, gridSize.y );
-            break;
-
-        case PCB_ACTIONS::CURSOR_DOWN:
-            center += VECTOR2D( 0, gridSize.y );
-            break;
-
-        case PCB_ACTIONS::CURSOR_LEFT:
-            center -= VECTOR2D( mirroredX ? -gridSize.x : gridSize.x, 0 );
-            break;
-
-        case PCB_ACTIONS::CURSOR_RIGHT:
-            center += VECTOR2D( mirroredX ? -gridSize.x : gridSize.x, 0 );
-            break;
-
-        default:
-            assert( false );
-            break;
-    }
-
-    view->SetCenter( center );
+    else
+        wxBell();
 
     return 0;
 }
@@ -594,7 +458,6 @@ int PCBNEW_CONTROL::GridFast1( const TOOL_EVENT& aEvent )
 {
     m_frame->SetFastGrid1();
     updateGrid();
-
     return 0;
 }
 
@@ -603,20 +466,18 @@ int PCBNEW_CONTROL::GridFast2( const TOOL_EVENT& aEvent )
 {
     m_frame->SetFastGrid2();
     updateGrid();
-
     return 0;
 }
 
 
-static bool setOrigin( KIGFX::VIEW* aView, PCB_BASE_FRAME* aFrame,
-                       KIGFX::ORIGIN_VIEWITEM* aItem, const VECTOR2D& aPoint )
+void PCBNEW_CONTROL::DoSetGridOrigin( KIGFX::VIEW* aView, PCB_BASE_FRAME* aFrame,
+                                      BOARD_ITEM* originViewItem, const VECTOR2D& aPoint )
 {
     aFrame->SetGridOrigin( wxPoint( aPoint.x, aPoint.y ) );
     aView->GetGAL()->SetGridOrigin( aPoint );
-    aItem->SetPosition( aPoint );
+    originViewItem->SetPosition( wxPoint( aPoint.x, aPoint.y ) );
     aView->MarkDirty();
-
-    return true;
+    aFrame->OnModify();
 }
 
 
@@ -626,21 +487,30 @@ int PCBNEW_CONTROL::GridSetOrigin( const TOOL_EVENT& aEvent )
 
     if( origin )
     {
-        setOrigin( getView(), m_frame, m_gridOrigin.get(), *origin );
+        // We can't undo the other grid dialog settings, so no sense undoing just the origin
+        DoSetGridOrigin( getView(), m_frame, m_gridOrigin.get(), *origin );
         delete origin;
     }
     else
     {
+        if( m_editModules && !getEditFrame<PCB_BASE_EDIT_FRAME>()->GetModel() )
+            return 0;
+
+        std::string         tool = aEvent.GetCommandStr().get();
+        PCBNEW_PICKER_TOOL* picker = m_toolMgr->GetTool<PCBNEW_PICKER_TOOL>();
+
+        // Deactivate other tools; particularly important if another PICKER is currently running
         Activate();
 
-        PICKER_TOOL* picker = m_toolMgr->GetTool<PICKER_TOOL>();
-        assert( picker );
+        picker->SetClickHandler(
+            [this] ( const VECTOR2D& pt ) -> bool
+            {
+                m_frame->SaveCopyInUndoList( m_gridOrigin.get(), UR_GRIDORIGIN );
+                DoSetGridOrigin( getView(), m_frame, m_gridOrigin.get(), pt );
+                return false;   // drill origin is a one-shot; don't continue with tool
+            } );
 
-        // TODO it will not check the toolbar button in module editor, as it uses a different ID..
-        m_frame->SetToolID( ID_PCB_PLACE_GRID_COORD_BUTT, wxCURSOR_PENCIL, _( "Adjust grid origin" ) );
-        picker->SetClickHandler( std::bind( setOrigin, getView(), m_frame, m_gridOrigin.get(), _1 ) );
-        picker->Activate();
-        Wait();
+        m_toolMgr->RunAction( ACTIONS::pickerTool, true, &tool );
     }
 
     return 0;
@@ -649,109 +519,127 @@ int PCBNEW_CONTROL::GridSetOrigin( const TOOL_EVENT& aEvent )
 
 int PCBNEW_CONTROL::GridResetOrigin( const TOOL_EVENT& aEvent )
 {
-    board()->SetGridOrigin( wxPoint( 0, 0 ) );
-    m_gridOrigin->SetPosition( VECTOR2D( 0, 0 ) );
-
+    m_frame->SaveCopyInUndoList( m_gridOrigin.get(), UR_GRIDORIGIN );
+    DoSetGridOrigin( getView(), m_frame, m_gridOrigin.get(), VECTOR2D( 0, 0 ) );
     return 0;
 }
 
 
-// Miscellaneous
-int PCBNEW_CONTROL::ResetCoords( const TOOL_EVENT& aEvent )
-{
-    VECTOR2I cursorPos = getViewControls()->GetCursorPosition();
-
-    m_frame->GetScreen()->m_O_Curseur = wxPoint( cursorPos.x, cursorPos.y );
-    m_frame->UpdateStatusBar();
-
-    return 0;
-}
-
-
-int PCBNEW_CONTROL::SwitchCursor( const TOOL_EVENT& aEvent )
-{
-    auto& galOpts = m_frame->GetGalDisplayOptions();
-
-    galOpts.m_fullscreenCursor = !galOpts.m_fullscreenCursor;
-    galOpts.NotifyChanged();
-
-    return 0;
-}
-
-
-int PCBNEW_CONTROL::SwitchUnits( const TOOL_EVENT& aEvent )
-{
-    // TODO should not it be refactored to pcb_frame member function?
-    wxCommandEvent evt( wxEVT_COMMAND_MENU_SELECTED );
-
-    if( g_UserUnit == INCHES )
-        evt.SetId( ID_TB_OPTIONS_SELECT_UNIT_MM );
-    else
-        evt.SetId( ID_TB_OPTIONS_SELECT_UNIT_INCH );
-
-    m_frame->ProcessEvent( evt );
-
-    return 0;
-}
-
-
-static bool deleteItem( TOOL_MANAGER* aToolMgr, const VECTOR2D& aPosition )
-{
-    SELECTION_TOOL* selectionTool = aToolMgr->GetTool<SELECTION_TOOL>();
-    assert( selectionTool );
-
-    aToolMgr->RunAction( PCB_ACTIONS::selectionClear, true );
-    aToolMgr->RunAction( PCB_ACTIONS::selectionCursor, true );
-    selectionTool->SanitizeSelection();
-
-    const SELECTION& selection = selectionTool->GetSelection();
-
-    if( selection.Empty() )
-        return true;
-
-    bool canBeRemoved = ( selection.Front()->Type() != PCB_MODULE_T );
-
-    if( canBeRemoved || IsOK( aToolMgr->GetEditFrame(), _( "Are you sure you want to delete item?" ) ) )
-        aToolMgr->RunAction( PCB_ACTIONS::remove, true );
-    else
-        aToolMgr->RunAction( PCB_ACTIONS::selectionClear, true );
-
-    return true;
-}
+#define HITTEST_THRESHOLD_PIXELS 5
 
 
 int PCBNEW_CONTROL::DeleteItemCursor( const TOOL_EVENT& aEvent )
 {
+    if( m_editModules && !m_frame->GetBoard()->GetFirstModule() )
+        return 0;
+
+    std::string         tool = aEvent.GetCommandStr().get();
+    PCBNEW_PICKER_TOOL* picker = m_toolMgr->GetTool<PCBNEW_PICKER_TOOL>();
+
+    m_pickerItem = nullptr;
+    m_toolMgr->RunAction( PCB_ACTIONS::selectionClear, true );
+
+    // Deactivate other tools; particularly important if another PICKER is currently running
     Activate();
 
-    PICKER_TOOL* picker = m_toolMgr->GetTool<PICKER_TOOL>();
-    assert( picker );
+    picker->SetCursor( wxStockCursor( wxCURSOR_BULLSEYE ) );
 
-    // TODO it will not check the toolbar button in the module editor, as it uses a different ID..
-    m_frame->SetToolID( ID_PCB_DELETE_ITEM_BUTT, wxCURSOR_BULLSEYE, _( "Delete item" ) );
-    picker->SetSnapping( false );
-    picker->SetClickHandler( std::bind( deleteItem, m_toolMgr, _1 ) );
-    picker->Activate();
-    Wait();
+    picker->SetClickHandler(
+        [this] ( const VECTOR2D& aPosition ) -> bool
+        {
+            if( m_pickerItem )
+            {
+                if( m_pickerItem && m_pickerItem->IsLocked() )
+                {
+                    STATUS_TEXT_POPUP statusPopup( m_frame );
+                    statusPopup.SetText( _( "Item locked." ) );
+                    statusPopup.PopupFor( 2000 );
+                    statusPopup.Move( wxGetMousePosition() + wxPoint( 20, 20 ) );
+                    return true;
+                }
+
+                SELECTION_TOOL* selectionTool = m_toolMgr->GetTool<SELECTION_TOOL>();
+                selectionTool->UnbrightenItem( m_pickerItem );
+                selectionTool->AddItemToSel( m_pickerItem, true /*quiet mode*/ );
+                m_toolMgr->RunAction( ACTIONS::doDelete, true );
+                m_pickerItem = nullptr;
+            }
+
+            return true;
+        } );
+
+    picker->SetMotionHandler(
+        [this] ( const VECTOR2D& aPos )
+        {
+            BOARD* board = m_frame->GetBoard();
+            SELECTION_TOOL* selectionTool = m_toolMgr->GetTool<SELECTION_TOOL>();
+            GENERAL_COLLECTORS_GUIDE guide = m_frame->GetCollectorsGuide();
+            GENERAL_COLLECTOR collector;
+            collector.m_Threshold = KiROUND( getView()->ToWorld( HITTEST_THRESHOLD_PIXELS ) );
+
+            if( m_editModules )
+                collector.Collect( board, GENERAL_COLLECTOR::ModuleItems, (wxPoint) aPos, guide );
+            else
+                collector.Collect( board, GENERAL_COLLECTOR::BoardLevelItems, (wxPoint) aPos, guide );
+
+            // Remove unselectable items
+            for( int i = collector.GetCount() - 1; i >= 0; --i )
+            {
+                if( !selectionTool->Selectable( collector[ i ] ) )
+                    collector.Remove( i );
+            }
+
+            if( collector.GetCount() > 1 )
+                selectionTool->GuessSelectionCandidates( collector, aPos );
+
+            BOARD_ITEM* item = collector.GetCount() == 1 ? collector[ 0 ] : nullptr;
+
+            if( m_pickerItem != item )
+            {
+
+                if( m_pickerItem )
+                    selectionTool->UnbrightenItem( m_pickerItem );
+
+                m_pickerItem = item;
+
+                if( m_pickerItem )
+                    selectionTool->BrightenItem( m_pickerItem );
+            }
+        } );
+
+    picker->SetFinalizeHandler(
+        [this] ( const int& aFinalState )
+        {
+            if( m_pickerItem )
+                m_toolMgr->GetTool<SELECTION_TOOL>()->UnbrightenItem( m_pickerItem );
+        } );
+
+    m_toolMgr->RunAction( ACTIONS::pickerTool, true, &tool );
 
     return 0;
 }
 
-int PCBNEW_CONTROL::PasteItemsFromClipboard( const TOOL_EVENT& aEvent )
+
+int PCBNEW_CONTROL::Paste( const TOOL_EVENT& aEvent )
 {
     CLIPBOARD_IO pi;
-    BOARD tmpBoard;
     BOARD_ITEM* clipItem = pi.Parse();
 
     if( !clipItem )
-    {
         return 0;
-    }
+
+    bool editModules = m_editModules || frame()->IsType( FRAME_FOOTPRINT_EDITOR );
 
     if( clipItem->Type() == PCB_T )
-        static_cast<BOARD*>(clipItem)->ClearAllNetCodes();
-
-    bool editModules = m_editModules || frame()->IsType( FRAME_PCB_MODULE_EDITOR );
+    {
+        if( editModules )
+        {
+            for( BOARD_CONNECTED_ITEM* item : static_cast<BOARD*>( clipItem )->AllConnectedItems() )
+                item->SetNet( NETINFO_LIST::OrphanedItem() );
+        }
+        else
+            static_cast<BOARD*>( clipItem )->MapNets( m_frame->GetBoard() );
+    }
 
     // The clipboard can contain two different things, an entire kicad_pcb
     // or a single module
@@ -762,57 +650,125 @@ int PCBNEW_CONTROL::PasteItemsFromClipboard( const TOOL_EVENT& aEvent )
         return 0;
     }
 
-
     switch( clipItem->Type() )
     {
         case PCB_T:
         {
+            BOARD* clipBoard = static_cast<BOARD*>( clipItem );
+
             if( editModules )
             {
-                wxLogDebug( wxT( "attempting to paste a pcb in the footprint editor\n") );
-                return 0;
+                MODULE* editModule = board()->GetFirstModule();
+                std::vector<BOARD_ITEM*> pastedItems;
+
+                for( MODULE* clipModule : clipBoard->Modules() )
+                {
+                    clipModule->SetParent( board() );
+
+                    for( auto pad : clipModule->Pads() )
+                    {
+                        pad->SetParent( editModule );
+                        pastedItems.push_back( pad );
+                    }
+
+                    clipModule->Pads().clear();
+
+                    for( auto item : clipModule->GraphicalItems() )
+                    {
+                        item->Move( clipModule->GetPosition() );
+                        item->SetParent( editModule );
+                        pastedItems.push_back( item );
+                    }
+
+                    clipModule->GraphicalItems().clear();
+                }
+
+                for( BOARD_ITEM* clipDrawItem : clipBoard->Drawings() )
+                {
+                    if( clipDrawItem->Type() == PCB_LINE_T )
+                    {
+                        DRAWSEGMENT* clipDrawSeg = static_cast<DRAWSEGMENT*>( clipDrawItem );
+
+                        // Convert to PCB_MODULE_EDGE_T
+                        EDGE_MODULE* pastedDrawSeg = new EDGE_MODULE( editModule );
+                        static_cast<DRAWSEGMENT*>( pastedDrawSeg )->SwapData( clipDrawSeg );
+                        pastedDrawSeg->SetLocalCoord();
+
+                        pastedItems.push_back( pastedDrawSeg );
+                    }
+                    else if( clipDrawItem->Type() == PCB_TEXT_T )
+                    {
+                        TEXTE_PCB* clipTextItem = static_cast<TEXTE_PCB*>( clipDrawItem );
+
+                        // Convert to PCB_MODULE_TEXT_T
+                        TEXTE_MODULE* pastedTextItem = new TEXTE_MODULE( editModule );
+                        static_cast<EDA_TEXT*>( pastedTextItem )->SwapText( *clipTextItem );
+                        static_cast<EDA_TEXT*>( pastedTextItem )->SwapEffects( *clipTextItem );
+
+                        pastedItems.push_back( pastedTextItem );
+                    }
+                }
+
+                delete clipBoard;
+
+                placeBoardItems( pastedItems, true, true );
+            }
+            else
+            {
+                placeBoardItems( clipBoard, true );
+
+                m_frame->Compile_Ratsnest( true );
+                m_frame->GetBoard()->BuildConnectivity();
             }
 
-		    placeBoardItems( static_cast<BOARD*>( clipItem ) );
             break;
         }
 
         case PCB_MODULE_T:
         {
-            std::vector<BOARD_ITEM *> items;
-
-            clipItem->SetParent( board() );
+            MODULE* clipModule = static_cast<MODULE*>( clipItem );
+            std::vector<BOARD_ITEM*> pastedItems;
 
             if( editModules )
             {
-                auto mod = static_cast<MODULE *>( clipItem );
+                MODULE* editModule = board()->GetFirstModule();
 
-                for( auto pad : mod->Pads() )
+                for( auto pad : clipModule->Pads() )
                 {
-                    pad->SetParent ( board()->m_Modules.GetFirst() );
-                    items.push_back( pad );
+                    pad->SetParent( editModule );
+                    pastedItems.push_back( pad );
                 }
-                for( auto item : mod->GraphicalItems() )
+
+                clipModule->Pads().clear();
+
+                for( auto item : clipModule->GraphicalItems() )
                 {
-                    item->SetParent ( board()->m_Modules.GetFirst() );
-                    items.push_back( item );
+                    item->SetParent( editModule );
+                    pastedItems.push_back( item );
                 }
+
+                clipModule->GraphicalItems().clear();
+
+                delete clipModule;
             }
             else
             {
-                items.push_back( clipItem );
+                clipModule->SetParent( board() );
+                pastedItems.push_back( clipModule );
             }
 
-            placeBoardItems( items );
+            placeBoardItems( pastedItems, true, true );
             break;
         }
+
         default:
             m_frame->DisplayToolMsg( _( "Invalid clipboard contents" ) );
-            // FAILED
             break;
     }
+
     return 1;
 }
+
 
 int PCBNEW_CONTROL::AppendBoardFromFile( const TOOL_EVENT& aEvent )
 {
@@ -834,73 +790,146 @@ int PCBNEW_CONTROL::AppendBoardFromFile( const TOOL_EVENT& aEvent )
     return AppendBoard( *pi, fileName );
 }
 
-int PCBNEW_CONTROL::placeBoardItems( BOARD* aBoard )
+
+// Helper function for PCBNEW_CONTROL::placeBoardItems()
+template<typename T>
+static void moveNoFlagToVector( std::deque<T>& aList, std::vector<BOARD_ITEM*>& aTarget, bool aIsNew )
 {
-    std::vector<BOARD_ITEM*> items;
+    std::copy_if( aList.begin(), aList.end(), std::back_inserter( aTarget ),
+            [](T aItem)
+            {
+                bool retval = ( aItem->GetFlags() & FLAG0 ) == 0;
+                aItem->ClearFlags( FLAG0 );
+                return retval;
+            } );
 
-    for( auto track : aBoard->Tracks() )
-    {
-        items.push_back( track );
-    }
-
-    for( auto module : aBoard->Modules() )
-    {
-        items.push_back( module );
-    }
-
-    for( auto drawing : aBoard->Drawings() )
-    {
-        items.push_back( drawing );
-    }
-
-    for( auto zone : aBoard->Zones() )
-    {
-        items.push_back( zone );
-    }
-
-    return placeBoardItems( items );
+    if( aIsNew )
+        aList.clear();
 }
 
 
-int PCBNEW_CONTROL::placeBoardItems( std::vector<BOARD_ITEM*>& aItems )
+static void moveNoFlagToVector(  ZONE_CONTAINERS& aList, std::vector<BOARD_ITEM*>& aTarget, bool aIsNew )
+{
+    if( aList.size() == 0 )
+        return;
+
+    auto obj = aList.front();
+    int idx = 0;
+
+    if( aIsNew )
+    {
+        obj = aList.back();
+        aList.pop_back();
+    }
+
+    for( ; obj ; )
+    {
+        if( obj->HasFlag( FLAG0 ) )
+            obj->ClearFlags( FLAG0 );
+        else
+            aTarget.push_back( obj );
+
+        if( aIsNew )
+        {
+            if( aList.size() )
+            {
+                obj = aList.back();
+                aList.pop_back();
+            }
+            else
+                obj = nullptr;
+        }
+        else
+            obj = idx < int(aList.size()-1) ? aList[++idx] : nullptr;
+    }
+}
+
+
+
+int PCBNEW_CONTROL::placeBoardItems( BOARD* aBoard, bool aAnchorAtOrigin  )
+{
+    // items are new if the current board is not the board source
+    bool isNew = board() != aBoard;
+    std::vector<BOARD_ITEM*> items;
+
+    moveNoFlagToVector( aBoard->Tracks(), items, isNew );
+    moveNoFlagToVector( aBoard->Modules(), items, isNew );
+    moveNoFlagToVector( aBoard->Drawings(), items, isNew );
+    moveNoFlagToVector( aBoard->Zones(), items, isNew );
+
+    return placeBoardItems( items, isNew, aAnchorAtOrigin );
+}
+
+
+int PCBNEW_CONTROL::placeBoardItems( std::vector<BOARD_ITEM*>& aItems, bool aIsNew,
+                                     bool aAnchorAtOrigin )
 {
     m_toolMgr->RunAction( PCB_ACTIONS::selectionClear, true );
 
     auto selectionTool = m_toolMgr->GetTool<SELECTION_TOOL>();
     auto editTool = m_toolMgr->GetTool<EDIT_TOOL>();
 
-    SELECTION& selection = selectionTool->GetSelection();
+    PCBNEW_SELECTION& selection = selectionTool->GetSelection();
 
     for( auto item : aItems )
     {
         item->SetSelected();
         selection.Add( item );
-        editTool->GetCurrentCommit()->Add( item );
+
+        // Add or just select items for the move/place command
+        if( aIsNew )
+            editTool->GetCurrentCommit()->Add( item );
+        else
+            editTool->GetCurrentCommit()->Added( item );
     }
 
-    selection.SetReferencePoint( VECTOR2I( 0, 0 ) );
+    if( selection.Size() > 0 )
+    {
+        if( aAnchorAtOrigin )
+        {
+            selection.SetReferencePoint( VECTOR2I( 0, 0 ) );
+        }
+        else
+        {
+            BOARD_ITEM* item = static_cast<BOARD_ITEM*>( selection.GetTopLeftItem() );
+            selection.SetReferencePoint( item->GetPosition() );
+        }
 
-    m_toolMgr->ProcessEvent( SELECTION_TOOL::SelectedEvent );
-    m_toolMgr->RunAction( PCB_ACTIONS::move, true );
+        getViewControls()->SetCursorPosition( getViewControls()->GetMousePosition(), false );
+
+        m_toolMgr->ProcessEvent( EVENTS::SelectedEvent );
+        m_toolMgr->RunAction( PCB_ACTIONS::move, true );
+    }
 
     return 0;
 }
 
+
 int PCBNEW_CONTROL::AppendBoard( PLUGIN& pi, wxString& fileName )
 {
     PCB_EDIT_FRAME* editFrame = dynamic_cast<PCB_EDIT_FRAME*>( m_frame );
+
     if( !editFrame )
         return 1;
 
-    // Mark existing tracks, in order to know what are the new tracks
-    // Tracks are inserted, not appended, so mark existing tracks to be
-    // able to select the new tracks only later
     BOARD* brd = board();
+
     if( !brd )
         return 1;
 
+    // Mark existing items, in order to know what are the new items so we can select only
+    // the new items after loading
     for( auto track : brd->Tracks() )
         track->SetFlags( FLAG0 );
+
+    for( auto module : brd->Modules() )
+        module->SetFlags( FLAG0 );
+
+    for( auto drawing : brd->Drawings() )
+        drawing->SetFlags( FLAG0 );
+
+    for( auto zone : brd->Zones() )
+        zone->SetFlags( FLAG0 );
 
     // Keep also the count of copper layers, to adjust if necessary
     int initialCopperLayerCount = brd->GetCopperLayerCount();
@@ -934,7 +963,7 @@ int PCBNEW_CONTROL::AppendBoard( PLUGIN& pi, wxString& fileName )
     // rebuild nets and ratsnest before any use of nets
     brd->BuildListOfNets();
     brd->SynchronizeNetsAndNetClasses();
-
+    brd->BuildConnectivity();
 
     // Synchronize layers
     // we should not ask PLUGINs to do these items:
@@ -949,22 +978,126 @@ int PCBNEW_CONTROL::AppendBoard( PLUGIN& pi, wxString& fileName )
     brd->SetEnabledLayers( enabledLayers );
     brd->SetVisibleLayers( enabledLayers );
 
-
-    return placeBoardItems( brd );
+    return placeBoardItems( brd, false );
 }
 
 
-int PCBNEW_CONTROL::ShowHelp( const TOOL_EVENT& aEvent )
+int PCBNEW_CONTROL::Undo( const TOOL_EVENT& aEvent )
 {
-    DisplayHotkeyList( m_frame, m_frame->GetHotkeyConfig() );
+    PCB_BASE_EDIT_FRAME* editFrame = dynamic_cast<PCB_BASE_EDIT_FRAME*>( m_frame );
+    wxCommandEvent       dummy;
+
+    if( editFrame )
+        editFrame->RestoreCopyFromUndoList( dummy );
 
     return 0;
 }
 
 
-int PCBNEW_CONTROL::ToBeDone( const TOOL_EVENT& aEvent )
+int PCBNEW_CONTROL::Redo( const TOOL_EVENT& aEvent )
 {
-    DisplayInfoMessage( m_frame, _( "Not available in OpenGL/Cairo canvases." ) );
+    PCB_BASE_EDIT_FRAME* editFrame = dynamic_cast<PCB_BASE_EDIT_FRAME*>( m_frame );
+    wxCommandEvent       dummy;
+
+    if( editFrame )
+        editFrame->RestoreCopyFromRedoList( dummy );
+
+    return 0;
+}
+
+
+int PCBNEW_CONTROL::Show3DViewer( const TOOL_EVENT& aEvent )
+{
+    EDA_3D_VIEWER* draw3DFrame = m_frame->CreateAndShow3D_Frame();
+
+    // Suppress warnings on non-Mac systems
+    [&draw3DFrame] {}();
+
+    if( m_frame->IsType( FRAME_FOOTPRINT_VIEWER )
+     || m_frame->IsType( FRAME_FOOTPRINT_VIEWER_MODAL )
+     || m_frame->IsType( FRAME_FOOTPRINT_WIZARD ) )
+    {
+        m_frame->Update3DView( true );
+
+#ifdef  __WXMAC__
+        // A stronger version of Raise() which promotes the window to its parent's level.
+        draw3DFrame->ReparentQuasiModal();
+#endif
+    }
+
+    return 0;
+}
+
+
+void PCBNEW_CONTROL::updateGrid()
+{
+    BASE_SCREEN* screen = m_frame->GetScreen();
+    getView()->GetGAL()->SetGridSize( VECTOR2D( screen->GetGridSize() ) );
+    getView()->MarkTargetDirty( KIGFX::TARGET_NONCACHED );
+}
+
+
+int PCBNEW_CONTROL::UpdateMessagePanel( const TOOL_EVENT& aEvent )
+{
+    SELECTION_TOOL*   selTool = m_toolMgr->GetTool<SELECTION_TOOL>();
+    PCBNEW_SELECTION& selection = selTool->GetSelection();
+
+    if( selection.GetSize() == 1 )
+    {
+        EDA_ITEM*       item = selection.Front();
+        MSG_PANEL_ITEMS msgItems;
+
+        item->GetMsgPanelInfo( m_frame->GetUserUnits(), msgItems );
+        m_frame->SetMsgPanel( msgItems );
+    }
+    else if( selection.GetSize() > 1 )
+    {
+        MSG_PANEL_ITEMS msgItems;
+        wxString        msg = wxString::Format( wxT( "%d" ), selection.GetSize() );
+
+        msgItems.emplace_back( MSG_PANEL_ITEM( _( "Selected Items" ), msg, DARKCYAN ) );
+        m_frame->SetMsgPanel( msgItems );
+    }
+    else if( auto editFrame = dynamic_cast<FOOTPRINT_EDIT_FRAME*>( m_frame ) )
+    {
+        MODULE* footprint = static_cast<MODULE*>( editFrame->GetModel() );
+
+        if( !footprint )
+            return 0;
+
+        MSG_PANEL_ITEMS msgItems;
+        wxString        msg;
+
+        msg = footprint->GetFPID().GetLibNickname().wx_str();
+        msgItems.emplace_back( MSG_PANEL_ITEM( _( "Library" ), msg, DARKCYAN ) );
+
+        msg = footprint->GetFPID().GetLibItemName().wx_str();
+        msgItems.emplace_back( MSG_PANEL_ITEM( _( "Footprint Name" ), msg, DARKCYAN ) );
+
+        wxDateTime date( static_cast<time_t>( footprint->GetLastEditTime() ) );
+
+        if( footprint->GetLastEditTime() && date.IsValid() )
+        // Date format: see http://www.cplusplus.com/reference/ctime/strftime
+            msg = date.Format( wxT( "%b %d, %Y" ) ); // Abbreviated_month_name Day, Year
+        else
+            msg = _( "Unknown" );
+
+        msgItems.emplace_back( MSG_PANEL_ITEM( _( "Last Change" ), msg, BROWN ) );
+
+        msg.Printf( wxT( "%zu" ), (size_t) footprint->GetPadCount( DO_NOT_INCLUDE_NPTH ) );
+        msgItems.emplace_back( MSG_PANEL_ITEM( _( "Pads" ), msg, BLUE ) );
+
+        wxString doc, keyword;
+        doc.Printf( _( "Doc: %s" ), footprint->GetDescription() );
+        keyword.Printf( _( "Key Words: %s" ), footprint->GetKeywords() );
+        msgItems.emplace_back( MSG_PANEL_ITEM( doc, keyword, BLACK ) );
+
+        m_frame->SetMsgPanel( msgItems );
+    }
+    else
+    {
+        m_frame->SetMsgPanel( m_frame->GetBoard() );
+    }
 
     return 0;
 }
@@ -972,77 +1105,87 @@ int PCBNEW_CONTROL::ToBeDone( const TOOL_EVENT& aEvent )
 
 void PCBNEW_CONTROL::setTransitions()
 {
+    Go( &PCBNEW_CONTROL::AddLibrary,           ACTIONS::newLibrary.MakeEvent() );
+    Go( &PCBNEW_CONTROL::AddLibrary,           ACTIONS::addLibrary.MakeEvent() );
+    Go( &PCBNEW_CONTROL::Print,                ACTIONS::print.MakeEvent() );
+    Go( &PCBNEW_CONTROL::Quit,                 ACTIONS::quit.MakeEvent() );
+
     // Display modes
-    Go( &PCBNEW_CONTROL::TrackDisplayMode,   PCB_ACTIONS::trackDisplayMode.MakeEvent() );
-    Go( &PCBNEW_CONTROL::PadDisplayMode,     PCB_ACTIONS::padDisplayMode.MakeEvent() );
-    Go( &PCBNEW_CONTROL::ViaDisplayMode,     PCB_ACTIONS::viaDisplayMode.MakeEvent() );
-    Go( &PCBNEW_CONTROL::ZoneDisplayMode,    PCB_ACTIONS::zoneDisplayEnable.MakeEvent() );
-    Go( &PCBNEW_CONTROL::ZoneDisplayMode,    PCB_ACTIONS::zoneDisplayDisable.MakeEvent() );
-    Go( &PCBNEW_CONTROL::ZoneDisplayMode,    PCB_ACTIONS::zoneDisplayOutlines.MakeEvent() );
-    Go( &PCBNEW_CONTROL::HighContrastMode,   PCB_ACTIONS::highContrastMode.MakeEvent() );
-    Go( &PCBNEW_CONTROL::HighContrastInc,    PCB_ACTIONS::highContrastInc.MakeEvent() );
-    Go( &PCBNEW_CONTROL::HighContrastDec,    PCB_ACTIONS::highContrastDec.MakeEvent() );
+    Go( &PCBNEW_CONTROL::TrackDisplayMode,     PCB_ACTIONS::trackDisplayMode.MakeEvent() );
+    Go( &PCBNEW_CONTROL::ToggleRatsnest,       PCB_ACTIONS::showRatsnest.MakeEvent() );
+    Go( &PCBNEW_CONTROL::ToggleRatsnest,       PCB_ACTIONS::ratsnestLineMode.MakeEvent() );
+    Go( &PCBNEW_CONTROL::PadDisplayMode,       PCB_ACTIONS::padDisplayMode.MakeEvent() );
+    Go( &PCBNEW_CONTROL::ViaDisplayMode,       PCB_ACTIONS::viaDisplayMode.MakeEvent() );
+    Go( &PCBNEW_CONTROL::GraphicDisplayMode,   PCB_ACTIONS::graphicDisplayMode.MakeEvent() );
+    Go( &PCBNEW_CONTROL::ModuleEdgeOutlines,   PCB_ACTIONS::moduleEdgeOutlines.MakeEvent() );
+    Go( &PCBNEW_CONTROL::ModuleTextOutlines,   PCB_ACTIONS::moduleTextOutlines.MakeEvent() );
+    Go( &PCBNEW_CONTROL::ZoneDisplayMode,      PCB_ACTIONS::zoneDisplayEnable.MakeEvent() );
+    Go( &PCBNEW_CONTROL::ZoneDisplayMode,      PCB_ACTIONS::zoneDisplayDisable.MakeEvent() );
+    Go( &PCBNEW_CONTROL::ZoneDisplayMode,      PCB_ACTIONS::zoneDisplayOutlines.MakeEvent() );
+    Go( &PCBNEW_CONTROL::ZoneDisplayMode,      PCB_ACTIONS::zoneDisplayToggle.MakeEvent() );
+    Go( &PCBNEW_CONTROL::HighContrastMode,     ACTIONS::highContrastMode.MakeEvent() );
 
     // Layer control
-    Go( &PCBNEW_CONTROL::LayerSwitch,        PCB_ACTIONS::layerTop.MakeEvent() );
-    Go( &PCBNEW_CONTROL::LayerSwitch,        PCB_ACTIONS::layerInner1.MakeEvent() );
-    Go( &PCBNEW_CONTROL::LayerSwitch,        PCB_ACTIONS::layerInner2.MakeEvent() );
-    Go( &PCBNEW_CONTROL::LayerSwitch,        PCB_ACTIONS::layerInner3.MakeEvent() );
-    Go( &PCBNEW_CONTROL::LayerSwitch,        PCB_ACTIONS::layerInner4.MakeEvent() );
-    Go( &PCBNEW_CONTROL::LayerSwitch,        PCB_ACTIONS::layerInner5.MakeEvent() );
-    Go( &PCBNEW_CONTROL::LayerSwitch,        PCB_ACTIONS::layerInner6.MakeEvent() );
-    Go( &PCBNEW_CONTROL::LayerSwitch,        PCB_ACTIONS::layerBottom.MakeEvent() );
-    Go( &PCBNEW_CONTROL::LayerNext,          PCB_ACTIONS::layerNext.MakeEvent() );
-    Go( &PCBNEW_CONTROL::LayerPrev,          PCB_ACTIONS::layerPrev.MakeEvent() );
-    Go( &PCBNEW_CONTROL::LayerToggle,        PCB_ACTIONS::layerToggle.MakeEvent() );
-    Go( &PCBNEW_CONTROL::LayerAlphaInc,      PCB_ACTIONS::layerAlphaInc.MakeEvent() );
-    Go( &PCBNEW_CONTROL::LayerAlphaDec,      PCB_ACTIONS::layerAlphaDec.MakeEvent() );
-
-    // Cursor control
-    Go( &PCBNEW_CONTROL::CursorControl,      PCB_ACTIONS::cursorUp.MakeEvent() );
-    Go( &PCBNEW_CONTROL::CursorControl,      PCB_ACTIONS::cursorDown.MakeEvent() );
-    Go( &PCBNEW_CONTROL::CursorControl,      PCB_ACTIONS::cursorLeft.MakeEvent() );
-    Go( &PCBNEW_CONTROL::CursorControl,      PCB_ACTIONS::cursorRight.MakeEvent() );
-    Go( &PCBNEW_CONTROL::CursorControl,      PCB_ACTIONS::cursorUpFast.MakeEvent() );
-    Go( &PCBNEW_CONTROL::CursorControl,      PCB_ACTIONS::cursorDownFast.MakeEvent() );
-    Go( &PCBNEW_CONTROL::CursorControl,      PCB_ACTIONS::cursorLeftFast.MakeEvent() );
-    Go( &PCBNEW_CONTROL::CursorControl,      PCB_ACTIONS::cursorRightFast.MakeEvent() );
-    Go( &PCBNEW_CONTROL::CursorControl,      PCB_ACTIONS::cursorClick.MakeEvent() );
-    Go( &PCBNEW_CONTROL::CursorControl,      PCB_ACTIONS::cursorDblClick.MakeEvent() );
-
-    // Pan control
-    Go( &PCBNEW_CONTROL::PanControl,         PCB_ACTIONS::panUp.MakeEvent() );
-    Go( &PCBNEW_CONTROL::PanControl,         PCB_ACTIONS::panDown.MakeEvent() );
-    Go( &PCBNEW_CONTROL::PanControl,         PCB_ACTIONS::panLeft.MakeEvent() );
-    Go( &PCBNEW_CONTROL::PanControl,         PCB_ACTIONS::panRight.MakeEvent() );
+    Go( &PCBNEW_CONTROL::LayerSwitch,          PCB_ACTIONS::layerTop.MakeEvent() );
+    Go( &PCBNEW_CONTROL::LayerSwitch,          PCB_ACTIONS::layerInner1.MakeEvent() );
+    Go( &PCBNEW_CONTROL::LayerSwitch,          PCB_ACTIONS::layerInner2.MakeEvent() );
+    Go( &PCBNEW_CONTROL::LayerSwitch,          PCB_ACTIONS::layerInner3.MakeEvent() );
+    Go( &PCBNEW_CONTROL::LayerSwitch,          PCB_ACTIONS::layerInner4.MakeEvent() );
+    Go( &PCBNEW_CONTROL::LayerSwitch,          PCB_ACTIONS::layerInner5.MakeEvent() );
+    Go( &PCBNEW_CONTROL::LayerSwitch,          PCB_ACTIONS::layerInner6.MakeEvent() );
+    Go( &PCBNEW_CONTROL::LayerSwitch,          PCB_ACTIONS::layerInner7.MakeEvent() );
+    Go( &PCBNEW_CONTROL::LayerSwitch,          PCB_ACTIONS::layerInner8.MakeEvent() );
+    Go( &PCBNEW_CONTROL::LayerSwitch,          PCB_ACTIONS::layerInner9.MakeEvent() );
+    Go( &PCBNEW_CONTROL::LayerSwitch,          PCB_ACTIONS::layerInner10.MakeEvent() );
+    Go( &PCBNEW_CONTROL::LayerSwitch,          PCB_ACTIONS::layerInner11.MakeEvent() );
+    Go( &PCBNEW_CONTROL::LayerSwitch,          PCB_ACTIONS::layerInner12.MakeEvent() );
+    Go( &PCBNEW_CONTROL::LayerSwitch,          PCB_ACTIONS::layerInner13.MakeEvent() );
+    Go( &PCBNEW_CONTROL::LayerSwitch,          PCB_ACTIONS::layerInner14.MakeEvent() );
+    Go( &PCBNEW_CONTROL::LayerSwitch,          PCB_ACTIONS::layerInner15.MakeEvent() );
+    Go( &PCBNEW_CONTROL::LayerSwitch,          PCB_ACTIONS::layerInner16.MakeEvent() );
+    Go( &PCBNEW_CONTROL::LayerSwitch,          PCB_ACTIONS::layerInner17.MakeEvent() );
+    Go( &PCBNEW_CONTROL::LayerSwitch,          PCB_ACTIONS::layerInner18.MakeEvent() );
+    Go( &PCBNEW_CONTROL::LayerSwitch,          PCB_ACTIONS::layerInner19.MakeEvent() );
+    Go( &PCBNEW_CONTROL::LayerSwitch,          PCB_ACTIONS::layerInner20.MakeEvent() );
+    Go( &PCBNEW_CONTROL::LayerSwitch,          PCB_ACTIONS::layerInner21.MakeEvent() );
+    Go( &PCBNEW_CONTROL::LayerSwitch,          PCB_ACTIONS::layerInner22.MakeEvent() );
+    Go( &PCBNEW_CONTROL::LayerSwitch,          PCB_ACTIONS::layerInner23.MakeEvent() );
+    Go( &PCBNEW_CONTROL::LayerSwitch,          PCB_ACTIONS::layerInner24.MakeEvent() );
+    Go( &PCBNEW_CONTROL::LayerSwitch,          PCB_ACTIONS::layerInner25.MakeEvent() );
+    Go( &PCBNEW_CONTROL::LayerSwitch,          PCB_ACTIONS::layerInner26.MakeEvent() );
+    Go( &PCBNEW_CONTROL::LayerSwitch,          PCB_ACTIONS::layerInner27.MakeEvent() );
+    Go( &PCBNEW_CONTROL::LayerSwitch,          PCB_ACTIONS::layerInner28.MakeEvent() );
+    Go( &PCBNEW_CONTROL::LayerSwitch,          PCB_ACTIONS::layerInner29.MakeEvent() );
+    Go( &PCBNEW_CONTROL::LayerSwitch,          PCB_ACTIONS::layerInner30.MakeEvent() );
+    Go( &PCBNEW_CONTROL::LayerSwitch,          PCB_ACTIONS::layerBottom.MakeEvent() );
+    Go( &PCBNEW_CONTROL::LayerNext,            PCB_ACTIONS::layerNext.MakeEvent() );
+    Go( &PCBNEW_CONTROL::LayerPrev,            PCB_ACTIONS::layerPrev.MakeEvent() );
+    Go( &PCBNEW_CONTROL::LayerToggle,          PCB_ACTIONS::layerToggle.MakeEvent() );
+    Go( &PCBNEW_CONTROL::LayerAlphaInc,        PCB_ACTIONS::layerAlphaInc.MakeEvent() );
+    Go( &PCBNEW_CONTROL::LayerAlphaDec,        PCB_ACTIONS::layerAlphaDec.MakeEvent() );
 
     // Grid control
-    Go( &PCBNEW_CONTROL::GridFast1,          ACTIONS::gridFast1.MakeEvent() );
-    Go( &PCBNEW_CONTROL::GridFast2,          ACTIONS::gridFast2.MakeEvent() );
-    Go( &PCBNEW_CONTROL::GridSetOrigin,      ACTIONS::gridSetOrigin.MakeEvent() );
-    Go( &PCBNEW_CONTROL::GridResetOrigin,    ACTIONS::gridResetOrigin.MakeEvent() );
+    Go( &PCBNEW_CONTROL::GridFast1,            ACTIONS::gridFast1.MakeEvent() );
+    Go( &PCBNEW_CONTROL::GridFast2,            ACTIONS::gridFast2.MakeEvent() );
+    Go( &PCBNEW_CONTROL::GridSetOrigin,        ACTIONS::gridSetOrigin.MakeEvent() );
+    Go( &PCBNEW_CONTROL::GridResetOrigin,      ACTIONS::gridResetOrigin.MakeEvent() );
+
+    Go( &PCBNEW_CONTROL::Undo,                 ACTIONS::undo.MakeEvent() );
+    Go( &PCBNEW_CONTROL::Redo,                 ACTIONS::redo.MakeEvent() );
 
     // Miscellaneous
-    Go( &PCBNEW_CONTROL::ResetCoords,        PCB_ACTIONS::resetCoords.MakeEvent() );
-    Go( &PCBNEW_CONTROL::SwitchCursor,       PCB_ACTIONS::switchCursor.MakeEvent() );
-    Go( &PCBNEW_CONTROL::SwitchUnits,        PCB_ACTIONS::switchUnits.MakeEvent() );
-    Go( &PCBNEW_CONTROL::DeleteItemCursor,   PCB_ACTIONS::deleteItemCursor.MakeEvent() );
-    Go( &PCBNEW_CONTROL::ShowHelp,           PCB_ACTIONS::showHelp.MakeEvent() );
-    Go( &PCBNEW_CONTROL::ToBeDone,           PCB_ACTIONS::toBeDone.MakeEvent() );
+    Go( &PCBNEW_CONTROL::DeleteItemCursor,     ACTIONS::deleteTool.MakeEvent() );
+    Go( &PCBNEW_CONTROL::Show3DViewer,         ACTIONS::show3DViewer.MakeEvent() );
 
     // Append control
-    Go( &PCBNEW_CONTROL::AppendBoardFromFile,
-            PCB_ACTIONS::appendBoard.MakeEvent() );
+    Go( &PCBNEW_CONTROL::AppendBoardFromFile,  PCB_ACTIONS::appendBoard.MakeEvent() );
 
-    Go( &PCBNEW_CONTROL::PasteItemsFromClipboard,
-            PCB_ACTIONS::pasteFromClipboard.MakeEvent() );
+    Go( &PCBNEW_CONTROL::Paste,                ACTIONS::paste.MakeEvent() );
+
+    Go( &PCBNEW_CONTROL::UpdateMessagePanel,   EVENTS::SelectedEvent );
+    Go( &PCBNEW_CONTROL::UpdateMessagePanel,   EVENTS::UnselectedEvent );
+    Go( &PCBNEW_CONTROL::UpdateMessagePanel,   EVENTS::ClearedEvent );
+    Go( &PCBNEW_CONTROL::UpdateMessagePanel,   EVENTS::SelectedItemsModified );
 }
 
 
-void PCBNEW_CONTROL::updateGrid()
-{
-    BASE_SCREEN* screen = m_frame->GetScreen();
-    //GRID_TYPE grid = screen->GetGrid( idx );
-    getView()->GetGAL()->SetGridSize( VECTOR2D( screen->GetGridSize() ) );
-    getView()->MarkTargetDirty( KIGFX::TARGET_NONCACHED );
-}

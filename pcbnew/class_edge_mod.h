@@ -1,9 +1,9 @@
 /*
  * This program source code file is part of KiCad, a free EDA CAD application.
  *
- * Copyright (C) 2015 Jean-Pierre Charras, jp.charras at wanadoo.fr
+ * Copyright (C) 2018 Jean-Pierre Charras, jp.charras at wanadoo.fr
  * Copyright (C) 2013 Wayne Stambaugh <stambaughw@verizon.net>
- * Copyright (C) 1992-2015 KiCad Developers, see AUTHORS.txt for contributors.
+ * Copyright (C) 1992-2018 KiCad Developers, see AUTHORS.txt for contributors.
  *
  * This program is free software; you can redistribute it and/or
  * modify it under the terms of the GNU General Public License
@@ -86,13 +86,21 @@ public:
      * not usual to flip an item alone, without flipping the parent footprint.
      * (consider Mirror for a mirror transform).
      */
-    void Flip( const wxPoint& aCentre ) override;
+    void Flip( const wxPoint& aCentre, bool aFlipLeftRight ) override;
+
+    bool IsParentFlipped() const;
 
     void SetStart0( const wxPoint& aPoint )     { m_Start0 = aPoint; }
     const wxPoint& GetStart0() const            { return m_Start0; }
 
     void SetEnd0( const wxPoint& aPoint )       { m_End0 = aPoint; }
     const wxPoint& GetEnd0() const              { return m_End0; }
+
+    void SetBezier0_C1( const wxPoint& aPoint ) { m_Bezier0_C1 = aPoint; }
+    const wxPoint& GetBezier0_C1() const        { return m_Bezier0_C1; }
+
+    void SetBezier0_C2( const wxPoint& aPoint ) { m_Bezier0_C2 = aPoint; }
+    const wxPoint& GetBezier0_C2() const        { return m_Bezier0_C2; }
 
     /**
      * Set relative coordinates from draw coordinates.
@@ -109,30 +117,31 @@ public:
      */
     void SetDrawCoord();
 
-    /* drawing functions */
-    void Draw( EDA_DRAW_PANEL* panel, wxDC* DC,
-               GR_DRAWMODE aDrawMode, const wxPoint& offset = ZeroOffset ) override;
+    void Print( PCB_BASE_FRAME* aFrame, wxDC* DC, const wxPoint& offset = ZeroOffset ) override;
 
-    void GetMsgPanelInfo( std::vector< MSG_PANEL_ITEM >& aList ) override;
+    void GetMsgPanelInfo( EDA_UNITS aUnits, std::vector<MSG_PANEL_ITEM>& aList ) override;
 
     wxString GetClass() const override
     {
         return wxT( "MGRAPHIC" );
     }
 
-    wxString GetSelectMenuText() const override;
+    wxString GetSelectMenuText( EDA_UNITS aUnits ) const override;
 
     BITMAP_DEF GetMenuImage() const override;
 
     EDA_ITEM* Clone() const override;
 
+    virtual unsigned int ViewGetLOD( int aLayer, KIGFX::VIEW* aView ) const override;
 
 #if defined(DEBUG)
     void Show( int nestLevel, std::ostream& os ) const override { ShowDummy( os ); }
 #endif
 
-    wxPoint m_Start0;       // Start point or center, relative to module origin, orient 0.
-    wxPoint m_End0;         // End point, relative to module origin, orient 0.
+    wxPoint m_Start0;       ///< Start point or center, relative to module origin, orient 0.
+    wxPoint m_End0;         ///< End point, relative to module origin, orient 0.
+    wxPoint m_Bezier0_C1;   ///< Bezier Control Point 1, relative to module origin, orient 0.
+    wxPoint m_Bezier0_C2;   ///< Bezier Control Point 2, relative to module origin, orient 0.
 };
 
 #endif    // CLASS_EDGE_MOD_H_

@@ -2,7 +2,7 @@
  * This program source code file is part of KiCad, a free EDA CAD application.
  *
  * Copyright (C) 2016 Wayne Stambaugh, stambaughw@gmail.com
- * Copyright (C) 2016 KiCad Developers, see change_log.txt for contributors.
+ * Copyright (C) 2016-2019 KiCad Developers, see change_log.txt for contributors.
  *
  * This program is free software; you can redistribute it and/or
  * modify it under the terms of the GNU General Public License
@@ -24,25 +24,26 @@
 
 /**
  * @file sch_validators.h
- * @brief Defintions of control validators for schematic dialogs.
+ * @brief Definitions of control validators for schematic dialogs.
  */
 
 #ifndef _SCH_VALIDATORS_H_
 #define _SCH_VALIDATORS_H_
 
-
 #include <wx/valtext.h>
 
+
+#define FIELD_NAME  -1
+#define FIELD_VALUE -2
+
+
 /**
- * class SCH_FILED_VALIDATOR
- *
- * is the text control validator used for validating the text allowed in library and
+ * A text control validator used for validating the text allowed in library and
  * schematic component fields.
- * Note
- * Reference field does not accept spaces
- * Value field does not accept spaces in Component Library Editor, because in .lib component
- * libraries, the value field is the component name in lib, and spaces are not allowed
- * in component names in lib
+ *
+ * - The reference field does not accept spaces.
+ * - The value field does not accept spaces in the symbol library editor because in symbol
+ *   libraries, the value field is the symbol name in the library.
  */
 class SCH_FIELD_VALIDATOR : public wxTextValidator
 {
@@ -50,16 +51,14 @@ class SCH_FIELD_VALIDATOR : public wxTextValidator
     bool m_isLibEditor;
 
 public:
-    SCH_FIELD_VALIDATOR( bool aIsCmplibEditor, int aFieldId, wxString* aValue = NULL );
+    SCH_FIELD_VALIDATOR( bool aIsLibEditor, int aFieldId, wxString* aValue = NULL );
 
     SCH_FIELD_VALIDATOR( const SCH_FIELD_VALIDATOR& aValidator );
 
     virtual wxObject* Clone() const override { return new SCH_FIELD_VALIDATOR( *this ); }
 
     /**
-     * Function Validate
-     *
-     * overrides the default Validate() function provided by wxTextValidate to provide
+     * Override the default Validate() function provided by wxTextValidator to provide
      * better error messages.
      *
      * @param aParent - a pointer to the parent window of the error message dialog.
@@ -68,5 +67,39 @@ public:
     virtual bool Validate( wxWindow *aParent ) override;
 };
 
+
+class SCH_NETNAME_VALIDATOR : public wxValidator
+{
+public:
+    SCH_NETNAME_VALIDATOR( wxString *aVal = nullptr );
+
+    SCH_NETNAME_VALIDATOR( bool aAllowSpaces );
+
+    SCH_NETNAME_VALIDATOR( const SCH_NETNAME_VALIDATOR& aValidator );
+
+    void SetAllowSpaces( bool aAllowSpaces = true ) { m_allowSpaces = aAllowSpaces; }
+
+    bool GetAllowSpaces() const { return m_allowSpaces; }
+
+    bool Copy( const SCH_NETNAME_VALIDATOR& val );
+
+    virtual wxObject* Clone() const override { return new SCH_NETNAME_VALIDATOR( *this ); }
+
+    virtual bool TransferToWindow() override { return true; }
+
+    virtual bool TransferFromWindow() override { return true; }
+
+    wxTextEntry* GetTextEntry();
+
+    virtual bool Validate( wxWindow *aParent ) override;
+
+protected:
+
+    // returns the error message if the contents of 'val' are invalid
+    virtual wxString IsValid( const wxString& aVal ) const;
+
+private:
+    bool m_allowSpaces;
+};
 
 #endif // _SCH_VALIDATORS_H_
