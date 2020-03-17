@@ -23,6 +23,8 @@
 #include <panel_setup_severities.h>
 #include <panel_setup_formatting.h>
 #include <panel_setup_pinmap.h>
+#include <eeschema_config.h>
+#include <erc_item.h>
 #include "dialog_schematic_setup.h"
 #include "panel_eeschema_template_fieldnames.h"
 
@@ -39,7 +41,9 @@ DIALOG_SCHEMATIC_SETUP::DIALOG_SCHEMATIC_SETUP( SCH_EDIT_FRAME* aFrame ) :
     m_formatting = new PANEL_SETUP_FORMATTING( this, aFrame );
     m_fieldNameTemplates = new PANEL_EESCHEMA_TEMPLATE_FIELDNAMES( aFrame, this, false );
     m_pinMap = new PANEL_SETUP_PINMAP( this, aFrame );
-    m_severities = new PANEL_SETUP_SEVERITIES( this, aFrame->GetErcSettings().m_Severities,
+
+    ERC_ITEM dummyItem;
+    m_severities = new PANEL_SETUP_SEVERITIES( this, dummyItem, g_ErcSettings->m_Severities,
                                                ERCE_FIRST, ERCE_LAST );
     /*
      * WARNING: If you change page names you MUST update calls to DoShowSchematicSetupDialog().
@@ -101,11 +105,34 @@ void DIALOG_SCHEMATIC_SETUP::OnAuxiliaryAction( wxCommandEvent& event )
     cfg->SetExpandEnvVars( false );
     cfg->SetPath( wxCONFIG_PATH_SEPARATOR );
 
+    if( importDlg.m_formattingOpt->GetValue() )
+    {
+        std::vector<PARAM_CFG*> params;
+        m_frame->AddFormattingParameters( params );
+
+        wxConfigLoadParams( cfg, params, GROUP_SCH_EDIT );
+        m_formatting->TransferDataToWindow();
+    }
+
+    if( importDlg.m_fieldNameTemplatesOpt->GetValue() )
+    {
+        TEMPLATES templateMgr;
+        PARAM_CFG_FIELDNAMES param( &templateMgr );
+        param.ReadParam( cfg );
+
+        m_fieldNameTemplates->ImportSettingsFrom( &templateMgr );
+    }
+
+    if( importDlg.m_pinMapOpt->GetValue() )
+    {
+        // JEY TODO
+    }
+
     if( importDlg.m_SeveritiesOpt->GetValue() )
     {
         ERC_SETTINGS settings;
         settings.LoadDefaults();
-        wxConfigLoadParams( cfg, settings.GetProjectFileParameters(), GROUP_SCH );
+        wxConfigLoadParams( cfg, settings.GetProjectFileParameters(), GROUP_SCH_EDIT );
 
         m_severities->ImportSettingsFrom( settings.m_Severities );
     }

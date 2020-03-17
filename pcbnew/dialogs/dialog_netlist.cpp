@@ -32,6 +32,7 @@
 #include <reporter.h>
 #include <bitmaps.h>
 #include <drc/drc.h>
+#include <drc/drc_item.h>
 #include <tool/tool_manager.h>
 #include <tools/pcb_actions.h>
 #include <class_board.h>
@@ -187,7 +188,7 @@ void DIALOG_NETLIST::OnTestFootprintsClick( wxCommandEvent& event )
         return;
 
     HTML_MESSAGE_BOX dlg( this, _( "Check footprints" ) );
-    DRC_LIST drcItems;
+    std::vector<DRC_ITEM*> drcItems;
 
     DRC::TestFootprints( netlist, m_parent->GetBoard(), GetUserUnits(), drcItems );
 
@@ -275,9 +276,9 @@ void DIALOG_NETLIST::loadNetlist( bool aDryRun )
     reporter.ReportHead( msg, RPT_SEVERITY_INFO );
 
     if( m_matchByTimestamp->GetSelection() == 1 )
-        msg = _( "Using references to match components and footprints.\n" );
+        msg = _( "Using reference designators to match components and footprints.\n" );
     else
-        msg = _( "Using time stamp fields (UUID) to match components and footprints.\n" );
+        msg = _( "Using tstamps (unique IDs) to match components and footprints.\n" );
 
     reporter.ReportHead( msg, RPT_SEVERITY_INFO );
     m_MessageWindow->SetLazyUpdate( true ); // Use lazy update to speed the creation of the report

@@ -686,26 +686,28 @@ void SCH_EAGLE_PLUGIN::loadSheet( wxXmlNode* aSheetNode, int aSheetIndex )
 
     wxString    des;
     std::string filename;
+    SCH_FIELD&  sheetNameField = m_currentSheet->GetFields()[SHEETNAME];
+    SCH_FIELD&  filenameField = m_currentSheet->GetFields()[SHEETFILENAME];
 
     if( descriptionNode )
     {
         des = descriptionNode->GetContent();
         des.Replace( "\n", "_", true );
-        m_currentSheet->SetName( des );
+        sheetNameField.SetText( des );
         filename = des.ToStdString();
     }
     else
     {
         filename = wxString::Format( "%s_%d", m_filename.GetName(), aSheetIndex );
-        m_currentSheet->SetName( filename );
+        sheetNameField.SetText( filename );
     }
 
     ReplaceIllegalFileNameChars( &filename );
     replace( filename.begin(), filename.end(), ' ', '_' );
 
     wxString fn = wxString( filename + ".sch" );
-    m_currentSheet->SetFileName( fn );
-    wxFileName fileName = m_currentSheet->GetFileName();
+    filenameField.SetText( fn );
+    wxFileName fileName( fn );
     m_currentSheet->GetScreen()->SetFileName( fileName.GetFullPath() );
 
     // Loop through all busses
@@ -2040,9 +2042,8 @@ void SCH_EAGLE_PLUGIN::addBusEntries()
                             }
                             else
                             {
-                                SCH_MARKER* marker =
-                                        new SCH_MARKER( linestart, "Bus Entry needed" );
-
+                                SCH_MARKER* marker = new SCH_MARKER( MARKER_BASE::MARKER_ERC );
+                                marker->SetData( 0, linestart, "Bus Entry needed" );
                                 m_currentSheet->GetScreen()->Append( marker );
                             }
                         }
@@ -2077,9 +2078,8 @@ void SCH_EAGLE_PLUGIN::addBusEntries()
                             }
                             else
                             {
-                                SCH_MARKER* marker =
-                                        new SCH_MARKER( linestart, "Bus Entry needed" );
-
+                                SCH_MARKER* marker = new SCH_MARKER( MARKER_BASE::MARKER_ERC );
+                                marker->SetData( 0, linestart, "Bus Entry needed" );
                                 m_currentSheet->GetScreen()->Append( marker );
                             }
                         }
@@ -2118,8 +2118,8 @@ void SCH_EAGLE_PLUGIN::addBusEntries()
                             }
                             else
                             {
-                                SCH_MARKER* marker = new SCH_MARKER( lineend, "Bus Entry needed" );
-
+                                SCH_MARKER* marker = new SCH_MARKER( MARKER_BASE::MARKER_ERC );
+                                marker->SetData( 0, lineend, "Bus Entry needed" );
                                 m_currentSheet->GetScreen()->Append( marker );
                             }
                         }
@@ -2153,8 +2153,8 @@ void SCH_EAGLE_PLUGIN::addBusEntries()
                             }
                             else
                             {
-                                SCH_MARKER* marker = new SCH_MARKER( lineend, "Bus Entry needed" );
-
+                                SCH_MARKER* marker = new SCH_MARKER( MARKER_BASE::MARKER_ERC );
+                                marker->SetData( 0, lineend, "Bus Entry needed" );
                                 m_currentSheet->GetScreen()->Append( marker );
                             }
                         }
@@ -2193,9 +2193,8 @@ void SCH_EAGLE_PLUGIN::addBusEntries()
                             }
                             else
                             {
-                                SCH_MARKER* marker =
-                                        new SCH_MARKER( linestart, "Bus Entry needed" );
-
+                                SCH_MARKER* marker = new SCH_MARKER( MARKER_BASE::MARKER_ERC );
+                                marker->SetData( 0, linestart, "Bus Entry needed" );
                                 m_currentSheet->GetScreen()->Append( marker );
                             }
                         }
@@ -2224,9 +2223,8 @@ void SCH_EAGLE_PLUGIN::addBusEntries()
                             }
                             else
                             {
-                                SCH_MARKER* marker =
-                                        new SCH_MARKER( linestart, "Bus Entry needed" );
-
+                                SCH_MARKER* marker = new SCH_MARKER( MARKER_BASE::MARKER_ERC );
+                                marker->SetData( 0, linestart, "Bus Entry needed" );
                                 m_currentSheet->GetScreen()->Append( marker );
                             }
                         }
@@ -2262,8 +2260,8 @@ void SCH_EAGLE_PLUGIN::addBusEntries()
                             }
                             else
                             {
-                                SCH_MARKER* marker = new SCH_MARKER( lineend, "Bus Entry needed" );
-
+                                SCH_MARKER* marker = new SCH_MARKER( MARKER_BASE::MARKER_ERC );
+                                marker->SetData( 0, lineend, "Bus Entry needed" );
                                 m_currentSheet->GetScreen()->Append( marker );
                             }
                         }
@@ -2292,8 +2290,8 @@ void SCH_EAGLE_PLUGIN::addBusEntries()
                             }
                             else
                             {
-                                SCH_MARKER* marker = new SCH_MARKER( lineend, "Bus Entry needed" );
-
+                                SCH_MARKER* marker = new SCH_MARKER( MARKER_BASE::MARKER_ERC );
+                                marker->SetData( 0, lineend, "Bus Entry needed" );
                                 m_currentSheet->GetScreen()->Append( marker );
                             }
                         }

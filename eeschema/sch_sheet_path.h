@@ -344,6 +344,11 @@ public:
     void ClearModifyStatus();
 
     /**
+     * Fetch a SCH_ITEM by ID.  Also returns the sheet the item was found on in \a aPathOut.
+     */
+    SCH_ITEM* GetItem( const KIID& aID, SCH_SHEET_PATH* aPathOut );
+
+    /**
      * Function AnnotatePowerSymbols
      * Silently annotates the not yet annotated power symbols of the entire hierarchy
      * of the sheet path list.
@@ -431,6 +436,8 @@ public:
      * @throw std::bad_alloc if the memory for the sheet path list could not be allocated.
      */
     void BuildSheetList( SCH_SHEET* aSheet );
+
+    bool NameExists( const wxString& aSheetName );
 };
 
 #endif // CLASS_DRAWSHEET_PATH_H

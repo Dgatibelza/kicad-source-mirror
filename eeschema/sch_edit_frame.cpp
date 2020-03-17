@@ -74,6 +74,7 @@
 
 SCH_SHEET_PATH* g_CurrentSheet = nullptr; // declared in general.h
 CONNECTION_GRAPH* g_ConnectionGraph = nullptr;
+ERC_SETTINGS* g_ErcSettings = nullptr;
 
 // non-member so it can be moved easily, and kept REALLY private.
 // Do NOT Clear() in here.
@@ -213,6 +214,7 @@ SCH_EDIT_FRAME::SCH_EDIT_FRAME( KIWAY* aKiway, wxWindow* aParent ):
 {
     g_CurrentSheet = new SCH_SHEET_PATH();
     g_ConnectionGraph = new CONNECTION_GRAPH( this );
+    g_ErcSettings = new ERC_SETTINGS();
 
     m_showBorderAndTitleBlock = true;   // true to show sheet references
     m_showAllPins = false;
@@ -301,10 +303,12 @@ SCH_EDIT_FRAME::~SCH_EDIT_FRAME()
     delete g_CurrentSheet;          // a SCH_SHEET_PATH, on the heap.
     delete g_ConnectionGraph;
     delete g_RootSheet;
+    delete g_ErcSettings;
 
     g_CurrentSheet = nullptr;
     g_ConnectionGraph = nullptr;
-    g_RootSheet = NULL;
+    g_RootSheet = nullptr;
+    g_ErcSettings = nullptr;
 }
 
 
@@ -448,6 +452,8 @@ void SCH_EDIT_FRAME::SetCurrentSheet( const SCH_SHEET_PATH& aSheet )
 {
     if( aSheet != *g_CurrentSheet )
     {
+        FocusOnItem( nullptr );
+
         *g_CurrentSheet = aSheet;
         GetCanvas()->DisplaySheet( g_CurrentSheet->LastScreen() );
     }
@@ -456,6 +462,8 @@ void SCH_EDIT_FRAME::SetCurrentSheet( const SCH_SHEET_PATH& aSheet )
 
 void SCH_EDIT_FRAME::HardRedraw()
 {
+    FocusOnItem( nullptr );
+
     GetCanvas()->DisplaySheet( g_CurrentSheet->LastScreen() );
     GetCanvas()->ForceRefresh();
 }
@@ -743,14 +751,14 @@ void SCH_EDIT_FRAME::NewProject()
 {
     wxString pro_dir = m_mruPath;
 
-    wxFileDialog dlg( this, _( "New Schematic" ), pro_dir, wxEmptyString, SchematicFileWildcard(),
-                      wxFD_SAVE );
+    wxFileDialog dlg( this, _( "New Schematic" ), pro_dir, wxEmptyString,
+                      LegacySchematicFileWildcard(), wxFD_SAVE );
 
     if( dlg.ShowModal() != wxID_CANCEL )
     {
         // Enforce the extension, wxFileDialog is inept.
         wxFileName create_me = dlg.GetPath();
-        create_me.SetExt( SchematicFileExtension );
+        create_me.SetExt( LegacySchematicFileExtension );
 
         if( create_me.FileExists() )
         {
@@ -773,8 +781,8 @@ void SCH_EDIT_FRAME::LoadProject()
 {
     wxString pro_dir = m_mruPath;
 
-    wxFileDialog dlg( this, _( "Open Schematic" ), pro_dir, wxEmptyString, SchematicFileWildcard(),
-                      wxFD_OPEN | wxFD_FILE_MUST_EXIST );
+    wxFileDialog dlg( this, _( "Open Schematic" ), pro_dir, wxEmptyString,
+                      LegacySchematicFileWildcard(), wxFD_OPEN | wxFD_FILE_MUST_EXIST );
 
     if( dlg.ShowModal() != wxID_CANCEL )
     {

@@ -277,21 +277,7 @@ public:
         m_fields = aFields;     // vector copying, length is changed possibly
     }
 
-    // JEY TODO: retite these once new dialog is implemented...
     wxString GetName() const { return m_fields[ SHEETNAME ].GetText(); }
-    void SetName( const wxString& aName ) { m_fields[ SHEETNAME ].SetText( aName ); }
-
-    bool GetShowSheetName() const { return m_fields[ SHEETNAME ].IsVisible(); }
-    void SetShowSheetName( bool show ) { m_fields[ SHEETNAME ].SetVisible( show ); }
-
-    int GetSheetNameSize() const { return m_fields[ SHEETNAME ].GetTextSize().x; }
-    void SetSheetNameSize( int aSize ) { m_fields[ SHEETNAME ].SetTextSize( wxSize( aSize, aSize ) ); }
-
-    bool GetShowFileName() const { return m_fields[ SHEETFILENAME ].IsVisible(); }
-    void SetShowFileName( bool show ) { m_fields[ SHEETFILENAME ].SetVisible( show ); }
-
-    int GetFileNameSize() const { return m_fields[ SHEETFILENAME ].GetTextSize().x; }
-    void SetFileNameSize( int aSize ) { m_fields[ SHEETFILENAME ].SetTextSize( wxSize( aSize, aSize ) ); }
 
     SCH_SCREEN* GetScreen() { return m_screen; }
 
@@ -306,6 +292,18 @@ public:
 
     KIGFX::COLOR4D GetBackgroundColor() const { return m_backgroundColor; }
     void SetBackgroundColor( KIGFX::COLOR4D aColor ) { m_backgroundColor = aColor; }
+
+    /**
+     * Test this sheet to see if the default stroke is used to draw the outline.
+     *
+     * The default stroke is defined as follows:
+     * * The outline width is the default line width or 0.
+     * * The outline style is set to #PLOT_DASH_TYPE::DEFAULT or #PLOT_DASH_TYPE::SOLID.
+     * * The outline color is set to #COLOR4D::UNSPECIFIED.
+     *
+     * @return  True if the outline stroke meets the default criteria.
+     */
+    bool UsesDefaultStroke() const;
 
     /**
      * Return the root sheet of this SCH_SHEET object.

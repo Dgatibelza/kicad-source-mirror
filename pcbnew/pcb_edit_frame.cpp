@@ -4,7 +4,7 @@
  * Copyright (C) 2018 Jean-Pierre Charras, jp.charras at wanadoo.fr
  * Copyright (C) 2013 SoftPLC Corporation, Dick Hollenbeck <dick@softplc.com>
  * Copyright (C) 2013 Wayne Stambaugh <stambaughw@gmail.com>
- * Copyright (C) 2013-2019 KiCad Developers, see AUTHORS.txt for contributors.
+ * Copyright (C) 2013-2020 KiCad Developers, see AUTHORS.txt for contributors.
  *
  * This program is free software: you can redistribute it and/or modify it
  * under the terms of the GNU General Public License as published by the
@@ -354,6 +354,14 @@ BOARD_ITEM_CONTAINER* PCB_EDIT_FRAME::GetModel() const
 }
 
 
+int PCB_EDIT_FRAME::GetSeverity( int aErrorCode ) const
+{
+    BOARD_DESIGN_SETTINGS& bds = GetBoard()->GetDesignSettings();
+
+    return bds.m_DRCSeverities[ aErrorCode ];
+}
+
+
 void PCB_EDIT_FRAME::SetPageSettings( const PAGE_INFO& aPageSettings )
 {
     PCB_BASE_FRAME::SetPageSettings( aPageSettings );
@@ -515,7 +523,7 @@ void PCB_EDIT_FRAME::OnCloseWindow( wxCloseEvent& aEvent )
 
     // First close the DRC dialog.  For some reason, if the board editor frame is destroyed
     // when the DRC dialog currently open, Pcbnew crashes, at least on Windows.
-    DIALOG_DRC_CONTROL* open_dlg = static_cast<DIALOG_DRC_CONTROL*>(
+    DIALOG_DRC* open_dlg = static_cast<DIALOG_DRC*>(
                                         wxWindow::FindWindowByName( DIALOG_DRC_WINDOW_NAME ) );
 
     if( open_dlg )
@@ -1004,7 +1012,7 @@ bool PCB_EDIT_FRAME::FetchNetlistFromSchematic( NETLIST& aNetlist, FETCH_NETLIST
 
     if( !frame->IsShown() )
     {
-        wxFileName schfn( Prj().GetProjectPath(), Prj().GetProjectName(), SchematicFileExtension );
+        wxFileName schfn( Prj().GetProjectPath(), Prj().GetProjectName(), LegacySchematicFileExtension );
 
         frame->OpenProjectFiles( std::vector<wxString>( 1, schfn.GetFullPath() ) );
 
@@ -1056,7 +1064,8 @@ void PCB_EDIT_FRAME::DoUpdatePCBFromNetlist( NETLIST& aNetlist, bool aUseTimesta
 void PCB_EDIT_FRAME::RunEeschema()
 {
     wxString   msg;
-    wxFileName schfn( Prj().GetProjectPath(), Prj().GetProjectName(), SchematicFileExtension );
+    wxFileName schfn( Prj().GetProjectPath(), Prj().GetProjectName(),
+                      LegacySchematicFileExtension );
 
     if( !schfn.FileExists() )
     {
